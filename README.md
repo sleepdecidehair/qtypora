@@ -6,6 +6,12 @@ QTypora 是面向 Windows 的本地 Markdown 桌面编辑器，参考 Typora 的
 
 当前提供 Windows 10 / 11 x64 内测安装包，功能仍在迭代。项目需求见 [Windows PRD](docs/Typora-Windows-完整需求文档.md)；需求中的规划项不代表已经实现或完成验收。
 
+## Windows 内测下载
+
+下载 [QTypora 0.1.0 Windows x64 安装程序](https://github.com/sleepdecidehair/qtypora/releases/download/v0.1.0-internal/QTypora-0.1.0-internal-x64-setup.exe)，运行后按向导选择安装目录。SHA-256 校验文件和内测公钥证书见 [Release 页面](https://github.com/sleepdecidehair/qtypora/releases/tag/v0.1.0-internal)。
+
+这是内测自签名版本，Windows 可能显示未知发布者或 SmartScreen 提示；签名及核验方式见下方打包说明。
+
 ## 当前功能
 
 - **Markdown 编辑**：实时预览与全篇源码切换，标题、列表、引用、行内格式、代码块和表格编辑。

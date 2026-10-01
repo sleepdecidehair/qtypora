@@ -1,0 +1,66 @@
+name: Windows internal release
+
+on:
+  push:
+    branches: ['**']
+  workflow_dispatch:
+
+# The tag includes the commit: different pushes cannot overwrite each other.
+concurrency:
+  group: windows-release-${{ github.sha }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  windows-release:
+    if: github.event_name != 'push' || github.event.deleted == false
+    runs-on: windows-2025
+    timeout-minutes: 40
+    permissions:
+      contents: write
+    defaults:
+      run:
+        shell: powershell
+    steps:
+      - name: Check out the pushed commit
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: '24'
+          package-manager-cache: false
+
+      - name: Check whether this commit is already published
+        id: release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: node scripts/github-release.cjs status
+
+      - name: Install locked dependencies
+        if: steps.release.outputs.published != 'true'
+        run: npm ci
+
+      - name: Build and verify the signed Windows installer
+        if: steps.release.outputs.published != 'true'
+        run: npm run package:win:internal
+
+      - name: Upload, verify and publish the release
+        if: steps.release.outputs.published != 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: node scripts/github-release.cjs publish
+
+      - name: Retain build and failure logs
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: windows-release-logs-${{ github.run_id }}-${{ github.run_attempt }}
+          path: .debug/package-runs/**/logs/**
+          include-hidden-files: true
+          if-no-files-found: ignore
+          retention-days: 7

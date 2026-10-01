@@ -11,6 +11,7 @@
     "build": "electron-vite build",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
+    "test:release": "node --test scripts/github-release.test.cjs",
     "test:desktop": "playwright test",
     "build:icon": "node scripts/create-icon.cjs",
     "package:win:internal": "powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/package-internal.ps1",

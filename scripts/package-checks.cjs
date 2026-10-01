@@ -6,7 +6,7 @@ const hash = bytes => crypto.createHash('sha256').update(bytes).digest('hex')
 const json = file => JSON.parse(fs.readFileSync(file, 'utf8').replace(/^\uFEFF/, ''))
 
 function snapshot() {
-  const files = ['package.json', 'package-lock.json', 'electron-builder.internal.cjs', 'electron.vite.config.ts', 'tsconfig.json', 'vitest.config.ts', 'playwright.config.ts', 'docs/Windows-内测打包.md']
+  const files = ['package.json', 'package-lock.json', 'electron-builder.internal.cjs', 'electron.vite.config.ts', 'tsconfig.json', 'vitest.config.ts', 'playwright.config.ts', 'docs/Windows-内测打包.md', '.github/workflows/windows-release.yml']
   const walk = directory => {
     for (const entry of fs.readdirSync(path.join(root, directory), { withFileTypes: true })) {
       const relative = `${directory}/${entry.name}`
@@ -126,12 +126,15 @@ function notes(output) {
   return { file: path.basename(destination), sha256: hash(fs.readFileSync(destination)) }
 }
 
-const [command, argument, destination] = process.argv.slice(2)
-try {
-  const result = command === 'preflight' ? preflight() : command === 'snapshot' ? snapshot() : command === 'verify' ? verify(argument) : command === 'notes' ? notes(argument) : (() => { throw new Error('Use preflight, snapshot, verify, or notes') })()
-  fs.writeFileSync(destination ?? argument, JSON.stringify(result, null, 2) + '\n')
-  console.log(`Package checks passed: ${command}`)
-} catch (error) {
-  console.error(`Package checks failed: ${error.message}`)
-  process.exitCode = 1
+module.exports = { snapshot }
+if (require.main === module) {
+  const [command, argument, destination] = process.argv.slice(2)
+  try {
+    const result = command === 'preflight' ? preflight() : command === 'snapshot' ? snapshot() : command === 'verify' ? verify(argument) : command === 'notes' ? notes(argument) : (() => { throw new Error('Use preflight, snapshot, verify, or notes') })()
+    fs.writeFileSync(destination ?? argument, JSON.stringify(result, null, 2) + '\n')
+    console.log(`Package checks passed: ${command}`)
+  } catch (error) {
+    console.error(`Package checks failed: ${error.message}`)
+    process.exitCode = 1
+  }
 }

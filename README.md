@@ -12,6 +12,8 @@ QTypora 是面向 Windows 的本地 Markdown 桌面编辑器，参考 Typora 的
 
 这是内测自签名版本，Windows 可能显示未知发布者或 SmartScreen 提示；签名及核验方式见下方打包说明。
 
+后续每次分支推送会自动生成对应提交的安装包，新版本见 [全部 Releases](https://github.com/sleepdecidehair/qtypora/releases)。
+
 ## 当前功能
 
 - **Markdown 编辑**：实时预览与全篇源码切换，标题、列表、引用、行内格式、代码块和表格编辑。
@@ -84,6 +86,7 @@ node node_modules/electron/install.js
 | --- | --- |
 | `npm run typecheck` | TypeScript 类型检查 |
 | `npm test` | Vitest 单元测试 |
+| `npm run test:release` | 自动发布脚本的成功、失败与重试测试 |
 | `npm run build:icon` | 从 SVG 生成 PNG / ICO |
 | `npm run build` | 编译主进程、预加载和界面到 `out/`，不生成安装包 |
 | `npm run test:desktop` | Playwright 真实 Electron 联调测试 |
@@ -130,6 +133,14 @@ npm run package:win:internal
 安装程序按当前用户安装，支持选择目录，将 QTypora 注册为 `.md` 的“打开方式”候选。默认应用由用户在 Windows 中选择，安装程序不覆盖系统的默认关联。自动检查不执行完整应用的安装向导、升级或卸载；这些流程仍需在独立测试机器或虚拟机验证。
 
 分发、签名核验、安装后测试和失败日志处理详见 [Windows 内测打包说明](docs/Windows-内测打包.md)。
+
+### 推送后自动打包与发布
+
+[Windows internal release 工作流](.github/workflows/windows-release.yml) 在每次分支 `push` 后于 GitHub 的 Windows 构建机运行，复用 `package:win:internal`，再由 [发布脚本](scripts/github-release.cjs) 上传安装包、SHA-256 校验文件和公钥证书。无需修改本机 Git 钩子或配置个人访问令牌。
+
+自动版本标签为 `v<版本>-internal-<提交前12位>`，标记为预发布。上传先进入草稿，三个文件的大小和 SHA-256 全部核对后才公开；同一提交已成功发布时跳过重复打包，不覆盖已有公开版本。纯标签推送不触发此工作流。
+
+在 [Actions](https://github.com/sleepdecidehair/qtypora/actions/workflows/windows-release.yml) 查看进度和失败日志，也可手动运行或重跑失败任务。日志附件保留 7 天。CI 在临时构建机生成自签名证书并上传配套公钥，本机私钥不参与上传。
 
 ## 项目结构与技术栈
 

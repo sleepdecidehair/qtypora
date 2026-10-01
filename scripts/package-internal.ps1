@@ -87,6 +87,7 @@ try {
     Invoke-Step 'Unit tests' 'npm.cmd' @('test', '--', '--reporter=default', '--reporter=json', "--outputFile=$(Join-Path $logs 'unit-tests.json')")
     $unit = Get-Content -LiteralPath (Join-Path $logs 'unit-tests.json') -Raw -Encoding UTF8 | ConvertFrom-Json
     if (-not $unit.success -or $unit.numPassedTests -lt 1 -or $unit.numFailedTests -ne 0) { throw 'Unit test report did not confirm success.' }
+    Invoke-Step 'GitHub release publisher tests' 'npm.cmd' @('run', 'test:release')
     Invoke-Step 'Generate icons from the master SVG' 'npm.cmd' @('run', 'build:icon')
     Invoke-Step 'Compile application' 'npm.cmd' @('run', 'build')
     Invoke-Step 'Build signed NSIS installer' (Join-Path $projectRoot 'node_modules\.bin\electron-builder.cmd') @('--config', 'electron-builder.internal.cjs', '--win', 'nsis', '--x64', '--publish', 'never')
@@ -124,7 +125,7 @@ try {
         publiclyTrusted = (@($signatures | Where-Object { -not $_.PubliclyTrusted }).Count -eq 0)
         node = $inputs.node; npm = (& npm.cmd --version); electron = $inputs.electron; builder = $inputs.builder
         signTool = $signTool; sourceSha256 = $inputs.source.sha256; payload = $payload
-        checks = @{ unitPassed = $unit.numPassedTests; desktopPassed = $desktop.stats.expected; shellIconLifecyclePassed = @($shellIcons.checks).Count; installerExecution = 'isolated NSIS custom macros tested; full installer does not replace the current installation' }
+        checks = @{ unitPassed = $unit.numPassedTests; desktopPassed = $desktop.stats.expected; shellIconLifecyclePassed = @($shellIcons.checks).Count; releasePublisherTests = 'passed'; installerExecution = 'isolated NSIS custom macros tested; full installer does not replace the current installation' }
     }
     if ($LASTEXITCODE -ne 0) { throw 'Unable to record npm version.' }
     Write-Json $metadata (Join-Path $staging 'internal-build.json')

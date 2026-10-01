@@ -31,6 +31,7 @@ npm run dev
 | --- | --- |
 | `npm run typecheck` | TypeScript 代码或类型变化 |
 | `npm test` | 单元测试；可追加 `-- src/main/documents.test.ts` 指定范围 |
+| `npm run test:release` | 发布脚本的输入、失败、幂等和摘要校验测试 |
 | `npm run build` | 检查 Electron 三个入口的编译；输出到 `out/` |
 | `npm run test:desktop -- tests/code-fence.spec.ts` | 指定交互测试；先编译并清除 `ELECTRON_RENDERER_URL` |
 | `npm run test:desktop` | 完整桌面联调；使用隔离的文档和用户目录 |
@@ -61,7 +62,7 @@ npm run dev
 
 10. **按风险选择检查。** 应用代码变化运行类型检查、相关单元测试及编译；涉及跨进程行为或编辑交互时补充对应桌面用例。测试应覆盖实际风险，不编写仅复述实现的测试。纯文档修改检查命令、链接及事实即可；不要因此重新安装依赖或打包。
 
-11. **统一 Windows 打包。** 打包使用 `npm run package:win:internal`，不绕过依赖锁定、输入快照、签名、图标和产物检查。Logo 只改 `build/icon.svg`；成功构建由脚本更新 `release/latest.json`。保留打包互斥锁，不分发失败暂存包、不自动导入信任证书，不直接覆盖 `.md` 的系统默认关联。
+11. **统一 Windows 打包。** 打包使用 `npm run package:win:internal`，不绕过依赖锁定、输入快照、签名、图标和产物检查。Logo 只改 `build/icon.svg`；成功构建由脚本更新 `release/latest.json`。自动发布复用 `.github/workflows/windows-release.yml` 和 `scripts/github-release.cjs`，按提交建草稿、校验资源后公开，不覆盖已有公开版本。保留安全钩子及打包互斥锁，不分发失败暂存包、不自动导入信任证书，不直接覆盖 `.md` 的系统默认关联。
 
 12. **谨慎处理 Windows 脚本与文件。** 保持 Windows PowerShell 5.1 兼容，读取 UTF-8 JSON/文档时显式指定编码。递归删除或移动前确认绝对目标位于预期范围，使用原生 PowerShell 和 `-LiteralPath`；私钥、令牌和用户数据不得写入文档、日志或安装包。
 

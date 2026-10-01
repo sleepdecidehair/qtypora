@@ -11,7 +11,7 @@ npm run package:win:internal
 
 首次准备环境或依赖变化后执行 `npm ci`。之后每次打包只需第二条命令；脚本核对已安装依赖与锁文件，不接受版本漂移。需要 Node.js >=22.12、Windows PowerShell、Windows SDK x64 SignTool。请结束源码修改后再打包。
 
-流程固定为：锁定依赖及输入快照 → 类型检查 → 单元测试 → 从 SVG 生成图标 → electron-vite 编译 → electron-builder 26 / NSIS 打包签名 → 隔离安装宏与 Shell 图标测试 → 核验 EXE 图标、品牌资源、ASAR 和签名 → 真实打包程序测试 → 比对构建前后的源码 → 保存成功产物。
+流程固定为：锁定依赖及输入快照 → 类型检查 → 单元测试与发布脚本测试 → 从 SVG 生成图标 → electron-vite 编译 → electron-builder 26 / NSIS 打包签名 → 隔离安装宏与 Shell 图标测试 → 核验 EXE 图标、品牌资源、ASAR 和签名 → 真实打包程序测试 → 比对构建前后的源码 → 保存成功产物。
 
 每次成功构建保存在 `release/<版本>-internal-x64-<时间>-<编号>/`，不会覆盖旧包。`release/latest.json` 指向最近成功的构建；失败不会改变该记录。下列文件均位于对应构建目录：
 
@@ -62,6 +62,20 @@ Remove-Item Env:\QTYPORA_PACKAGED_EXE
 
 安装程序在当前用户的 `Software\Classes` 注册 QTypora 的应用名称、图标、带引号的打开命令及 `.md` 的“打开方式”候选。它支持已有的 `Applications\QTypora.exe` 选择，也注册 `com.qtypora.internal.Markdown` 文档类型；不覆盖 `.md` 默认值或受保护的 `UserChoice`。在 Windows 中右键 `.md` → 打开方式 → 选择其他应用 → QTypora；选择始终使用后，文档显示同一 Logo。卸载仅清理仍指向本次安装目录的自身注册，保留其他应用和较新安装的注册。
 
+## GitHub 推送自动发布
+
+`.github/workflows/windows-release.yml` 接收所有分支的推送和手动运行请求，在 `windows-2025` 构建机使用 Node.js 24 和相同的 `npm run package:win:internal` 流程。纯标签推送及分支删除不发布安装包。本机全局 Git 扫描钩子、推送例外及其他仓库的暂停规则不受工作流影响。
+
+`scripts/github-release.cjs` 使用工作流短期 `GITHUB_TOKEN`，仅版本检查和发布步骤通过 `GH_TOKEN` 调用 GitHub CLI。无需额外 PAT；检出操作不持久化推送凭据。GitHub Actions 权限声明为 `contents: write` 的发布任务可创建当前仓库的 Release，未配置其他写权限。
+
+标签为 `v<package.json版本>-internal-<提交前12位>`，指向触发工作流的完整提交 ID。同一提交的运行串行处理；成功发布后重跑会验证现有版本并跳过打包。不同提交保留各自的预发布版本，不覆盖原有公开安装包。
+
+发布前要求干净的检出目录、构建输入摘要匹配，以及完整的构建检查报告。只上传安装程序、`SHA256SUMS.txt` 和 `QTypora-Internal-Test.cer`，不上传 `win-unpacked/`、本地路径记录、构建日志或私钥到公开 Release。CI 的证书在临时构建机创建，因此每次新构建的证书指纹可能不同；应使用该版本配套的公钥和摘要核验。
+
+上传首先创建属于该提交的草稿，核对 GitHub 返回的三份资源大小和 SHA-256 后才公开。网络失败保留草稿；重跑会复用它，并仅补传或替换草稿中的不匹配资源。已公开版本不会被自动替换，标签冲突、额外资源、权限不足或校验失败会明确报错。
+
+仓库 Actions → **Windows internal release** 可查看进度、运行日志、手动运行和重跑失败任务。`.debug/package-runs/` 的构建日志以 Actions 附件保留 7 天；公开版本见仓库 Releases。修改发布脚本后运行 `npm run test:release`。若需停止自动发布，在 GitHub Actions 页面禁用该工作流；已发布版本保留。
+
 ## 官方资料
 
 - [electron-vite 分发说明](https://electron-vite.org/guide/distribution)
@@ -70,3 +84,6 @@ Remove-Item Env:\QTYPORA_PACKAGED_EXE
 - [Microsoft SignTool 参数](https://learn.microsoft.com/en-us/windows/win32/seccrypto/signtool)
 - [Microsoft 应用注册与打开方式图标](https://learn.microsoft.com/en-us/windows/win32/shell/app-registration)
 - [Microsoft 文档类型图标与缓存刷新](https://learn.microsoft.com/en-us/windows/win32/shell/how-to-assign-a-custom-icon-to-a-file-type)
+- [GitHub Actions 工作流语法、触发和权限](https://docs.github.com/en/actions/reference/workflows-and-actions/workflow-syntax)
+- [官方 Windows 2025 构建机工具清单](https://github.com/actions/runner-images/blob/main/images/windows/Windows2025-Readme.md)
+- [GitHub Release 资源及摘要接口](https://docs.github.com/en/rest/releases/assets)

@@ -1,0 +1,618 @@
+import { test, expect } from '@playwright/test'
+import { mkdir, readFile, readdir, unlink, writeFile } from 'node:fs/promises'
+import path from 'node:path'
+import { appendText, clickNativeMenu, launchDesktop, openFixture, readCreatedBytes, readCreatedText, setMessageResponse, setOpenDialog, setSaveDialog, stopDesktop, type DesktopSession } from './desktop-helpers'
+
+let session: DesktopSession
+
+test.beforeEach(async () => { session = await launchDesktop() })
+test.afterEach(async () => {
+  if (session) {
+    const errors = [...session.errors]
+    await stopDesktop(session)
+    expect(errors, 'Renderer must have no unhandled runtime errors').toEqual([])
+  }
+})
+
+test('真实窗口隔离权限并拒绝不安全链接及无授权路径', async () => {
+  const sandboxed = await session.app.evaluate(({ BrowserWindow, app }) => {
+    const pid = BrowserWindow.getAllWindows()[0].webContents.getOSProcessId()
+    return app.getAppMetrics().find(metric => metric.pid === pid)?.sandboxed
+  })
+  expect(sandboxed).toBe(true)
+  expect(await session.page.evaluate(() => typeof Reflect.get(window, 'require'))).toBe('undefined')
+  expect(await session.page.evaluate(() => typeof Reflect.get(window, 'process'))).toBe('undefined')
+  expect(await session.page.evaluate(() => typeof Reflect.get(window, 'ipcRenderer'))).toBe('undefined')
+  const external = await session.page.evaluate(() => window.desktop.openExternal('javascript:alert(1)'))
+  expect(external.ok).toBe(false)
+  const unauthorized = await session.page.evaluate(() => window.desktop.readDirectory('C:\\Windows'))
+  expect(unauthorized.ok).toBe(false)
+})
+
+test('中文编辑保存保留 BOM、CRLF 和未改动的 Markdown 写法', async () => {
+  const original = '# 原文测试\r\n\r\n__原来的粗体__ 和 [链接][ref]\r\n\r\n[ref]: https://example.com "标题"\r\n'
+  const destination = await openFixture(session, '中文 空格.md', Buffer.from('\ufeff' + original, 'utf8'))
+  await appendText(session, '\n新增中文，emoji 😊')
+  await session.page.keyboard.press('Control+s')
+  await expect.poll(async () => (await readFile(destination, 'utf8')).includes('新增中文，emoji 😊')).toBe(true)
+  const bytes = await readFile(destination)
+  expect([...bytes.subarray(0, 3)]).toEqual([0xef, 0xbb, 0xbf])
+  const saved = bytes.toString('utf8')
+  expect(saved).toContain('__原来的粗体__ 和 [链接][ref]')
+  expect(saved).toContain('[ref]: https://example.com "标题"')
+  expect(saved.replace(/\r\n/g, '')).not.toContain('\n')
+  await setOpenDialog(session, [destination])
+  await session.page.keyboard.press('Control+o')
+  await expect(session.page.locator('.cm-content')).toContainText('新增中文')
+})
+
+test('格式命令与撤销重做通过真实输入保存', async () => {
+  const destination = await openFixture(session, 'format.md', 'plain text')
+  await session.page.locator('.cm-content').click()
+  await session.page.keyboard.press('Control+a')
+  await session.page.getByRole('button', { name: /^加粗/ }).click()
+  await session.page.keyboard.press('Control+s')
+  await expect.poll(async () => readFile(destination, 'utf8')).toBe('**plain text**')
+  await session.page.keyboard.press('Control+z')
+  await expect(session.page.getByTestId('save-document')).toBeEnabled()
+  await session.page.keyboard.press('Control+s')
+  await expect.poll(async () => readFile(destination, 'utf8')).toBe('plain text')
+  await expect(session.page.getByTestId('save-document')).toBeEnabled()
+  await session.page.keyboard.press('Control+y')
+  await session.page.keyboard.press('Control+s')
+  await expect.poll(async () => readFile(destination, 'utf8')).toBe('**plain text**')
+})
+
+test('外部修改后保存报告冲突并保留双方内容', async () => {
+  const destination = await openFixture(session, 'conflict.md', '# original\n')
+  await appendText(session, '\nlocal unsaved')
+  await writeFile(destination, '# external version\n', 'utf8')
+  await session.page.keyboard.press('Control+s')
+  await expect(session.page.getByRole('alert')).toContainText(/修改|冲突|改变/)
+  expect(await readFile(destination, 'utf8')).toBe('# external version\n')
+  await expect(session.page.locator('.cm-content')).toContainText('local unsaved')
+})
+
+test('明确重新载入更新保存基线，之后保存不产生伪冲突', async () => {
+  const destination = await openFixture(session, 'reload.md', '# initial\n')
+  await writeFile(destination, '# externally updated\n', 'utf8')
+  await session.page.getByRole('button', { name: '重新载入', exact: true }).click()
+  await session.page.getByRole('dialog', { name: '重新载入文件' }).getByRole('button', { name: '重新载入', exact: true }).click()
+  await expect(session.page.locator('.cm-content')).toContainText('externally updated')
+  await appendText(session, '\nedit after reload')
+  await session.page.keyboard.press('Control+s')
+  await expect.poll(async () => readFile(destination, 'utf8')).toBe('# externally updated\n\nedit after reload')
+  await expect(session.page.getByRole('alert')).toHaveCount(0)
+})
+
+test('未保存关闭可取消，另存真实文件后基线干净', async () => {
+  await session.page.keyboard.press('Control+n')
+  await appendText(session, '未保存内容需要保留')
+  await setMessageResponse(session, 2)
+  await session.page.keyboard.press('Control+w')
+  await expect(session.page.locator('.cm-content')).toContainText('未保存内容需要保留')
+  const destination = path.join(session.root, '新文档.md')
+  await setSaveDialog(session, destination)
+  await session.page.keyboard.press('Control+s')
+  await expect.poll(async () => (await readCreatedText(destination)).includes('未保存内容需要保留')).toBe(true)
+  await expect(session.page).toHaveTitle(/新文档\.md/)
+})
+
+test('原生关闭窗口也保护未保存内容，取消后仍可继续编辑', async () => {
+  await session.page.keyboard.press('Control+n')
+  await appendText(session, 'NATIVE_CLOSE_GUARD')
+  await session.app.evaluate(({ dialog }) => {
+    Reflect.set(globalThis, 'qtyporaClosePromptCount', 0)
+    dialog.showMessageBox = async () => {
+      Reflect.set(globalThis, 'qtyporaClosePromptCount', Number(Reflect.get(globalThis, 'qtyporaClosePromptCount')) + 1)
+      return { response: 2, checkboxChecked: false }
+    }
+  })
+  await session.app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].close())
+  await expect.poll(async () => session.app.evaluate(() => Reflect.get(globalThis, 'qtyporaClosePromptCount'))).toBe(1)
+  await expect(session.page.locator('.cm-content')).toContainText('NATIVE_CLOSE_GUARD')
+  await appendText(session, ' STILL_EDITABLE')
+  await setMessageResponse(session, 1)
+  const closed = session.page.waitForEvent('close')
+  await session.app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].close())
+  await closed
+})
+
+test('HTML 与 PDF 导出真实产物且文档脚本不执行', async () => {
+  await openFixture(session, 'export.md', '# 导出验证\n\n中文正文 **粗体**\n\n<script>window.__markdownExecuted = true</script>\n<p onclick="window.__markdownExecuted=true">安全段落</p>\n')
+  const htmlPath = path.join(session.root, 'output.html')
+  await setSaveDialog(session, htmlPath)
+  await session.page.getByTestId('export-menu').click()
+  await session.page.getByTestId('export-html').click()
+  await expect.poll(async () => (await readCreatedText(htmlPath)).includes('导出验证')).toBe(true)
+  const html = await readFile(htmlPath, 'utf8')
+  expect(html).not.toMatch(/<script\b|\bon(?:error|click)\s*=/i)
+  const pdfPath = path.join(session.root, 'output.pdf')
+  await setSaveDialog(session, pdfPath)
+  await session.page.getByTestId('export-menu').click()
+  await session.page.getByTestId('export-pdf').click()
+  await expect.poll(async () => (await readCreatedBytes(pdfPath)).subarray(0, 5).toString()).toBe('%PDF-')
+  expect((await readFile(pdfPath)).length).toBeGreaterThan(1000)
+  expect(await session.page.evaluate(() => Reflect.get(window, '__markdownExecuted'))).toBeUndefined()
+})
+
+test('图片缺失时导出给出错误，已有导出文件不会被覆盖', async () => {
+  await openFixture(session, 'missing-image.md', '# 保留内容\n\n![失效图片](./missing.png)\n')
+  const htmlPath = path.join(session.root, 'existing-output.html')
+  await writeFile(htmlPath, 'PREVIOUS_EXPORT_CONTENT')
+  await setSaveDialog(session, htmlPath)
+  await session.page.getByTestId('export-menu').click()
+  await session.page.getByTestId('export-html').click()
+  await expect(session.page.getByRole('alert')).toContainText(/导出|图片|资源/)
+  expect(await readFile(htmlPath, 'utf8')).toBe('PREVIOUS_EXPORT_CONTENT')
+  await expect(session.page.locator('.cm-content')).toContainText('保留内容')
+})
+
+test('外部删除未修改的文档后仍保护内存副本和草稿', async () => {
+  const destination = await openFixture(session, 'deleted.md', '# ONLY_MEMORY_COPY\n')
+  await unlink(destination)
+  await expect(session.page.getByText('文件已被移动或删除。可另存为保留当前编辑。')).toBeVisible()
+  await expect(session.page.getByTestId('dirty-indicator')).toBeVisible()
+  await setMessageResponse(session, 2)
+  await session.page.keyboard.press('Control+w')
+  await expect(session.page.locator('.cm-content')).toContainText('ONLY_MEMORY_COPY')
+  const recoveredPath = path.join(session.root, 'recovered-copy.md')
+  await setSaveDialog(session, recoveredPath)
+  await session.page.keyboard.press('Control+Shift+s')
+  await expect.poll(async () => readCreatedText(recoveredPath)).toBe('# ONLY_MEMORY_COPY\n')
+})
+
+test('自动保存关闭时异常退出仍可恢复独立草稿', async () => {
+  await session.page.keyboard.press('Control+n')
+  await appendText(session, '独立恢复草稿内容 123')
+  const draftDirectory = path.join(session.userData, 'drafts')
+  await expect.poll(async () => {
+    const names = await readdir(draftDirectory).catch(() => [])
+    const drafts = await Promise.all(names.map(name => readFile(path.join(draftDirectory, name), 'utf8')))
+    return drafts.some(content => content.includes('独立恢复草稿内容 123'))
+  }).toBe(true)
+  const root = session.root
+  await stopDesktop(session, false)
+  session = await launchDesktop(root)
+  await expect(session.page.getByRole('dialog', { name: '恢复草稿' })).toBeVisible()
+  await session.page.getByRole('button', { name: '恢复', exact: true }).first().click()
+  await expect(session.page.locator('.cm-content')).toContainText('独立恢复草稿内容 123')
+})
+
+test('模式切换保留编辑位置，深色偏好持久保存', async () => {
+  const content = Array.from({ length: 80 }, (_, index) => `第 ${index + 1} 段落内容`).join('\n\n')
+  const destination = await openFixture(session, 'modes.md', content)
+  await appendText(session, '\nEND_MARKER')
+  await session.page.getByTestId('source-toggle').click()
+  await expect(session.page.getByTestId('source-toggle')).toHaveAttribute('aria-pressed', 'false')
+  await session.page.getByTestId('source-toggle').click()
+  await expect(session.page.getByTestId('source-toggle')).toHaveAttribute('aria-pressed', 'true')
+  await session.page.keyboard.insertText(' AFTER_SWITCH')
+  await session.page.keyboard.press('Control+s')
+  await expect.poll(async () => readFile(destination, 'utf8')).toBe(content + '\nEND_MARKER AFTER_SWITCH')
+  await session.page.getByTestId('preferences-button').click()
+  await session.page.getByTestId('theme-select').selectOption('dark')
+  await session.page.getByRole('button', { name: '完成', exact: true }).click()
+  await expect.poll(async () => JSON.parse(await readFile(path.join(session.userData, 'settings.json'), 'utf8')).preferences?.theme).toBe('dark')
+  await session.page.screenshot({ path: '.debug/desktop-dark.png' })
+})
+
+test('保存对话框迟到时保留之后的输入和草稿', async () => {
+  await session.page.keyboard.press('Control+n')
+  await appendText(session, 'FIRST_SNAPSHOT')
+  const destination = path.join(session.root, 'delayed-save.md')
+  await session.app.evaluate(({ dialog }, filePath) => {
+    dialog.showSaveDialog = async () => {
+      await new Promise(resolve => setTimeout(resolve, 1200))
+      return { canceled: false, filePath }
+    }
+  }, destination)
+  await session.page.keyboard.press('Control+s')
+  await expect(session.page.getByTestId('save-document')).toBeDisabled()
+  await appendText(session, ' LATER_EDIT')
+  await expect.poll(async () => readCreatedText(destination)).toBe('FIRST_SNAPSHOT')
+  await expect(session.page.locator('.cm-content')).toContainText('LATER_EDIT')
+  await expect(session.page.getByTestId('save-document')).toBeEnabled()
+  await session.page.keyboard.press('Control+s')
+  await expect.poll(async () => readFile(destination, 'utf8')).toBe('FIRST_SNAPSHOT LATER_EDIT')
+})
+
+test('文件树重命名同步路径并保留未保存内容，目录搜索定位文章', async () => {
+  const original = await openFixture(session, 'tree-original.md', '# Tree title\n\nUNIQUE_FOLDER_SEARCH\n')
+  await appendText(session, '\nunsaved during rename')
+  await setOpenDialog(session, [session.root])
+  await session.page.getByTestId('export-menu').click()
+  await session.page.getByTestId('open-folder').click()
+  await session.page.getByTestId('files-tab').click()
+  await session.page.locator('.file-tree-row').filter({ hasText: 'tree-original.md' }).click()
+  await session.page.getByRole('button', { name: '重命名所选项', exact: true }).click()
+  await session.page.getByRole('textbox', { name: '文件或文件夹名称' }).fill('tree-renamed.md')
+  await session.page.getByRole('button', { name: '确定', exact: true }).click()
+  await expect(session.page).toHaveTitle(/tree-renamed\.md/)
+  await expect(session.page.locator('.cm-content')).toContainText('unsaved during rename')
+  await session.page.keyboard.press('Control+s')
+  const renamed = path.join(session.root, 'tree-renamed.md')
+  await expect.poll(async () => readFile(renamed, 'utf8')).toContain('unsaved during rename')
+  await expect(readFile(original)).rejects.toMatchObject({ code: 'ENOENT' })
+  await session.page.getByTestId('search-tab').click()
+  await session.page.getByTestId('folder-search-input').fill('UNIQUE_FOLDER_SEARCH')
+  await expect(session.page.locator('.search-result')).toHaveCount(1)
+  await session.page.locator('.search-result').click()
+  await expect(session.page.locator('.cm-content')).toContainText('UNIQUE_FOLDER_SEARCH')
+})
+
+test('实时预览呈现离线公式图表、本地图片与可编辑任务，导出携带资源', async () => {
+  const imagePath = path.join(session.root, '本地 图片.svg')
+  await writeFile(imagePath, '<svg xmlns="http://www.w3.org/2000/svg" width="160" height="60"><rect width="160" height="60" rx="8" fill="#3c7d68"/><text x="20" y="36" fill="white" font-size="18">Local image</text></svg>')
+  const source = '# 预览验证\n\n- [ ] 待办事项\n- [x] 已完成事项\n\n行内公式 $x^2 + y^2$\n\n$$\n\\frac{1}{2} + \\sqrt{x}\n$$\n\n```mermaid\ngraph LR\n  A[写作] --> B[保存]\n```\n\n![本地图片](<./本地 图片.svg>)\n\n最后段落\n'
+  const destination = await openFixture(session, 'preview.md', source)
+  await session.page.keyboard.press('Control+/')
+  const editor = session.page.getByTestId('markdown-editor')
+  await expect(session.page.locator('.cm-content')).toHaveAttribute('data-mode', 'hybrid')
+  await expect(editor.locator('math')).toHaveCount(2)
+  await expect(editor.locator('.md-mermaid svg')).toBeVisible()
+  await expect(editor.locator('.md-mermaid svg')).toContainText('写作')
+  await expect(editor.locator('.md-mermaid svg')).toContainText('保存')
+  const nodeFill = await editor.locator('.md-mermaid svg .node rect').first().evaluate(node => getComputedStyle(node).fill)
+  expect(nodeFill).not.toBe('rgb(0, 0, 0)')
+  await expect.poll(async () => editor.getByRole('img', { name: '本地图片', exact: true }).evaluate(image => (image as HTMLImageElement).naturalWidth)).toBe(160)
+  const checkbox = editor.locator('input[type=checkbox]').first()
+  await expect(checkbox).toBeEnabled()
+  await checkbox.check()
+  await session.page.keyboard.press('Control+s')
+  await expect.poll(async () => readFile(destination, 'utf8')).toBe(source.replace('- [ ] 待办事项', '- [x] 待办事项'))
+  await session.page.screenshot({ path: '.debug/desktop-preview.png' })
+  const htmlPath = path.join(session.root, 'portable-preview.html')
+  await setSaveDialog(session, htmlPath)
+  await session.page.getByTestId('export-menu').click()
+  await session.page.getByTestId('export-html').click()
+  await expect.poll(async () => readCreatedText(htmlPath)).toContain('data:image/svg+xml;base64,')
+  const html = await readFile(htmlPath, 'utf8')
+  expect(html).toContain('<math')
+  expect(html).toContain('<svg')
+  expect(html).not.toContain('src="qtypora-media:')
+})
+
+test('默认实时预览可直接编辑段落，Ctrl斜杠双向切换全篇源码，CtrlE不切模式', async () => {
+  expect(session.initialMode).toBe('hybrid')
+  const content = '# 标题\n\n普通正文 **加粗文字**\n\n末段\n'
+  const destination = await openFixture(session, 'official-mode.md', content)
+  await session.page.keyboard.press('Control+/')
+  const editor = session.page.locator('.cm-content')
+  await expect(editor).toHaveAttribute('data-mode', 'hybrid')
+  await expect(session.page.getByTestId('reading-toggle')).toHaveCount(0)
+  await expect(session.page.getByTestId('reading-view')).toHaveCount(0)
+  await editor.locator('.cm-line').filter({ hasText: '普通正文' }).click()
+  await session.page.keyboard.press('Home')
+  await session.page.keyboard.insertText('直接编辑 ')
+  await session.page.keyboard.press('Control+s')
+  await expect.poll(async () => readFile(destination, 'utf8')).toBe(content.replace('普通正文', '直接编辑 普通正文'))
+  await session.page.keyboard.press('Control+e')
+  await expect(editor).toHaveAttribute('data-mode', 'hybrid')
+  await session.page.keyboard.press('Control+/')
+  await expect(editor).toHaveAttribute('data-mode', 'source')
+  await expect(editor).toContainText('**加粗文字**')
+  await session.page.keyboard.press('Control+/')
+  await expect(editor).toHaveAttribute('data-mode', 'hybrid')
+  await expect(session.page.getByTestId('reading-view')).toHaveCount(0)
+})
+
+test('井号后输入空格才转换标题，删除空格恢复可见标记和正文大小', async () => {
+  const destination = await openFixture(session, 'heading-prefix.md', '')
+  await session.page.keyboard.press('Control+/')
+  const editor = session.page.locator('.cm-content')
+  await expect(editor).toHaveAttribute('data-mode', 'hybrid')
+  await editor.click()
+  const line = editor.locator('.cm-line').first()
+  const fontSize = () => line.evaluate(element => Number.parseFloat(getComputedStyle(element).fontSize))
+  const bodyFontSize = await fontSize()
+  await session.page.keyboard.insertText('#')
+  await expect(line).toHaveText('#')
+  await expect.poll(fontSize).toBe(bodyFontSize)
+  await session.page.keyboard.insertText('#')
+  await expect(line).toHaveText('##')
+  await expect.poll(fontSize).toBe(bodyFontSize)
+  await session.page.keyboard.press('Space')
+  await expect(line).toHaveText('')
+  await expect.poll(fontSize).toBeGreaterThan(bodyFontSize)
+  await session.page.keyboard.press('Backspace')
+  await expect(line).toHaveText('##')
+  await expect.poll(fontSize).toBe(bodyFontSize)
+  await session.page.keyboard.press('Space')
+  await session.page.keyboard.insertText('标题')
+  await expect(line).toHaveText('标题')
+  await session.page.keyboard.press('Enter')
+  await session.page.keyboard.insertText('正文')
+  const paragraph = editor.locator('.cm-line').last()
+  await expect(paragraph).toHaveText('正文')
+  await expect.poll(() => paragraph.evaluate(element => Number.parseFloat(getComputedStyle(element).fontSize))).toBe(bodyFontSize)
+  await session.page.keyboard.press('Control+s')
+  await expect.poll(() => readFile(destination, 'utf8')).toBe('## 标题\n正文')
+})
+
+test('表格在渲染状态直接修改单元格，CtrlE选择当前单元格，原文事务可撤销', async () => {
+  const content = '# 表格\n\n| Name | State |\n|:-----| -----:|\n| FIRST | 保持不变 |\n| SECOND | 第二行 |\n\n原文 __未触及__\n'
+  const destination = await openFixture(session, 'live-table.md', content)
+  await session.page.keyboard.press('Control+/')
+  const table = session.page.getByTestId('live-table')
+  const cell = table.locator('tbody tr').first().locator('td').first()
+  await expect(table).toBeVisible()
+  await expect(cell).toHaveAttribute('contenteditable', 'true')
+  await cell.click()
+  await session.page.keyboard.press('Control+e')
+  await expect.poll(async () => session.page.evaluate(() => window.getSelection()?.toString())).toBe('FIRST')
+  await session.page.keyboard.insertText('UPDATED')
+  await session.page.keyboard.press('Control+s')
+  await expect.poll(async () => readFile(destination, 'utf8')).toBe(content.replace('FIRST', 'UPDATED'))
+  await expect(table).toBeVisible()
+  await expect(table.locator('tbody tr').first().locator('td').first()).toHaveText('UPDATED')
+  await session.page.keyboard.press('Control+z')
+  await session.page.keyboard.press('Control+s')
+  await expect.poll(async () => readFile(destination, 'utf8')).toBe(content)
+  await session.page.keyboard.press('Control+y')
+  await session.page.keyboard.press('Control+s')
+  await expect.poll(async () => readFile(destination, 'utf8')).toBe(content.replace('FIRST', 'UPDATED'))
+})
+
+test('CtrlE选择样式内容，图表仅通过明确编辑入口展开并可用Esc收起', async () => {
+  const content = '# 标题\n\nbefore **样式范围** after\n\n```mermaid\ngraph LR\nA[开始] --> B[结束]\n```\n\n末段\n'
+  const destination = await openFixture(session, 'scope-and-block.md', content)
+  await session.page.keyboard.press('Control+/')
+  const editor = session.page.locator('.cm-content')
+  await editor.evaluate(element => {
+    const view = Reflect.get(element, 'cmTile').root.view as import('@codemirror/view').EditorView
+    view.dispatch({ selection: { anchor: view.state.doc.toString().indexOf('样式范围') + 1 } })
+    view.focus()
+  })
+  await session.page.keyboard.press('Control+e')
+  await expect.poll(async () => session.page.evaluate(() => window.getSelection()?.toString())).toBe('样式范围')
+  await expect(editor).toHaveAttribute('data-mode', 'hybrid')
+  await expect(editor.locator('.md-mermaid svg')).toBeVisible()
+  await session.page.getByRole('button', { name: '编辑流程图', exact: true }).click()
+  await expect(editor.locator('.cm-live-edit-block').filter({ hasText: 'graph LR' })).toBeVisible()
+  await session.page.keyboard.press('Escape')
+  await expect(editor.locator('.cm-live-edit-block')).toHaveCount(0)
+  await expect(editor.locator('.md-mermaid svg')).toBeVisible()
+  await session.page.keyboard.press('Control+s')
+  expect(await readFile(destination, 'utf8')).toBe(content)
+})
+
+test('仅滚动到表格和图表不会暴露源码或激活整个块编辑', async () => {
+  const sections = Array.from({ length: 25 }, (_, index) => `## 第 ${index + 1} 节\n\n| Name | State |\n| --- | --- |\n| TABLE_${index + 1} | 已完成 |\n\n`)
+  await openFixture(session, 'scroll-tables.md', '# 表格滚动\n\n' + sections.join('') + '```mermaid\ngraph LR\nSCROLL_SECRET[开始] --> END_SECRET[结束]\n```\n')
+  await session.page.evaluate(() => {
+    const content = document.querySelector('.cm-content')!
+    const exposed: string[] = []
+    Reflect.set(window, 'qtyporaExposedSource', exposed)
+    const inspect = () => {
+      if (content.getAttribute('data-mode') !== 'hybrid') return
+      for (const node of content.querySelectorAll('.cm-line, .md-mermaid')) {
+        if (/\| Name \| State \||graph LR|SCROLL_SECRET\[/.test(node.textContent || '')) exposed.push(node.textContent || '')
+      }
+    }
+    const observer = new MutationObserver(inspect)
+    observer.observe(content, { subtree: true, childList: true, characterData: true, attributes: true })
+    Reflect.set(window, 'qtyporaSourceObserver', observer)
+  })
+  await session.page.keyboard.press('Control+/')
+  const editor = session.page.locator('.cm-content')
+  for (const progress of [0.85, 0.15, 0.7, 0.05, 0.98]) {
+    await session.page.locator('.cm-scroller').evaluate((element, fraction) => { element.scrollTop = fraction * (element.scrollHeight - element.clientHeight) }, progress)
+    await expect(session.page.getByTestId('live-table').first()).toBeVisible()
+    await expect(editor.locator('.cm-line').filter({ hasText: '| Name | State |' })).toHaveCount(0)
+    await expect(editor.locator('.cm-line').filter({ hasText: 'graph LR' })).toHaveCount(0)
+  }
+  await expect(editor).toHaveAttribute('data-mode', 'hybrid')
+  const exposed = await session.page.evaluate(() => {
+    const observer = Reflect.get(window, 'qtyporaSourceObserver') as MutationObserver
+    observer.disconnect()
+    return Reflect.get(window, 'qtyporaExposedSource')
+  })
+  expect(exposed, 'Attached live-preview nodes must never contain table or Mermaid source during scrolling').toEqual([])
+  await session.page.screenshot({ path: '.debug/desktop-live-tables.png' })
+})
+
+test('源码和实时预览切换保留当前可见段落、光标和撤销历史', async () => {
+  const sections = Array.from({ length: 60 }, (_, index) => `## POSITION_${index + 1}\n\n第 ${index + 1} 节正文。\n\n| Name | State |\n| --- | --- |\n| ROW_${index + 1} | 完成 |\n\n`)
+  const content = '# 滚动位置\n\n' + sections.join('')
+  const destination = await openFixture(session, 'mode-scroll.md', content)
+  await session.page.getByTestId('preferences-button').click()
+  await session.page.getByLabel('打字机模式', { exact: true }).check()
+  await session.page.getByRole('button', { name: '完成', exact: true }).click()
+  await session.page.getByTestId('outline-tab').click()
+  await session.page.getByTestId('outline-item').nth(5).click()
+  const editor = session.page.locator('.cm-content')
+  await editor.click()
+  await session.page.keyboard.press('Control+Home')
+  const alignHeading = async (heading: string) => {
+    await editor.evaluate((element, target) => {
+      const view = Reflect.get(element, 'cmTile').root.view as import('@codemirror/view').EditorView
+      const position = view.state.doc.toString().indexOf(target)
+      if (position < 0) throw new Error('Target heading is missing')
+      const block = view.lineBlockAt(position)
+      view.scrollDOM.scrollTop += block.top + view.documentTop - view.scrollDOM.getBoundingClientRect().top
+    }, heading)
+    const target = editor.locator('.cm-line').filter({ hasText: heading.replace(/^#+\s*/, '').trim() })
+    // Virtualized widget heights are estimates until the destination is measured.
+    await expect.poll(async () => target.evaluate(element => {
+      const scroller = element.closest('.cm-scroller')!
+      const distance = element.getBoundingClientRect().top - scroller.getBoundingClientRect().top
+      scroller.scrollTop += distance
+      return Math.abs(distance)
+    })).toBeLessThan(2)
+  }
+  const distanceFromTop = async (heading: string) => editor.locator('.cm-line').filter({ hasText: heading }).evaluate(element => {
+    const scroller = element.closest('.cm-scroller')!
+    return Math.abs(element.getBoundingClientRect().top - scroller.getBoundingClientRect().top)
+  })
+  await alignHeading('## POSITION_28\n')
+  await expect.poll(() => distanceFromTop('POSITION_28')).toBeLessThan(35)
+  await session.page.keyboard.press('Control+/')
+  await expect(editor).toHaveAttribute('data-mode', 'hybrid')
+  await expect.poll(() => distanceFromTop('POSITION_28')).toBeLessThan(35)
+  await alignHeading('## POSITION_44\n')
+  await expect.poll(() => distanceFromTop('POSITION_44')).toBeLessThan(35)
+  await session.page.keyboard.press('Control+/')
+  await expect(editor).toHaveAttribute('data-mode', 'source')
+  await expect.poll(() => distanceFromTop('POSITION_44')).toBeLessThan(35)
+  const cursor = await editor.evaluate(element => {
+    const view = Reflect.get(element, 'cmTile').root.view as import('@codemirror/view').EditorView
+    return { head: view.state.selection.main.head, focused: view.hasFocus }
+  })
+  expect(cursor).toEqual({ head: 0, focused: true })
+  await session.page.keyboard.insertText('CURSOR_STAYED_HERE ')
+  await session.page.keyboard.press('Control+s')
+  await expect.poll(async () => readFile(destination, 'utf8')).toBe('CURSOR_STAYED_HERE ' + content)
+  await session.page.keyboard.press('Control+z')
+  await session.page.keyboard.press('Control+s')
+  await expect.poll(async () => readFile(destination, 'utf8')).toBe(content)
+  await session.page.keyboard.press('Control+y')
+  await session.page.keyboard.press('Control+s')
+  await expect.poll(async () => readFile(destination, 'utf8')).toBe('CURSOR_STAYED_HERE ' + content)
+})
+
+test('标准 Mermaid 配色正常呈现，异步渲染和错误不泄露源码且阻止外部 CSS', async () => {
+  const requests: string[] = []
+  session.page.on('request', request => { if (request.url().includes('blocked-mermaid-style.svg')) requests.push(request.url()) })
+  const content = '# 图表配色\n\n```mermaid\ngraph LR\nA[开始] --> B[结束]\nclassDef done fill:#d6f2df,stroke:#3c7d68,color:#244f42;\nclass B done;\nstyle A fill:#fff4cc,stroke:#ae8a22;\n```\n\n```mermaid\ngraph LR\nA[不可加载外部资源]\nstyle A fill:url(http://127.0.0.1:9/blocked-mermaid-style.svg);\n```\n'
+  await openFixture(session, 'diagram-styles.md', content)
+  await session.page.keyboard.press('Control+/')
+  const editor = session.page.getByTestId('markdown-editor')
+  await expect(editor.locator('.md-mermaid svg')).toHaveCount(1)
+  const firstFill = await editor.locator('.md-mermaid svg .node').filter({ hasText: '开始' }).locator('rect').first().evaluate(element => getComputedStyle(element).fill)
+  const secondFill = await editor.locator('.md-mermaid svg .node').filter({ hasText: '结束' }).locator('rect').first().evaluate(element => getComputedStyle(element).fill)
+  expect(firstFill).toBe('rgb(255, 244, 204)')
+  expect(secondFill).toBe('rgb(214, 242, 223)')
+  await expect(editor.locator('.md-mermaid.md-preview-error')).toHaveCount(1)
+  await expect(editor.locator('.md-mermaid.md-preview-error')).toContainText('图表显示失败')
+  expect(requests).toEqual([])
+  await expect(editor.locator('.cm-line').filter({ hasText: 'blocked-mermaid-style.svg' })).toHaveCount(0)
+})
+
+test('快速打开检索当前目录嵌套文件，CtrlE在对话框不修改正文', async () => {
+  const original = 'ORIGINAL_BUFFER\n'
+  await openFixture(session, 'current-buffer.md', original)
+  const folder = path.join(session.root, 'nested')
+  await mkdir(folder)
+  const nestedPath = path.join(folder, 'nested-target.md')
+  await writeFile(nestedPath, '# NESTED_RESULT\n', 'utf8')
+  await setOpenDialog(session, [session.root])
+  await session.page.getByTestId('export-menu').click()
+  await session.page.getByTestId('open-folder').click()
+  await session.page.keyboard.press('Control+p')
+  const query = session.page.getByTestId('quick-open-input')
+  await query.fill('nested-target')
+  await session.page.keyboard.press('Control+e')
+  await expect(query).toHaveValue('nested-target')
+  await expect(session.page.locator('.cm-content')).toContainText('ORIGINAL_BUFFER')
+  await expect(session.page.getByRole('option').filter({ hasText: 'nested-target.md' })).toHaveCount(1)
+  await query.press('Enter')
+  await expect(session.page).toHaveTitle(/nested-target\.md/)
+  await expect(session.page.locator('.cm-content')).toContainText('NESTED_RESULT')
+})
+
+test('原生保存全部逐篇保存修改，不切换活动文档或遗漏草稿', async () => {
+  const firstPath = await openFixture(session, 'save-all-first.md', 'FIRST')
+  await appendText(session, ' changed')
+  const secondPath = await openFixture(session, 'save-all-second.md', 'SECOND')
+  await appendText(session, ' changed')
+  await clickNativeMenu(session, '保存全部')
+  await expect.poll(async () => readFile(firstPath, 'utf8')).toBe('FIRST changed')
+  await expect.poll(async () => readFile(secondPath, 'utf8')).toBe('SECOND changed')
+  await expect(session.page).toHaveTitle(/save-all-second\.md/)
+  await expect(session.page.getByTestId('dirty-indicator')).toHaveCount(0)
+})
+
+test('保存全部遇到未命名文档另存取消会停止，保留后续修改', async () => {
+  const first = await openFixture(session, 'all-before-cancel.md', 'FIRST')
+  await appendText(session, ' saved')
+  await session.page.keyboard.press('Control+n')
+  await appendText(session, 'UNNAMED_CANCELLED')
+  const later = await openFixture(session, 'all-after-cancel.md', 'LATER')
+  await appendText(session, ' must remain unsaved')
+  await session.app.evaluate(({ dialog }) => { dialog.showSaveDialog = async () => ({ canceled: true, filePath: '' }) })
+  await clickNativeMenu(session, '保存全部')
+  await expect(session.page.getByRole('status')).toContainText('保存全部已停止')
+  expect(await readFile(first, 'utf8')).toBe('FIRST saved')
+  expect(await readFile(later, 'utf8')).toBe('LATER')
+  await expect(session.page).toHaveTitle(/all-after-cancel\.md/)
+  await expect(session.page.locator('.cm-content')).toContainText('must remain unsaved')
+  await session.page.getByTestId('files-tab').click()
+  await expect(session.page.locator('.open-document-row .dirty-dot')).toHaveCount(2)
+})
+
+test('官方格式与图片快捷键可用，标题键不被缩放或开发工具抢占', async () => {
+  const destination = await openFixture(session, 'official-keys.md', 'Paragraph')
+  await session.page.locator('.cm-content').click()
+  await session.page.keyboard.press('Control+1')
+  await session.page.keyboard.press('Control+s')
+  await expect.poll(async () => readFile(destination, 'utf8')).toBe('# Paragraph')
+  await session.page.keyboard.press('Control+0')
+  await session.page.keyboard.press('Control+s')
+  await expect.poll(async () => readFile(destination, 'utf8')).toBe('Paragraph')
+  const imagePath = path.join(session.root, 'shortcut-picture.svg')
+  await writeFile(imagePath, '<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20"><rect width="20" height="20" fill="green"/></svg>')
+  await setOpenDialog(session, [imagePath])
+  await session.page.keyboard.press('Control+End')
+  await session.page.keyboard.press('Control+Shift+I')
+  await expect(session.page.locator('.cm-content')).toContainText('![')
+  await session.page.keyboard.press('Control+s')
+  await expect.poll(async () => readFile(destination, 'utf8')).toContain('shortcut-picture')
+})
+
+test('另存目录导致相对图片断链时可取消，取消不覆盖目标或更改文档路径', async () => {
+  const image = path.join(session.root, 'original-image.svg')
+  await writeFile(image, '<svg xmlns="http://www.w3.org/2000/svg" width="10" height="10"/>')
+  const original = '# Image\n\n![local](./original-image.svg)\n'
+  const originalPath = await openFixture(session, 'save-as-image.md', original)
+  await appendText(session, '\nUNSAVED_IMAGE_EDIT')
+  const folder = path.join(session.root, 'new-location')
+  await mkdir(folder)
+  const target = path.join(folder, 'destination.md')
+  await writeFile(target, 'EXISTING_DESTINATION')
+  await setSaveDialog(session, target)
+  await session.app.evaluate(({ dialog }) => {
+    Reflect.set(globalThis, 'qtyporaImageWarning', null)
+    dialog.showMessageBox = async (windowOrOptions: Electron.BaseWindow | Electron.MessageBoxOptions, options?: Electron.MessageBoxOptions) => {
+      const details = options ?? ('message' in windowOrOptions ? windowOrOptions : undefined)
+      Reflect.set(globalThis, 'qtyporaImageWarning', { title: details?.title, detail: details?.detail })
+      return { response: 1, checkboxChecked: false }
+    }
+  })
+  await session.page.keyboard.press('Control+Shift+s')
+  await expect.poll(async () => session.app.evaluate(() => Reflect.get(globalThis, 'qtyporaImageWarning'))).toMatchObject({ title: '另存为后的图片路径' })
+  expect(await readFile(target, 'utf8')).toBe('EXISTING_DESTINATION')
+  expect(await readFile(originalPath, 'utf8')).toBe(original)
+  await expect(session.page).toHaveTitle(/save-as-image\.md/)
+  await expect(session.page.locator('.cm-content')).toContainText('UNSAVED_IMAGE_EDIT')
+  await expect(session.page.getByTestId('dirty-indicator')).toBeVisible()
+})
+
+test('文件树键盘展开与打开，刷新后保留目录展开和文件选择', async () => {
+  await openFixture(session, 'tree-current.md', 'CURRENT')
+  const folder = path.join(session.root, 'keyboard-folder')
+  await mkdir(folder)
+  const nested = path.join(folder, 'keyboard-child.md')
+  await writeFile(nested, '# KEYBOARD_CHILD\n')
+  await setOpenDialog(session, [session.root])
+  await session.page.getByTestId('export-menu').click()
+  await session.page.getByTestId('open-folder').click()
+  await session.page.getByTestId('files-tab').click()
+  const tree = session.page.getByTestId('file-tree')
+  const directory = tree.getByRole('treeitem').filter({ hasText: 'keyboard-folder' })
+  await directory.focus()
+  await directory.press('ArrowRight')
+  await expect(directory).toHaveAttribute('aria-expanded', 'true')
+  const child = tree.getByRole('treeitem').filter({ hasText: 'keyboard-child.md' })
+  await expect(child).toBeVisible()
+  await directory.press('ArrowRight')
+  await expect(child).toBeFocused()
+  await child.press('Enter')
+  await expect(session.page).toHaveTitle(/keyboard-child\.md/)
+  await expect(session.page.locator('.cm-content')).toContainText('KEYBOARD_CHILD')
+  await writeFile(path.join(folder, 'new-child.md'), 'REFRESHED')
+  await session.page.getByTestId('refresh-file-tree').click()
+  await expect(tree.getByRole('treeitem').filter({ hasText: 'new-child.md' })).toBeVisible()
+  await expect(directory).toHaveAttribute('aria-expanded', 'true')
+  await expect(child).toHaveAttribute('aria-selected', 'true')
+})

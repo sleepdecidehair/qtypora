@@ -1,13 +1,15 @@
 import type { Preferences, Theme } from '../../shared/contracts'
 import { Dialog } from './Dialog'
+import { primaryShortcut } from '../platform-shortcuts'
 
 interface PreferencesDialogProps {
+  platform: string
   preferences: Preferences
   onChange: (changes: Partial<Preferences>) => void
   onClose: () => void
 }
 
-export function PreferencesDialog({ preferences, onChange, onClose }: PreferencesDialogProps) {
+export function PreferencesDialog({ platform, preferences, onChange, onClose }: PreferencesDialogProps) {
   return <Dialog title="偏好设置" onClose={onClose} className="preferences-dialog">
     <div className="dialog-content preferences-content">
       <section><h3>外观</h3>
@@ -19,8 +21,8 @@ export function PreferencesDialog({ preferences, onChange, onClose }: Preference
         <label className="setting-row">显示侧栏<input type="checkbox" checked={preferences.showSidebar} onChange={event => onChange({ showSidebar: event.target.checked })} /></label>
       </section>
       <section><h3>编辑</h3>
-        <label className="setting-row">源码模式 · Ctrl+/<input type="checkbox" checked={preferences.sourceMode} onChange={event => onChange({ sourceMode: event.target.checked, readingMode: false })} /></label>
-        <p className="setting-hint">双击正文展开当前行语法，双击图片、公式、图表或表格展开对应块；移开光标或 Esc 恢复预览。Ctrl+/ 切换全文源码模式；Ctrl+E 选择当前样式范围或表格单元格。</p>
+        <label className="setting-row">源码模式 · {primaryShortcut(platform, '/')}<input type="checkbox" checked={preferences.sourceMode} onChange={event => onChange({ sourceMode: event.target.checked, readingMode: false })} /></label>
+        <p className="setting-hint">双击正文展开当前行语法，双击图片、公式、图表或表格展开对应块；移开光标或 Esc 恢复预览。{primaryShortcut(platform, '/')} 切换全文源码模式；{primaryShortcut(platform, 'E')} 选择当前样式范围或表格单元格。</p>
         <label className="setting-row">专注模式<input type="checkbox" checked={preferences.focusMode} onChange={event => onChange({ focusMode: event.target.checked })} /></label>
         <label className="setting-row">打字机模式<input type="checkbox" checked={preferences.typewriterMode} onChange={event => onChange({ typewriterMode: event.target.checked })} /></label>
         <label className="setting-row">源码显示行号<input type="checkbox" checked={preferences.showLineNumbers} onChange={event => onChange({ showLineNumbers: event.target.checked })} /></label>

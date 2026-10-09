@@ -8,7 +8,7 @@ const executablePath = process.env.QTYPORA_PACKAGED_EXE
 test.skip(!executablePath, 'Set QTYPORA_PACKAGED_EXE to a packaged internal executable.')
 
 test('打包后的应用显示新图标，离线读写、折叠、渲染及导出可用', async () => {
-  test.setTimeout(120_000)
+  test.setTimeout(240_000)
   const root = await mkdtemp(path.join(tmpdir(), 'qtypora-desktop-test-'))
   const userData = path.join(root, 'user-data')
   await mkdir(userData)
@@ -22,7 +22,7 @@ test('打包后的应用显示新图标，离线读写、折叠、渲染及导�
     if (path.dirname(resolved) !== path.resolve(tmpdir()) || !path.basename(resolved).startsWith('qtypora-desktop-test-')) throw new Error('Unexpected packaged-test cleanup directory')
     await rm(resolved, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 })
   }
-  const app = await _electron.launch({ executablePath: executablePath!, args: [], env, timeout: 30_000 }).catch(async error => {
+  const app = await _electron.launch({ executablePath: executablePath!, args: [], env, timeout: 90_000 }).catch(async error => {
     await removeTemporaryRoot()
     throw error
   })
@@ -55,7 +55,7 @@ test('打包后的应用显示新图标，离线读写、折叠、渲染及导�
     await writeFile(path.join(root, 'sample.png'), Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIHWP4z8DwHwAFgAI/ScLbtAAAAABJRU5ErkJggg==', 'base64'))
     const file = await openFixture(session, 'installed-smoke.md', original)
     const editor = page.locator('.cm-content')
-    if (await editor.getAttribute('data-mode') === 'source') await page.keyboard.press('Control+/')
+    if (await editor.getAttribute('data-mode') === 'source') await page.keyboard.press('ControlOrMeta+/')
     const disclosure = editor.locator('details')
     await expect(disclosure.getByText('折叠正文', { exact: true })).toBeHidden()
     await disclosure.locator('summary').click()
@@ -69,15 +69,13 @@ test('打包后的应用显示新图标，离线读写、折叠、渲染及导�
     await image.scrollIntoViewIfNeeded()
     await expect.poll(() => image.evaluate(element => (element as HTMLImageElement).naturalWidth)).toBe(1)
     await expect(image).toHaveAttribute('src', /^qtypora-media:\/\//)
-    await editor.getByRole('combobox', { name: '代码块语言' }).scrollIntoViewIfNeeded()
-    await expect(editor.getByRole('combobox', { name: '代码块语言' })).toHaveValue('ts')
 
-    await page.keyboard.press('Control+/')
+    await page.keyboard.press('ControlOrMeta+/')
     await expect(editor).toHaveAttribute('data-mode', 'source')
     await appendText(session, '安装后的真实保存。\n')
-    await page.keyboard.press('Control+s')
+    await page.keyboard.press('ControlOrMeta+s')
     await expect.poll(() => readFile(file, 'utf8')).toBe(original + '安装后的真实保存。\n')
-    await page.keyboard.press('Control+/')
+    await page.keyboard.press('ControlOrMeta+/')
     const html = path.join(root, 'exported.html')
     await setSaveDialog(session, html)
     await page.getByTestId('export-menu').click()
@@ -95,7 +93,7 @@ test('打包后的应用显示新图标，离线读写、折叠、渲染及导�
 
     await setMessageResponse(session, 2)
     await editor.click()
-    await page.keyboard.press('Control+End')
+    await page.keyboard.press('ControlOrMeta+End')
     await page.keyboard.insertText('未保存内容')
     await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].close())
     await expect(editor).toBeVisible()

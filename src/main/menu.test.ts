@@ -55,6 +55,8 @@ describe('Official Typora menu shortcuts', () => {
 
   it('retains documented macOS differences without duplicate accelerators', () => {
     const { items } = setup('darwin')
+    expect(items.some((item) => item.role === 'appMenu')).toBe(true)
+    expect(items.some((item) => item.label === '退出')).toBe(false)
     expect(items.find((item) => item.label === '快速打开…')?.accelerator).toBe('Cmd+Shift+O')
     expect(items.find((item) => item.label === '打开文件夹…')?.accelerator).toBeUndefined()
     expect(items.find((item) => item.label === '大纲')?.accelerator).toBe('Cmd+Ctrl+1')

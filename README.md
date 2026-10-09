@@ -2,9 +2,9 @@
 
 <img src="build/icon.svg" alt="QTypora 应用图标" width="72" height="72">
 
-QTypora 是面向 Windows 的本地 Markdown 桌面编辑器，参考 Typora 的实时预览交互。文档保存在普通 `.md` 文件中，配置和恢复草稿保存在应用用户目录。
+QTypora 是面向 Windows 与 macOS 的本地 Markdown 桌面编辑器，参考 Typora 的实时预览交互。文档保存在普通 `.md` 文件中，配置和恢复草稿保存在应用用户目录。
 
-当前提供 Windows 10 / 11 x64 内测安装包，功能仍在迭代。项目需求见 [Windows PRD](docs/Typora-Windows-完整需求文档.md)；需求中的规划项不代表已经实现或完成验收。
+当前提供 Windows 10 / 11 x64 内测安装包；同一源码也可在 macOS 生成 arm64、x64 两个独立内部测试 DMG。功能仍在迭代，项目需求见 [Windows PRD](docs/Typora-Windows-完整需求文档.md)；需求中的规划项不代表已经实现或完成验收。
 
 ## Windows 内测下载
 
@@ -43,28 +43,28 @@ console.log('Hello, QTypora')
 
 普通图片、表格和图表在正文中居中布局，资源按可用空间等比适配，不修改原文件。图片右键选择“查看原图片”，图表和公式选择“查看资源”，可查看完整内容。`<details>` 默认折叠，带 `open` 属性时默认展开。
 
-| Windows 快捷键 | 操作 |
+| Windows / macOS 快捷键 | 操作 |
 | --- | --- |
-| `Ctrl+N` / `Ctrl+Shift+N` | 新建文档 / 新建窗口 |
-| `Ctrl+O` | 打开文档 |
-| `Ctrl+S` / `Ctrl+Shift+S` | 保存 / 另存为 |
-| `Ctrl+W` | 关闭当前文档 |
-| `Ctrl+F` / `Ctrl+H` | 查找 / 替换 |
-| `Ctrl+P` / `Ctrl+Shift+F` | 快速打开 / 工作区搜索 |
-| `Ctrl+/` | 切换源码模式 |
-| `Ctrl+,` | 偏好设置 |
-| `Ctrl+Shift+L` | 显示或隐藏侧栏 |
+| `Ctrl/Command+N` / `Ctrl/Command+Shift+N` | 新建文档 / 新建窗口 |
+| `Ctrl/Command+O` | 打开文档 |
+| `Ctrl/Command+S` / `Ctrl/Command+Shift+S` | 保存 / 另存为 |
+| `Ctrl/Command+W` | 关闭当前文档 |
+| `Ctrl/Command+F` / `Ctrl/Command+H` | 查找 / 替换 |
+| Windows `Ctrl+P`、macOS `Command+Shift+O` / `Ctrl/Command+Shift+F` | 快速打开 / 工作区搜索 |
+| `Ctrl/Command+/` | 切换源码模式 |
+| `Ctrl/Command+,` | 偏好设置 |
+| `Ctrl/Command+Shift+L` | 显示或隐藏侧栏 |
 | `F8` / `F9` / `F11` | 专注模式 / 打字机模式 / 全屏 |
 
 快捷键依据 [主进程菜单](src/main/menu.ts)，更多操作见应用菜单和右键菜单。
 
 ## 开发启动
 
-开发环境需要 Windows、Node.js **>=22.12.0** 和 npm，版本要求及命令来自 [package.json](package.json)。安装包的使用者不需要安装 Node.js。
+开发环境需要 Windows 或 macOS、Node.js **>=22.12.0** 和 npm，版本要求及命令来自 [package.json](package.json)。安装包的使用者不需要安装 Node.js。
 
-在项目根目录用 PowerShell 执行：
+在项目根目录用 PowerShell、Terminal 或其他当前平台终端执行：
 
-```powershell
+```text
 npm ci
 npm run build:icon
 npm run dev
@@ -72,9 +72,9 @@ npm run dev
 
 `npm ci` 按 [package-lock.json](package-lock.json) 安装依赖。`dev` 启动 Electron 窗口及本机开发服务；显式生成图标可兼容禁用 npm 生命周期脚本的环境。
 
-如果依赖安装脚本被禁用，导致 `node_modules/electron/dist/electron.exe` 缺失，可手动下载 Electron 运行时后再启动：
+如果依赖安装脚本被禁用，导致 Electron 运行时缺失，可手动下载运行时后再启动：
 
-```powershell
+```text
 node node_modules/electron/install.js
 ```
 
@@ -87,7 +87,7 @@ node node_modules/electron/install.js
 | `npm run typecheck` | TypeScript 类型检查 |
 | `npm test` | Vitest 单元测试 |
 | `npm run test:release` | 自动发布脚本的成功、失败与重试测试 |
-| `npm run build:icon` | 从 SVG 生成 PNG / ICO |
+| `npm run build:icon` | 从 SVG 生成 PNG / ICO；macOS 打包再生成应用图标 |
 | `npm run build` | 编译主进程、预加载和界面到 `out/`，不生成安装包 |
 | `npm run test:desktop` | Playwright 真实 Electron 联调测试 |
 | `npm run test:packaged` | 对指定打包程序执行桌面测试 |
@@ -112,7 +112,17 @@ npm test -- src/main/documents.test.ts
 npm run test:desktop -- tests/code-fence.spec.ts
 ```
 
-打包程序测试需要设置 `QTYPORA_PACKAGED_EXE` 为实际 `QTypora.exe` 的绝对路径。未设置时，普通桌面测试中的打包用例会跳过；跳过不代表通过。命令示例及验证范围见 [Windows 内测打包说明](docs/Windows-内测打包.md)。
+打包程序测试需要设置 `QTYPORA_PACKAGED_EXE` 为实际主程序的绝对路径：Windows 使用 `QTypora.exe`，macOS 使用 `.app/Contents/MacOS/QTypora Internal`。未设置时打包用例会跳过；跳过不代表通过。命令示例及验证范围见对应平台的打包说明。
+
+## macOS 内测打包
+
+在 Apple Silicon Mac 上统一执行：
+
+```bash
+npm run package:mac:internal
+```
+
+该命令同时生成 arm64、x64 两个独立 DMG，并验证架构、ad-hoc 签名、DMG 挂载、品牌资源、ASAR 内容及两个架构的真实打包应用。x64 启动验证需要 Rosetta。macOS 内测包未使用 Developer ID、未提交 Apple 公证，其他 Mac 首次运行可能需要在 Finder 中右键选择“打开”。完整产物、限制与核验方式见 [macOS 内测打包说明](docs/macOS-内测打包.md)。
 
 ## Windows 内测打包
 
@@ -153,7 +163,7 @@ npm run package:win:internal
 | [src/shared/contracts.ts](src/shared/contracts.ts) | 主进程与界面共用的类型、结果和事件契约 |
 | `src/renderer/` | React 界面、CodeMirror 编辑器、文件树、大纲、搜索和主题 |
 | `tests/` | 真实 Electron 联调测试；单元测试与源码相邻 |
-| `scripts/`、`build/` | 打包、签名、检查脚本及品牌和安装资源 |
+| `scripts/`、`build/` | Windows/macOS 打包、签名、检查脚本及品牌和安装资源 |
 | `docs/` | 需求、调研、验证与故障复盘 |
 | `out/`、`release/` | 编译产物与内测构建产物 |
 
@@ -163,7 +173,7 @@ Markdown 文本是唯一源模型，界面不通过渲染后的 HTML 重建文�
 
 现阶段支持 UTF-8 和 UTF-8 BOM。未修改保存保留原始字节；修改后沿用检测到的 LF / CRLF 和编码。单篇源码编辑上限为 16 MB，实时预览上限为 200,000 字符，超过预览阈值时保留源码编辑。保存全部遇到取消或失败停止；跨目录另存时提示失效的相对图片引用。
 
-Windows 实体输入法、表格拖动排序与跨格选区、图片粘贴拖放、富文本智能粘贴，以及完整主题与导出配置仍需开发或真机验收。macOS 尚未构建或验证。
+Windows 实体输入法、表格拖动排序与跨格选区、图片粘贴拖放、富文本智能粘贴，以及完整主题与导出配置仍需继续开发或真机验收。macOS 内测构建采用 ad-hoc 签名且未公证，不代表正式外部分发支持。
 
 - [AGENTS.md](AGENTS.md)：编码代理的项目约定。
 - [Markdown 编辑交互调研](docs/Typora-Markdown编辑交互调研与复刻规范.md)：交互设计依据。

@@ -34,7 +34,7 @@ test('大图片按鼠标位置缩放、拖动、恢复全图，关闭保留文�
   await writeFile(path.join(session.root, 'large.svg'), svg)
   const source = '# 图片查看\n\n前文。\n\n![大图片](large.svg)\n\n' + '查看完成后保持文章位置。\n\n'.repeat(30)
   const file = await openFixture(session, 'resource-image.md', source)
-  await session.page.keyboard.press('Control+/')
+  await session.page.keyboard.press('ControlOrMeta+/')
   const original = session.page.getByRole('img', { name: '大图片', exact: true })
   await original.scrollIntoViewIfNeeded()
   const before = await articleState()
@@ -64,8 +64,8 @@ test('大图片按鼠标位置缩放、拖动、恢复全图，关闭保留文�
   expect(moved.y - zoomed.y).toBeCloseTo(70, 0)
   await session.page.screenshot({ path: test.info().outputPath('image-detail.png') })
   // Native menu accelerators must also be isolated from the article behind the modal.
-  await session.page.keyboard.press('Control+/')
-  await session.page.keyboard.press('Control+Shift+=')
+  await session.page.keyboard.press('ControlOrMeta+/')
+  await session.page.keyboard.press('ControlOrMeta+Shift+=')
   expect((await articleState()).mode).toBe('hybrid')
   await viewer.getByRole('button', { name: '适应窗口', exact: true }).click()
   await expect.poll(async () => (await viewportGeometry()).scale).toBeCloseTo(fitted.scale, 5)
@@ -84,7 +84,7 @@ test('大图片按鼠标位置缩放、拖动、恢复全图，关闭保留文�
 test('Mermaid与公式查看支持键盘缩放、窗口改变、焦点循环及重新打开复位', async () => {
   const source = '# 图表细节\n\n```mermaid\nflowchart TB\nA[开始] --> B[处理] --> C[核对] --> D[结束]\n```\n\n$$\nx^2+y^2=z^2\n$$\n'
   const file = await openFixture(session, 'resource-diagram.md', source)
-  await session.page.keyboard.press('Control+/')
+  await session.page.keyboard.press('ControlOrMeta+/')
   const diagram = session.page.locator('.md-mermaid svg')
   await expect(diagram).toBeVisible()
   await setContextMenuChoice(session, 'view-resource')
@@ -140,7 +140,7 @@ test('损坏图片显示加载失败，禁用缩放，仍可键盘关闭并继�
   await expect(viewer.getByRole('button', { name: '关闭资源查看' })).toBeFocused()
   await session.page.keyboard.press('Escape')
   await expect(viewer).toHaveCount(0)
-  await session.page.keyboard.press('Control+End')
+  await session.page.keyboard.press('ControlOrMeta+End')
   await session.page.keyboard.type('仍可编辑')
   expect((await articleState()).source).toContain('仍可编辑')
   expect(await readFile(file, 'utf8')).not.toContain('仍可编辑')
@@ -149,16 +149,16 @@ test('损坏图片显示加载失败，禁用缩放，仍可键盘关闭并继�
 test('查看器隔离原生保存和切换快捷键，原生窗口关闭仍保护未保存文章', async () => {
   const source = '# 关闭保护\n\n```mermaid\nflowchart LR\nA[开始] --> B[结束]\n```\n\n'
   const file = await openFixture(session, 'resource-close.md', source)
-  await session.page.keyboard.press('Control+End')
+  await session.page.keyboard.press('ControlOrMeta+End')
   await session.page.keyboard.type('UNSAVED_VIEWER_DRAFT')
   const modified = (await articleState()).source
-  await session.page.keyboard.press('Control+/')
+  await session.page.keyboard.press('ControlOrMeta+/')
   await setContextMenuChoice(session, 'view-resource')
   await session.page.locator('.md-mermaid svg').click({ button: 'right' })
   const viewer = session.page.getByTestId('resource-viewer')
   await expect(viewer).toBeVisible()
-  await session.page.keyboard.press('Control+s')
-  await session.page.keyboard.press('Control+/')
+  await session.page.keyboard.press('ControlOrMeta+s')
+  await session.page.keyboard.press('ControlOrMeta+/')
   expect((await articleState()).mode).toBe('hybrid')
   expect(await readFile(file, 'utf8')).toBe(source)
   await setMessageResponse(session, 2)

@@ -2,7 +2,7 @@
   "name": "qtypora",
   "version": "0.1.0",
   "private": true,
-  "description": "A local-first Markdown desktop editor for Windows",
+  "description": "A local-first Markdown desktop editor for Windows and macOS",
   "main": "out/main/index.js",
   "scripts": {
     "predev": "npm run build:icon",
@@ -12,9 +12,11 @@
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "test:release": "node --test scripts/github-release.test.cjs",
+    "test:package:mac": "node --test scripts/package-mac.test.cjs",
     "test:desktop": "playwright test",
     "build:icon": "node scripts/create-icon.cjs",
     "package:win:internal": "powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/package-internal.ps1",
+    "package:mac:internal": "node scripts/package-mac-internal.cjs",
     "test:packaged": "playwright test tests/packaged.spec.ts --reporter=list --output=.debug/packaged-test-results"
   },
   "dependencies": {

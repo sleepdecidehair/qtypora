@@ -4,7 +4,7 @@
 
 ## 项目与代码位置
 
-QTypora 是 Windows 本地 Markdown 编辑器，采用 Electron、React、TypeScript 和 CodeMirror。依赖与版本以 `package.json` / `package-lock.json` 为准，不将规划文档中的功能视为已实现。
+QTypora 是 Windows 与 macOS 本地 Markdown 编辑器，采用 Electron、React、TypeScript 和 CodeMirror。依赖与版本以 `package.json` / `package-lock.json` 为准，不将规划文档中的功能视为已实现。
 
 | 位置 | 修改范围 |
 | --- | --- |
@@ -19,7 +19,7 @@ QTypora 是 Windows 本地 Markdown 编辑器，采用 Electron、React、TypeSc
 
 ## 常用命令
 
-在项目根目录使用 PowerShell，Node.js 要求 `>=22.12.0`：
+在项目根目录使用当前平台终端，Node.js 要求 `>=22.12.0`：
 
 ```powershell
 npm ci
@@ -36,6 +36,7 @@ npm run dev
 | `npm run test:desktop -- tests/code-fence.spec.ts` | 指定交互测试；先编译并清除 `ELECTRON_RENDERER_URL` |
 | `npm run test:desktop` | 完整桌面联调；使用隔离的文档和用户目录 |
 | `npm run package:win:internal` | 统一的 Windows 内测打包与验证入口 |
+| `npm run package:mac:internal` | 在 Apple Silicon Mac 生成并验证 arm64、x64 两个内测 DMG |
 | `npm run test:packaged` | 已设置 `QTYPORA_PACKAGED_EXE` 时验证对应打包程序 |
 
 仅在首次准备或依赖变化后执行 `npm ci`。禁用 npm 生命周期脚本的环境应显式生成图标；Electron 运行时缺失时按 README 处理。当前没有 `lint` 或格式化脚本，不编造命令或擅自引入工具链。
@@ -62,7 +63,7 @@ npm run dev
 
 10. **按风险选择检查。** 应用代码变化运行类型检查、相关单元测试及编译；涉及跨进程行为或编辑交互时补充对应桌面用例。测试应覆盖实际风险，不编写仅复述实现的测试。纯文档修改检查命令、链接及事实即可；不要因此重新安装依赖或打包。
 
-11. **统一 Windows 打包。** 打包使用 `npm run package:win:internal`，不绕过依赖锁定、输入快照、签名、图标和产物检查。Logo 只改 `build/icon.svg`；成功构建由脚本更新 `release/latest.json`。自动发布复用 `.github/workflows/windows-release.yml` 和 `scripts/github-release.cjs`，按提交建草稿、校验资源后公开，不覆盖已有公开版本。保留安全钩子及打包互斥锁，不分发失败暂存包、不自动导入信任证书，不直接覆盖 `.md` 的系统默认关联。
+11. **统一平台打包。** Windows 使用 `npm run package:win:internal`；macOS 在 Apple Silicon Mac 使用 `npm run package:mac:internal` 生成 arm64、x64 两个独立 DMG。不得绕过依赖锁定、输入快照、签名、图标、架构和产物检查。Logo 只改 `build/icon.svg`；Windows 成功构建更新 `release/latest.json`，macOS 更新 `release/latest-mac.json`。自动发布仍只复用 `.github/workflows/windows-release.yml` 和 `scripts/github-release.cjs`。保留安全钩子及打包互斥锁，不分发失败暂存包、不自动安装 Rosetta 或导入信任证书，不直接覆盖 Markdown 的系统默认关联。macOS ad-hoc 签名不得描述为 Developer ID 签名或已公证。
 
 12. **谨慎处理 Windows 脚本与文件。** 保持 Windows PowerShell 5.1 兼容，读取 UTF-8 JSON/文档时显式指定编码。递归删除或移动前确认绝对目标位于预期范围，使用原生 PowerShell 和 `-LiteralPath`；私钥、令牌和用户数据不得写入文档、日志或安装包。
 

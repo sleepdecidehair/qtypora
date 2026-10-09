@@ -6,7 +6,7 @@ const hash = bytes => crypto.createHash('sha256').update(bytes).digest('hex')
 const json = file => JSON.parse(fs.readFileSync(file, 'utf8').replace(/^\uFEFF/, ''))
 
 function snapshot() {
-  const files = ['package.json', 'package-lock.json', 'electron-builder.internal.cjs', 'electron.vite.config.ts', 'tsconfig.json', 'vitest.config.ts', 'playwright.config.ts', 'docs/Windows-内测打包.md', '.github/workflows/windows-release.yml']
+  const files = ['package.json', 'package-lock.json', 'electron-builder.internal.cjs', 'electron-builder.mac-internal.cjs', 'electron.vite.config.ts', 'tsconfig.json', 'vitest.config.ts', 'playwright.config.ts', 'docs/Windows-内测打包.md', 'docs/macOS-内测打包.md', '.github/workflows/windows-release.yml']
   const walk = directory => {
     for (const entry of fs.readdirSync(path.join(root, directory), { withFileTypes: true })) {
       const relative = `${directory}/${entry.name}`

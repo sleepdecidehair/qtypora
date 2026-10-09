@@ -290,7 +290,7 @@ export function MarkdownEditor(props: MarkdownEditorProps): React.JSX.Element {
   return <div className={`markdown-editor markdown-editor-${props.mode}${props.focusMode ? ' markdown-editor-focus' : ''}`} data-testid="markdown-editor">
     {contextError ? <div className="editor-context-error" role="alert">{contextError}<button type="button" aria-label="关闭提示" onClick={() => setContextError('')}>×</button></div> : null}
     <div className="editor-mount" ref={mountRef} hidden={props.mode === 'reading'} aria-hidden={props.mode === 'reading'} />
-    {props.mode === 'reading' ? <ReadingView ref={readingRef} documentId={props.documentId} content={props.value} theme={props.theme} fontSize={props.fontSize} command={props.command} jumpToLine={props.jumpToLine} onLinkOpen={props.onLinkOpen} resolveResource={props.resolveResource} initialAnchor={readingSnapshotRef.current?.documentId === props.documentId ? readingSnapshotRef.current.anchor : null} /> : null}
+    {props.mode === 'reading' ? <ReadingView ref={readingRef} platform={props.platform} documentId={props.documentId} content={props.value} theme={props.theme} fontSize={props.fontSize} command={props.command} jumpToLine={props.jumpToLine} onLinkOpen={props.onLinkOpen} resolveResource={props.resolveResource} initialAnchor={readingSnapshotRef.current?.documentId === props.documentId ? readingSnapshotRef.current.anchor : null} /> : null}
     {resource ? <ResourceViewer resource={resource} onClose={closeResource} /> : null}
   </div>
 }

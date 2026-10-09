@@ -3,6 +3,8 @@ import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 
+export const redoKey = process.platform === 'darwin' ? 'Meta+Shift+z' : 'Control+y'
+
 export interface DesktopSession {
   app: ElectronApplication
   page: Page
@@ -52,7 +54,7 @@ export async function launchDesktop(existingRoot?: string): Promise<DesktopSessi
     await expect(page.locator('.cm-content')).toBeVisible()
     session.initialMode = await page.locator('.cm-content').getAttribute('data-mode')
     // File-service fixtures edit exact source; dedicated interaction tests switch back to live preview.
-    if (session.initialMode !== 'source') await page.keyboard.press('Control+/')
+    if (session.initialMode !== 'source') await page.keyboard.press('ControlOrMeta+/')
     await expect(page.locator('.cm-content')).toHaveAttribute('data-mode', 'source')
     return session
   } catch (error) {
@@ -136,7 +138,7 @@ export async function openFixture(session: DesktopSession, filename: string, con
   const destination = path.join(session.root, filename)
   await writeFile(destination, content)
   await setOpenDialog(session, [destination])
-  await session.page.keyboard.press('Control+o')
+  await session.page.keyboard.press('ControlOrMeta+o')
   await expect(session.page).toHaveTitle(new RegExp(filename.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')))
   await expect(session.page.locator('.cm-content')).toBeVisible()
   return destination
@@ -144,7 +146,7 @@ export async function openFixture(session: DesktopSession, filename: string, con
 
 export async function appendText(session: DesktopSession, text: string): Promise<void> {
   await session.page.locator('.cm-content').click()
-  await session.page.keyboard.press('Control+End')
+  await session.page.keyboard.press('ControlOrMeta+End')
   const lines = text.split('\n')
   for (let index = 0; index < lines.length; index++) {
     if (index) await session.page.keyboard.press('Enter')

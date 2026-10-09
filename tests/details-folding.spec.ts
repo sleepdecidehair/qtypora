@@ -24,7 +24,7 @@ test('ONB 十二个分组默认收起，点击或键盘展开正文且不修改�
   })
   const original = '# 引导用例\n\n' + groups.join('\n\n') + '\n\n分组后的正文\n'
   const file = await openFixture(session, 'onb-details.md', original)
-  await session.page.keyboard.press('Control+/')
+  await session.page.keyboard.press('ControlOrMeta+/')
   const editor = session.page.locator('.cm-content')
   const disclosures = editor.locator('details')
   await expect(disclosures).toHaveCount(12)
@@ -57,7 +57,7 @@ test('ONB 十二个分组默认收起，点击或键盘展开正文且不修改�
 test('嵌套分组独立折叠，显式 open 属性在预览和导出中保留，未闭合正文仍可见', async () => {
   const original = '<details>\n<summary>外层分组</summary>\n\n外层正文\n\n<details>\n<summary>内层分组</summary>\n\n内层正文\n\n</details>\n\n</details>\n\n<details open ontoggle="window.unsafeDisclosure = true">\n<summary>默认展开</summary>\n\n默认可见正文\n\n</details>\n\n<details>\n<summary>尚未完成</summary>\n\n未闭合正文\n'
   await openFixture(session, 'nested-details.md', original)
-  await session.page.keyboard.press('Control+/')
+  await session.page.keyboard.press('ControlOrMeta+/')
   const editor = session.page.locator('.cm-content')
   const outer = editor.locator('details').first()
   const inner = outer.locator('details')
@@ -95,7 +95,7 @@ test('嵌套分组独立折叠，显式 open 属性在预览和导出中保留�
 test('双击折叠标题展开完整 Markdown 源码，修改后恢复折叠并准确保存', async () => {
   const original = '<details>\n<summary>可编辑分组</summary>\n\n#### 子标题\n\n正文 **原值**\n\n</details>\n\n后文\n'
   const file = await openFixture(session, 'editable-details.md', original)
-  await session.page.keyboard.press('Control+/')
+  await session.page.keyboard.press('ControlOrMeta+/')
   const editor = session.page.locator('.cm-content')
   await editor.locator('summary').dblclick()
   await expect(editor.locator('.cm-live-edit-block').first()).toHaveText('<details>')
@@ -110,7 +110,7 @@ test('双击折叠标题展开完整 Markdown 源码，修改后恢复折叠并�
   await expect(editor.getByText('新值', { exact: true })).toBeHidden()
   await editor.locator('summary').click()
   await expect(editor.getByText('新值', { exact: true })).toBeVisible()
-  await session.page.keyboard.press('Control+s')
+  await session.page.keyboard.press('ControlOrMeta+s')
   await expect.poll(() => readFile(file, 'utf8')).toBe(original.replace('原值', '新值'))
   expect(await source()).toBe(original.replace('原值', '新值'))
 })

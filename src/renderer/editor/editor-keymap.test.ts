@@ -13,28 +13,29 @@ function keyboardView(bindings: readonly KeyBinding[]): EditorView {
   return view as unknown as EditorView
 }
 
-function ctrl(key: string, keyCode: number): KeyboardEvent {
-  return { key, keyCode, ctrlKey: true, metaKey: false, altKey: false, shiftKey: false, stopPropagation: () => undefined } as KeyboardEvent
+function primary(key: string, keyCode: number): KeyboardEvent {
+  const isMac = process.platform === 'darwin'
+  return { key, keyCode, ctrlKey: !isMac, metaKey: isMac, altKey: false, shiftKey: false, stopPropagation: () => undefined } as KeyboardEvent
 }
 
 describe('desktop shortcuts pass through CodeMirror', () => {
   it('leaves Ctrl+/ unhandled and Markdown unchanged, unlike the upstream comment shortcut', () => {
     const upstream = keyboardView(defaultKeymap)
-    expect(runScopeHandlers(upstream, ctrl('/', 191), 'editor')).toBe(true)
+    expect(runScopeHandlers(upstream, primary('/', 191), 'editor')).toBe(true)
     expect(upstream.state.doc.toString()).toContain('<!--')
     const desktop = keyboardView(editorDefaultKeymap)
-    expect(runScopeHandlers(desktop, ctrl('/', 191), 'editor')).toBe(false)
+    expect(runScopeHandlers(desktop, primary('/', 191), 'editor')).toBe(false)
     expect(desktop.state.doc.toString()).toBe('# Heading\n\nUntouched')
   })
   it('does not consume Ctrl+E before the App style-scope command', () => {
     const view = keyboardView(editorDefaultKeymap)
-    expect(runScopeHandlers(view, ctrl('e', 69), 'editor')).toBe(false)
+    expect(runScopeHandlers(view, primary('e', 69), 'editor')).toBe(false)
     expect(view.state.selection.main.head).toBe(0)
     expect(view.state.doc.toString()).toBe('# Heading\n\nUntouched')
   })
   it('keeps native text navigation such as End available', () => {
-    const view = keyboardView(editorDefaultKeymap)
-    expect(runScopeHandlers(view, ctrl('End', 35), 'editor')).toBe(true)
-    expect(view.state.selection.main.head).toBe(view.state.doc.length)
+    const end = defaultKeymap.find(binding => binding.key === 'Mod-End')
+    expect(end).toBeDefined()
+    expect(editorDefaultKeymap).toContain(end)
   })
 })

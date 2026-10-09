@@ -1,6 +1,6 @@
 import { test, expect } from '@playwright/test'
 import { readFile } from 'node:fs/promises'
-import { launchDesktop, openFixture, stopDesktop, type DesktopSession } from './desktop-helpers'
+import { launchDesktop, openFixture, redoKey, stopDesktop, type DesktopSession } from './desktop-helpers'
 
 let session: DesktopSession
 test.beforeEach(async () => { session = await launchDesktop() })
@@ -20,11 +20,11 @@ for (const mode of ['source', 'hybrid'] as const) {
   test(`${mode} 视图中引用按钮可再次取消，支持多行、空行、快捷键和撤销重做`, async () => {
     const original = '正文 **粗体** 与 [链接](https://example.com)\n\n- [x] 事项\n\n末尾\n'
     const file = await openFixture(session, `quote-${mode}.md`, original)
-    if (mode === 'hybrid') await session.page.keyboard.press('Control+/')
+    if (mode === 'hybrid') await session.page.keyboard.press('ControlOrMeta+/')
     const editor = session.page.locator('.cm-content')
     const quote = session.page.getByRole('button', { name: '引用', exact: true })
     await editor.click()
-    await session.page.keyboard.press('Control+Home')
+    await session.page.keyboard.press('ControlOrMeta+Home')
     await quote.click()
     await expect.poll(source).toBe('> ' + original)
     if (mode === 'hybrid') await expect(editor.locator('.cm-live-quote')).toHaveCount(1)
@@ -32,37 +32,37 @@ for (const mode of ['source', 'hybrid'] as const) {
     await expect.poll(source).toBe(original)
     if (mode === 'hybrid') await expect(editor.locator('.cm-live-quote')).toHaveCount(0)
 
-    await session.page.keyboard.press('Control+a')
+    await session.page.keyboard.press('ControlOrMeta+a')
     await quote.click()
     const quoted = original.slice(0, -1).split('\n').map(line => '> ' + line).join('\n') + '\n'
     await expect.poll(source).toBe(quoted)
     await quote.click()
     await expect.poll(source).toBe(original)
 
-    await session.page.keyboard.press('Control+End')
+    await session.page.keyboard.press('ControlOrMeta+End')
     await quote.click()
     await expect.poll(source).toBe(original + '> ')
     await quote.click()
     await session.page.keyboard.insertText('普通段落')
     await expect.poll(source).toBe(original + '普通段落')
-    await session.page.keyboard.press('Control+s')
+    await session.page.keyboard.press('ControlOrMeta+s')
     await expect.poll(() => readFile(file, 'utf8')).toBe(original + '普通段落')
 
     const existing = '> 引用 **格式**\n\n后续内容\n'
     await openFixture(session, `existing-quote-${mode}.md`, existing)
     await editor.click()
-    await session.page.keyboard.press('Control+Home')
-    await session.page.keyboard.press('Control+Shift+q')
+    await session.page.keyboard.press('ControlOrMeta+Home')
+    await session.page.keyboard.press('ControlOrMeta+Shift+q')
     await expect.poll(source).toBe(existing.slice(2))
-    await session.page.keyboard.press('Control+z')
+    await session.page.keyboard.press('ControlOrMeta+z')
     await expect.poll(source).toBe(existing)
-    await session.page.keyboard.press('Control+y')
+    await session.page.keyboard.press(redoKey)
     await expect.poll(source).toBe(existing.slice(2))
-    await session.page.keyboard.press('Control+s')
+    await session.page.keyboard.press('ControlOrMeta+s')
 
     await openFixture(session, `empty-first-line-${mode}.md`, '\n后续内容\n')
     await editor.click()
-    await session.page.keyboard.press('Control+Home')
+    await session.page.keyboard.press('ControlOrMeta+Home')
     await quote.click()
     await expect.poll(source).toBe('> \n后续内容\n')
     await quote.click()

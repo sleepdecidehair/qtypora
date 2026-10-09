@@ -22,7 +22,7 @@ async function searchFolder(folder: string, query: string): Promise<void> {
 async function openDocument(file: string, content: string): Promise<void> {
   await writeFile(file, content)
   await setOpenDialog(session, [file])
-  await session.page.keyboard.press('Control+o')
+  await session.page.keyboard.press('ControlOrMeta+o')
   await expect(session.page.getByTestId('document-name')).toHaveText(path.basename(file))
 }
 
@@ -39,7 +39,7 @@ test('目录搜索高亮摘要、标题和表格，跳转后保持高亮且清�
   const original = '# 文档\n\n## 002｜沃尔玛\n\n普通 002，第二次 002。\n\n行内公式 $x^2$\n\n| 编号 | 状态 |\n| --- | --- |\n| 002 | 完成 |\n'
   const file = path.join(folder, 'hits.md')
   await openDocument(file, original)
-  await session.page.keyboard.press('Control+/')
+  await session.page.keyboard.press('ControlOrMeta+/')
   await searchFolder(folder, '002')
   const results = session.page.locator('.search-result')
   await expect(results).toHaveCount(3)
@@ -78,7 +78,7 @@ test('只读文档、源码视图、大小写和深色主题均支持高亮，�
     await session.page.getByLabel('区分大小写', { exact: true }).check()
     await expect(result.locator('mark')).toHaveText('word')
     await expect.poll(() => renderedMatches()).toEqual(['word'])
-    await session.page.keyboard.press('Control+/')
+    await session.page.keyboard.press('ControlOrMeta+/')
     await expect(session.page.locator('.cm-content')).toHaveAttribute('data-mode', 'hybrid')
     await expect.poll(() => renderedMatches()).toEqual(['word'])
     await session.page.getByTestId('preferences-button').click()
@@ -105,7 +105,7 @@ test('滚动、切换文件和编辑后更新高亮，匹配摘要不会被前�
   const original = `${'正文没有匹配\n\n'.repeat(150)}## 002｜末尾标题\n\n${'长前文'.repeat(100)}002\n`
   await openDocument(path.join(folder, 'long.md'), original)
   await writeFile(path.join(folder, 'second.md'), '# 第二篇\n\n002 002\n')
-  await session.page.keyboard.press('Control+/')
+  await session.page.keyboard.press('ControlOrMeta+/')
   await searchFolder(folder, '002')
   const results = session.page.locator('.search-result')
   await expect(results).toHaveCount(3)

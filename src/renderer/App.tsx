@@ -15,6 +15,7 @@ import { QuickOpen } from './components/QuickOpen'
 import { DraftRecovery } from './components/DraftRecovery'
 import { FileActionDialog, type PendingFileAction } from './components/FileActionDialog'
 import { Dialog } from './components/Dialog'
+import { primaryShortcut } from './platform-shortcuts'
 import './styles/tokens.css'
 import './styles/app.css'
 
@@ -54,6 +55,7 @@ function DesktopApp({ api }: { api: DesktopApi }) {
   const workspaceRef = useRef<Workspace | null>(null)
   const [refreshVersion, setRefreshVersion] = useState(0)
   const [recentFiles, setRecentFiles] = useState<string[]>([])
+  const [platform, setPlatform] = useState('win32')
   const [drafts, setDrafts] = useState<DraftRecord[]>([])
   const [modal, setModal] = useState<'preferences' | 'quick-open' | 'recovery' | null>(null)
   const [fileAction, setFileAction] = useState<PendingFileAction | null>(null)
@@ -89,6 +91,7 @@ function DesktopApp({ api }: { api: DesktopApi }) {
       if (!active) return
       if (!result.ok) { reportError(result.error.message); setIsLoading(false); return }
       loadPreferences(result.data.preferences)
+      setPlatform(result.data.platform)
       setRecentFiles(result.data.recentFiles)
       setDrafts(result.data.drafts)
       if (result.data.workspace) { workspaceRef.current = result.data.workspace; setWorkspace(result.data.workspace) }
@@ -292,7 +295,7 @@ function DesktopApp({ api }: { api: DesktopApi }) {
       const key = event.key.toLowerCase()
       let command: AppCommand | null = null
       if (key === 's') command = event.shiftKey ? 'save-as' : 'save'
-      else if (key === 'o') command = event.shiftKey ? 'open-folder' : 'open'
+      else if (key === 'o') command = event.shiftKey ? (platform === 'darwin' ? 'quick-open' : 'open-folder') : 'open'
       else if (key === 'n') command = event.shiftKey ? 'new-window' : 'new'
       else if (key === 'w') command = 'close-document'
       else if (key === 'p') command = 'quick-open'
@@ -305,7 +308,7 @@ function DesktopApp({ api }: { api: DesktopApi }) {
     }
     document.addEventListener('keydown', handler)
     return () => document.removeEventListener('keydown', handler)
-  }, [run, modal, fileAction, reloadId])
+  }, [run, modal, fileAction, reloadId, platform])
 
   const performFileAction = async (name: string) => {
     if (!fileAction || fileActionInProgress.current) return
@@ -328,18 +331,18 @@ function DesktopApp({ api }: { api: DesktopApi }) {
   if (isLoading) return <div className="startup-state"><FileText size={32} /><p>正在打开写作空间…</p></div>
 
   return <div className={`desktop-app ${preferences.sourceMode ? 'source-mode' : 'hybrid-mode'}`} style={appStyle} data-testid="desktop-app" data-theme={theme}>
-    <Toolbar showFormatting={preferences.showToolbar} sourceMode={preferences.sourceMode} disabled={!current || current.readOnly} isSaving={current?.isSaving ?? false} onAction={issueEditorCommand} onNew={() => run(executeCommand('new'))} onOpen={() => run(executeCommand('open'))} onSave={() => run(save())} onSaveAll={() => run(saveAll())} onSidebar={() => run(executeCommand('sidebar'))} onSource={() => run(executeCommand('source'))} onQuickOpen={() => setModal('quick-open')} onPreferences={() => setModal('preferences')} onOpenFolder={() => run(openFolder())} onExport={kind => run(exportDocument(kind))} onImage={() => run(insertImage())} onCloseDocument={() => run(documents.close())} onSaveAs={() => run(save(true))} onRecovery={() => run(executeCommand('recover-drafts'))} onNewWindow={() => run(executeCommand('new-window'))} focusMode={preferences.focusMode} typewriterMode={preferences.typewriterMode} onFocus={() => run(executeCommand('focus'))} onTypewriter={() => run(executeCommand('typewriter'))} isContentConstrained={preferences.contentWidthMode === 'fixed'} onContentWidthToggle={() => updatePreferences({ contentWidthMode: preferencesRef.current.contentWidthMode === 'fixed' ? 'auto' : 'fixed' })} />
+    <Toolbar platform={platform} showFormatting={preferences.showToolbar} sourceMode={preferences.sourceMode} disabled={!current || current.readOnly} isSaving={current?.isSaving ?? false} onAction={issueEditorCommand} onNew={() => run(executeCommand('new'))} onOpen={() => run(executeCommand('open'))} onSave={() => run(save())} onSaveAll={() => run(saveAll())} onSidebar={() => run(executeCommand('sidebar'))} onSource={() => run(executeCommand('source'))} onQuickOpen={() => setModal('quick-open')} onPreferences={() => setModal('preferences')} onOpenFolder={() => run(openFolder())} onExport={kind => run(exportDocument(kind))} onImage={() => run(insertImage())} onCloseDocument={() => run(documents.close())} onSaveAs={() => run(save(true))} onRecovery={() => run(executeCommand('recover-drafts'))} onNewWindow={() => run(executeCommand('new-window'))} focusMode={preferences.focusMode} typewriterMode={preferences.typewriterMode} onFocus={() => run(executeCommand('focus'))} onTypewriter={() => run(executeCommand('typewriter'))} isContentConstrained={preferences.contentWidthMode === 'fixed'} onContentWidthToggle={() => updatePreferences({ contentWidthMode: preferencesRef.current.contentWidthMode === 'fixed' ? 'auto' : 'fixed' })} />
     <div className="writing-space">
       {preferences.showSidebar ? <Sidebar api={api} mode={preferences.sidebarMode} workspace={workspace} documents={documents.documents} current={current} refreshVersion={refreshVersion} onMode={mode => updatePreferences({ sidebarMode: mode })} onOpenFolder={path => run(openFolder(path))} onOpen={(path, line) => run(openFile(path, line))} onActivate={documents.activate} onJump={jumpToLine} onFileAction={setFileAction} onError={reportError} onRefresh={() => run(refreshWorkspace())} onSearchChange={setFolderSearch} /> : null}
       <main className="document-pane">
         <div className="document-heading"><span className="document-name" data-testid="document-name">{current?.name ?? '未命名'}</span>{current && isDirty(current) ? <span className="dirty-label" data-testid="dirty-indicator">未保存</span> : null}{current?.readOnly ? <span className="dirty-label">只读</span> : null}<span className="document-heading-spacer" /><button className="document-path" title={current?.path ?? '尚未保存到文件'} disabled={!current?.path} onClick={() => { if (current?.path) run(api.revealFile(current.path).then(documents.acceptResult)) }}>{current?.path ? <><FolderOpen size={12} />{current.path}</> : 'Markdown 文档'}</button></div>
         {current?.externalChange ? <div className="external-change"><AlertCircle size={16} /><span>{current.externalChange === 'removed' ? '文件已被移动或删除。可另存为保留当前编辑。' : '磁盘上的文件已更改，当前编辑仍然保留。'}</span>{current.externalChange === 'changed' ? <button className="text-button" onClick={() => setReloadId(current.id)}>重新载入</button> : null}<button className="text-button" onClick={() => run(save(true))}>另存为</button></div> : null}
-        <div className="editor-area">{current ? <MarkdownEditor desktopApi={api} documentId={current.id} revision={current.revision} value={current.content} mode={preferences.sourceMode ? 'source' : 'hybrid'} theme={theme} fontSize={preferences.fontSize} focusMode={preferences.focusMode} typewriterMode={preferences.typewriterMode} readOnly={current.readOnly} lineNumbers={preferences.showLineNumbers} wrapLines={preferences.wrapLines} spellcheck={preferences.spellcheck} command={editorCommand} jumpToLine={jumpRequest} folderSearch={folderSearch} onChange={value => documents.changeContent(current.id, value)} onSelectionChange={setSelection} onLinkOpen={openLink} resolveResource={resolveResource} /> : <div className="startup-state"><p>开始写下第一个想法。</p><button className="primary-button" onClick={() => run(documents.create())}>新建文档</button></div>}</div>
+        <div className="editor-area">{current ? <MarkdownEditor platform={platform} desktopApi={api} documentId={current.id} revision={current.revision} value={current.content} mode={preferences.sourceMode ? 'source' : 'hybrid'} theme={theme} fontSize={preferences.fontSize} focusMode={preferences.focusMode} typewriterMode={preferences.typewriterMode} readOnly={current.readOnly} lineNumbers={preferences.showLineNumbers} wrapLines={preferences.wrapLines} spellcheck={preferences.spellcheck} command={editorCommand} jumpToLine={jumpRequest} folderSearch={folderSearch} onChange={value => documents.changeContent(current.id, value)} onSelectionChange={setSelection} onLinkOpen={openLink} resolveResource={resolveResource} /> : <div className="startup-state"><p>开始写下第一个想法。</p><button className="primary-button" onClick={() => run(documents.create())}>新建文档</button></div>}</div>
       </main>
     </div>
-    <footer className="statusbar"><div className="statusbar-left" role="status" aria-live="polite">{current?.isSaving ? '正在保存…' : notice ? <><Check size={12} />{notice}</> : current && isDirty(current) ? '编辑中 · 草稿独立保存' : current?.path ? '已保存' : '尚未保存'}{preferences.focusMode ? <span>专注</span> : null}{preferences.typewriterMode ? <span>打字机</span> : null}</div><div className="statusbar-right"><span>{current?.encoding === 'utf8-bom' ? 'UTF-8 BOM' : 'UTF-8'}</span><span>{current?.lineEnding ?? preferences.lineEnding}</span><button data-testid="editor-mode" title="切换源码模式 · Ctrl+/" onClick={() => run(executeCommand('source'))}>{preferences.sourceMode ? '源码模式' : '实时预览'}</button><span title={`${statistics.characters} 字符 · ${statistics.lines} 行`} data-testid="word-count">{selection.text ? `选中 ${wordCount(selection.text)} / ` : ''}{statistics.words} 字</span></div></footer>
+    <footer className="statusbar"><div className="statusbar-left" role="status" aria-live="polite">{current?.isSaving ? '正在保存…' : notice ? <><Check size={12} />{notice}</> : current && isDirty(current) ? '编辑中 · 草稿独立保存' : current?.path ? '已保存' : '尚未保存'}{preferences.focusMode ? <span>专注</span> : null}{preferences.typewriterMode ? <span>打字机</span> : null}</div><div className="statusbar-right"><span>{current?.encoding === 'utf8-bom' ? 'UTF-8 BOM' : 'UTF-8'}</span><span>{current?.lineEnding ?? preferences.lineEnding}</span><button data-testid="editor-mode" title={`切换源码模式 · ${primaryShortcut(platform, '/')}`} onClick={() => run(executeCommand('source'))}>{preferences.sourceMode ? '源码模式' : '实时预览'}</button><span title={`${statistics.characters} 字符 · ${statistics.lines} 行`} data-testid="word-count">{selection.text ? `选中 ${wordCount(selection.text)} / ` : ''}{statistics.words} 字</span></div></footer>
     {error ? <div className="error-notification" role="alert" data-testid="error-notification"><AlertCircle size={17} /><span>{error}</span><button className="icon-button" aria-label="关闭错误提示" onClick={() => setError(null)}><X size={16} /></button></div> : null}
-    {modal === 'preferences' ? <PreferencesDialog preferences={preferences} onChange={updatePreferences} onClose={() => { run(flushPreferences()); setModal(null) }} /> : null}
+    {modal === 'preferences' ? <PreferencesDialog platform={platform} preferences={preferences} onChange={updatePreferences} onClose={() => { run(flushPreferences()); setModal(null) }} /> : null}
     {modal === 'quick-open' ? <QuickOpen api={api} workspace={workspace} documents={documents.documents} recentFiles={recentFiles} onSelectDocument={documents.activate} onOpenFile={path => run(openFile(path))} onClose={() => setModal(null)} /> : null}
     {modal === 'recovery' ? <DraftRecovery drafts={drafts} onRecover={id => run(documents.recover(id).then(accepted => { if (accepted) { setDrafts(existing => existing.filter(item => item.id !== id)); setModal(null); setNotice('草稿已恢复，请保存文档') } }))} onDiscard={id => run(api.discardDraft(id).then(result => { if (result.ok) setDrafts(existing => existing.filter(item => item.id !== id)); else reportError(result.error.message) }))} onClose={() => setModal(null)} /> : null}
     {fileAction ? <FileActionDialog action={fileAction} isSubmitting={isFileActionPending} onSubmit={name => run(performFileAction(name))} onClose={() => { if (!fileActionInProgress.current) setFileAction(null) }} /> : null}

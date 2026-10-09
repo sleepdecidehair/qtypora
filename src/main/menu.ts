@@ -26,7 +26,7 @@ export function createMenuTemplate(platform: NodeJS.Platform, isPackaged: boolea
       { type: 'separator' }, item('保存', 'save', 'CmdOrCtrl+S'), item('另存为…', 'save-as', 'CmdOrCtrl+Shift+S'), item('保存全部', 'save-all'),
       { label: '导出', submenu: [item('HTML…', 'export-html'), item('PDF…', 'export-pdf')] },
       { type: 'separator' }, item('恢复草稿…', 'recover-drafts'), item('关闭文档', 'close-document', 'CmdOrCtrl+W'),
-      { label: '退出', accelerator: isMac ? 'Cmd+Q' : 'Alt+F4', click: actions.exit },
+      ...(!isMac ? [{ label: '退出', accelerator: 'Alt+F4', click: actions.exit }] : []),
     ] },
     { label: '编辑(&E)', submenu: [
       item('撤销', 'undo', 'CmdOrCtrl+Z'), item('重做', 'redo', isMac ? 'Cmd+Shift+Z' : 'Ctrl+Y'), { type: 'separator' },

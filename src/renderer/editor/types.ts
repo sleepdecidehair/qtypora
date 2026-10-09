@@ -8,6 +8,7 @@ export interface EditorCommand { id: number; action: EditorAction; value?: strin
 export interface JumpRequest { id: number; line: number }
 export interface EditorSelection { text: string; from: number; to: number }
 export interface MarkdownEditorProps {
+  platform: string
   desktopApi: DesktopApi
   documentId: string
   revision: number
@@ -30,4 +31,3 @@ export interface MarkdownEditorProps {
   resolveResource: (source: string) => Promise<string>
 }
 import type { DesktopApi } from '../../shared/contracts'
-

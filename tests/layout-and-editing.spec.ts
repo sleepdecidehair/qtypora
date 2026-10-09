@@ -19,7 +19,7 @@ const source = () => session.page.locator('.cm-content').evaluate(element => {
 
 test('正文默认适应宽窄窗口，仍可选择并保存固定宽度', async () => {
   await openFixture(session, 'layout.md', '# 宽屏正文\n\n这段正文随窗口加宽。\n')
-  await session.page.keyboard.press('Control+/')
+  await session.page.keyboard.press('ControlOrMeta+/')
   const geometry = () => session.page.locator('.cm-content').evaluate(element => {
     const scroll = element.closest('.cm-scroller')!
     const style = getComputedStyle(element)
@@ -65,14 +65,14 @@ test('工具栏切换留白并恢复自定义宽度，两种编辑视图和重�
   await session.page.getByLabel('正文最大宽度').fill('960')
   await session.page.getByRole('button', { name: '完成', exact: true }).click()
   await expect.poll(async () => (await geometry()).width).toBe(960)
-  await session.page.keyboard.press('Control+/')
+  await session.page.keyboard.press('ControlOrMeta+/')
   await expect.poll(async () => (await geometry()).width).toBe(960)
   const constrained = await geometry()
   expect(constrained.left).toBeGreaterThan(100)
   expect(Math.abs(constrained.left - constrained.right)).toBeLessThan(2)
   const selection = () => session.page.locator('.cm-content').evaluate(element => Reflect.get(element, 'cmTile').root.view.state.selection.toJSON())
   await session.page.locator('.cm-content').click()
-  await session.page.keyboard.press('Control+End')
+  await session.page.keyboard.press('ControlOrMeta+End')
   const beforeSelection = await selection()
   await button.click()
   await expect(button).toHaveAttribute('aria-pressed', 'false')
@@ -89,7 +89,7 @@ test('工具栏切换留白并恢复自定义宽度，两种编辑视图和重�
   await stopDesktop(session, false)
   session = await launchDesktop(root)
   await expect(session.page.getByTestId('content-width-toggle')).toHaveAttribute('aria-pressed', 'true')
-  await session.page.keyboard.press('Control+/')
+  await session.page.keyboard.press('ControlOrMeta+/')
   await expect(session.page.locator('.cm-content')).toHaveAttribute('data-mode', 'hybrid')
   await expect.poll(async () => {
     const current = await geometry()
@@ -103,7 +103,7 @@ test('工具栏切换留白并恢复自定义宽度，两种编辑视图和重�
 test('标题没有下划线，双击标题、正文、列表和引用展开本行并可编辑、收起', async () => {
   const original = '# 一级标题\n\n## 二级标题\n\n普通 **粗体** 与 [链接](https://example.com)\n\n- 列表 **粗体**\n\n> 引用 **粗体**\n\n- [x] 完成事项\n\n结束\n'
   const file = await openFixture(session, 'line-editing.md', original)
-  await session.page.keyboard.press('Control+/')
+  await session.page.keyboard.press('ControlOrMeta+/')
   const editor = session.page.locator('.cm-content')
   for (const level of [1, 2]) {
     const heading = editor.locator(`.cm-live-heading-${level}`)
@@ -127,7 +127,7 @@ test('标题没有下划线，双击标题、正文、列表和引用展开本�
   await editor.locator('.cm-live-heading-1').dblclick()
   await editor.locator('.cm-line').filter({ hasText: /^结束$/ }).click()
   await expect(editor.locator('.cm-live-edit-line')).toHaveCount(0)
-  await session.page.keyboard.press('Control+s')
+  await session.page.keyboard.press('ControlOrMeta+s')
   await expect.poll(() => readFile(file, 'utf8')).toBe(original.replace('二级标题', '二级标题已编辑'))
 })
 
@@ -136,7 +136,7 @@ test('图片等比放大且完整可见，双击图片、公式、图表、表�
   await writeFile(path.join(session.root, 'portrait.svg'), '<svg xmlns="http://www.w3.org/2000/svg" width="600" height="2400"><rect width="600" height="2400" fill="#53789a"/></svg>')
   const original = '# 资源\n\n![小图片](small.svg)\n\n![竖图](portrait.svg)\n\n$$x^2$$\n\n```mermaid\ngraph LR\nA[开始] --> B[结束]\n```\n\n| Name | State |\n| --- | --- |\n| 原值 | 完成 |\n\n```js\nconst answer = 42\n```\n\n结束\n'
   const file = await openFixture(session, 'resources.md', original)
-  await session.page.keyboard.press('Control+/')
+  await session.page.keyboard.press('ControlOrMeta+/')
   const editor = session.page.locator('.cm-content')
   for (const alt of ['小图片', '竖图']) {
     const image = editor.getByRole('img', { name: alt, exact: true })
@@ -173,8 +173,8 @@ test('图片等比放大且完整可见，双击图片、公式、图表、表�
   }
   const cell = editor.locator('[data-testid="live-table"] tbody td').first()
   await cell.click()
-  await session.page.keyboard.press('Control+e')
+  await session.page.keyboard.press('ControlOrMeta+e')
   await session.page.keyboard.insertText('新值')
-  await session.page.keyboard.press('Control+s')
+  await session.page.keyboard.press('ControlOrMeta+s')
   await expect.poll(() => readFile(file, 'utf8')).toBe(original.replace('原值', '新值'))
 })

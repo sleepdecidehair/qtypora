@@ -3,8 +3,10 @@ import { hydratePreview, renderReadingMarkdown } from './markdown'
 import { ReadingSearch, type ReadingSearchHandle } from './ReadingSearch'
 import { readReadingAnchor, restoreReadingAnchor, type SemanticScrollAnchor } from './semantic-scroll'
 import type { EditorCommand, JumpRequest } from './types'
+import { primaryShortcut } from '../platform-shortcuts'
 
 interface ReadingViewProps {
+  platform: string
   documentId: string
   content: string
   theme: 'light' | 'dark'
@@ -171,8 +173,8 @@ export const ReadingView = forwardRef<ReadingViewHandle, ReadingViewProps>(funct
     }}>
     <ReadingSearch ref={searchRef} articleRef={articleRef} ready={status === 'ready'} version={props.content} onClose={() => rootRef.current?.focus({ preventScroll: true })} />
     {status === 'loading' ? <p className="reading-status" role="status">正在排版阅读视图…</p> : null}
-    {status === 'limit' ? <p className="reading-status" role="alert">当前阅读模式支持不超过 20 万个字符的文档。请按 Ctrl+E 返回编辑模式查看此文档。</p> : null}
-    {status === 'error' ? <p className="reading-status" role="alert">阅读排版失败，请按 Ctrl+E 返回编辑模式检查文档。</p> : null}
+    {status === 'limit' ? <p className="reading-status" role="alert">当前阅读模式支持不超过 20 万个字符的文档。请按 {primaryShortcut(props.platform, 'E')} 返回编辑模式查看此文档。</p> : null}
+    {status === 'error' ? <p className="reading-status" role="alert">阅读排版失败，请按 {primaryShortcut(props.platform, 'E')} 返回编辑模式检查文档。</p> : null}
     <article ref={articleRef} className="md-preview-block reading-article" aria-label="Markdown 阅读内容" aria-hidden={status !== 'ready'} style={{ visibility: status === 'ready' ? 'visible' : 'hidden' }} />
   </div>
 })

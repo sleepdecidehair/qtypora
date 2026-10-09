@@ -17,6 +17,7 @@ import { NativeContextMenus, validateContextMenu } from './context-menu'
 import { validateClipboard } from './clipboard'
 import { operateImage, validateImageOperation } from './image-operations'
 import { resourceBytes, validateResourceSave, writeResource } from './resource-save'
+import { OpenFileQueue } from './open-files'
 
 app.setName('QTypora')
 if (process.platform === 'win32') app.setAppUserModelId('com.qtypora.internal')
@@ -40,6 +41,15 @@ const windows = new Map<number, WindowContext>()
 const resources = new ResourceRegistry()
 const contextMenus = new NativeContextMenus((template) => Menu.buildFromTemplate(template))
 let store: LocalStore
+const systemOpenFiles = new OpenFileQueue(openSystemFile, (error) => {
+  const context = focused()
+  if (context) void showFailure(context, error)
+  else console.error('[app] File open failed', error instanceof Error ? error.message : 'unknown')
+})
+if (process.platform === 'darwin') app.on('open-file', (event, filePath) => {
+  event.preventDefault()
+  void systemOpenFiles.enqueue(filePath)
+})
 const rendererPath = path.join(__dirname, '../renderer/index.html')
 const rendererUrl = process.env.ELECTRON_RENDERER_URL ?? pathToFileURL(rendererPath).href
 const appIconPath = app.isPackaged
@@ -80,6 +90,18 @@ function createMenus(): void {
 async function showFailure(context: WindowContext, error: unknown): Promise<void> {
   const result = failure(error)
   if (!result.ok && !context.window.isDestroyed()) await dialog.showMessageBox(context.window, { type: 'error', message: result.error.message })
+}
+
+async function openSystemFile(filePath: string): Promise<void> {
+  if (!MARKDOWN_EXTENSIONS.has(path.extname(filePath).toLowerCase())) throw new DesktopError('UNSUPPORTED', '仅支持打开 Markdown 或 UTF-8 文本文件。')
+  const context = focused()
+  if (!context) { await createWindow(filePath); return }
+  const document = await context.documents.open(filePath, true)
+  createMenus()
+  send(context, { type: 'open-document', document })
+  if (context.window.isMinimized()) context.window.restore()
+  context.window.show()
+  context.window.focus()
 }
 
 async function createWindow(openPath?: string): Promise<void> {
@@ -194,8 +216,9 @@ async function runFileAction(context: WindowContext, action: FileAction): Promis
   const source = await canonicalInside(path.resolve(action.path), root)
   if (source.toLowerCase() === root.toLowerCase() && (action.action === 'rename' || action.action === 'trash')) throw new DesktopError('PERMISSION_DENIED', '不能通过文件树移动或删除工作区根目录。')
   if (action.action === 'trash') {
-    const response = await dialog.showMessageBox(context.window, { type: 'warning', title: '移到回收站', message: `将“${path.basename(source)}”移到回收站？`,
-      detail: '可通过 Windows 回收站恢复。已打开文档的编辑内容会保留。', buttons: ['移到回收站', '取消'], defaultId: 1, cancelId: 1, noLink: true })
+    const trashName = process.platform === 'darwin' ? '废纸篓' : '回收站'
+    const response = await dialog.showMessageBox(context.window, { type: 'warning', title: `移到${trashName}`, message: `将“${path.basename(source)}”移到${trashName}？`,
+      detail: `可通过系统${trashName}恢复。已打开文档的编辑内容会保留。`, buttons: [`移到${trashName}`, '取消'], defaultId: 1, cancelId: 1, noLink: true })
     if (response.response !== 0) return null
     await shell.trashItem(source)
     for (const target of windows.values()) await target.documents.updatePaths(source, null)
@@ -404,6 +427,7 @@ app.whenReady().then(async () => {
   createMenus()
   const openPath = process.argv.slice(1).find((argument) => MARKDOWN_EXTENSIONS.has(path.extname(argument).toLowerCase()))
   await createWindow(openPath)
+  await systemOpenFiles.start()
   app.on('activate', () => { if (!windows.size) void createWindow().catch((error: unknown) => console.error('[app] Window creation failed', error instanceof Error ? error.message : 'unknown')) })
 }).catch((error: unknown) => {
   console.error('[app] Startup failed', error instanceof Error ? error.message : 'unknown')

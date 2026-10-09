@@ -9,7 +9,7 @@ import { syntaxTree } from '@codemirror/language'
 import { LiveMediaWidget } from './live-media'
 import { resourceFitExtension } from './resource-fit'
 import { liveCodeBlocks, liveCodeExtension } from './live-code'
-import { liveSourceEditExtension } from './live-source-edit'
+import { focusedHeadingEditRange, liveSourceEditExtension } from './live-source-edit'
 
 export type HybridOptions = LiveOptions
 
@@ -34,7 +34,7 @@ function decorations(state: EditorState, options: HybridOptions): DecorationSet 
   if (state.doc.length > 200000) return Decoration.none
   const ranges: Range<Decoration>[] = []
   const blocks = liveBlocks(state)
-  const editing = state.field(liveEditingBlock)
+  const editing = state.field(liveEditingBlock) ?? (options.readOnly ? null : focusedHeadingEditRange(state))
   const isEditing = (from: number, to: number): boolean => Boolean(editing && from >= editing.from && to <= editing.to)
   const codeBlocks = liveCodeBlocks(state).filter(block => !isEditing(block.from, block.to))
   const excluded = blocks.filter((block) => !isEditing(block.from, block.to))

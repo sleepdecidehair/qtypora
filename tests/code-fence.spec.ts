@@ -134,6 +134,38 @@ test('创建时在反引号后写 Python 或空格加 Python，Enter 直接应�
   expect((await editorState()).text).toBe('```Python\nprint("hello")\n```\n\n``` python\nreturn 42\n```')
 })
 
+test('代码块正文支持鼠标拖选和双击选词，不会展开围栏源码', async () => {
+  const body = '{"upload_url":"https://example.com/path","method":"PUT"}'
+  await openFixture(session, 'code-selection.md', '```json\n' + body + '\n```')
+  await session.page.keyboard.press('ControlOrMeta+/')
+  const editor = session.page.locator('.cm-content')
+  const code = editor.locator('.cm-live-code-body')
+  const source = '```json\n' + body + '\n```'
+  const pointAt = (position: number) => editor.evaluate((element, offset) => {
+    const view = Reflect.get(element, 'cmTile').root.view as import('@codemirror/view').EditorView
+    const rectangle = view.coordsAtPos(offset)
+    if (!rectangle) throw new Error(`Missing coordinates for source offset ${offset}`)
+    return { x: rectangle.left + 1, y: (rectangle.top + rectangle.bottom) / 2 }
+  }, position)
+
+  const wordFrom = source.indexOf('upload_url') + 2
+  const wordPoint = await pointAt(wordFrom)
+  await session.page.mouse.dblclick(wordPoint.x, wordPoint.y)
+  await expect(code).toBeVisible()
+  await expect(editor.locator('.cm-live-edit-line')).toHaveCount(0)
+  await expect.poll(async () => (await editorState()).selected).toBe('upload_url')
+
+  const dragFrom = source.indexOf('method')
+  const dragTo = dragFrom + 'method'.length
+  const start = await pointAt(dragFrom)
+  const end = await pointAt(dragTo)
+  await session.page.mouse.move(start.x, start.y)
+  await session.page.mouse.down()
+  await session.page.mouse.move(end.x, end.y, { steps: 8 })
+  await session.page.mouse.up()
+  await expect.poll(async () => (await editorState()).selected).toBe('method')
+})
+
 test('三个反引号加 Enter 创建可编辑代码块，撤销和源码切换保留原文光标', async () => {
   const destination = await openFixture(session, 'code-fence.md', '')
   await session.page.keyboard.press('ControlOrMeta+/')

@@ -100,17 +100,18 @@ test('工具栏切换留白并恢复自定义宽度，两种编辑视图和重�
   await session.page.screenshot({ path: '.debug/content-width-fixed.png' })
 })
 
-test('标题没有下划线，双击标题、正文、列表和引用展开本行并可编辑、收起', async () => {
+test('标题没有下划线，聚焦标题及双击正文、列表和引用展开本行并可编辑、收起', async () => {
   const original = '# 一级标题\n\n## 二级标题\n\n普通 **粗体** 与 [链接](https://example.com)\n\n- 列表 **粗体**\n\n> 引用 **粗体**\n\n- [x] 完成事项\n\n结束\n'
   const file = await openFixture(session, 'line-editing.md', original)
   await session.page.keyboard.press('ControlOrMeta+/')
   const editor = session.page.locator('.cm-content')
+  await session.page.keyboard.press('ControlOrMeta+End')
   for (const level of [1, 2]) {
     const heading = editor.locator(`.cm-live-heading-${level}`)
     expect(await heading.evaluate(element => getComputedStyle(element).borderBottomWidth)).toBe('0px')
     expect(await heading.evaluate(element => [element, ...element.querySelectorAll('span')].some(node => getComputedStyle(node).textDecorationLine.includes('underline')))).toBe(false)
   }
-  for (const lineNumber of [3, 5, 7, 9, 11]) {
+  for (const lineNumber of [5, 7, 9, 11]) {
     const line = editor.locator(`.cm-line[data-source-line="${lineNumber}"]`)
     await line.dblclick()
     await expect(line).toHaveClass(/cm-live-edit-line/)
@@ -119,19 +120,22 @@ test('标题没有下划线，双击标题、正文、列表和引用展开本�
     await session.page.keyboard.press('Escape')
     await expect(editor.locator('.cm-live-edit-line')).toHaveCount(0)
   }
-  await editor.locator('.cm-live-heading-2').dblclick()
+  await editor.locator('.cm-live-heading-2').click()
+  await expect(editor.locator('.cm-line[data-source-line="3"]')).toHaveClass(/cm-live-edit-line/)
+  await expect(editor.locator('.cm-line[data-source-line="3"]')).toHaveText('## 二级标题')
   await session.page.keyboard.press('End')
   await session.page.keyboard.insertText('已编辑')
-  await session.page.keyboard.press('Escape')
+  await editor.locator('.cm-line').filter({ hasText: /^结束$/ }).click()
   await expect(editor.locator('.cm-live-heading-2')).toHaveText('二级标题已编辑')
-  await editor.locator('.cm-live-heading-1').dblclick()
+  await editor.locator('.cm-live-heading-1').click()
+  await expect(editor.locator('.cm-line[data-source-line="1"]')).toHaveClass(/cm-live-edit-line/)
   await editor.locator('.cm-line').filter({ hasText: /^结束$/ }).click()
   await expect(editor.locator('.cm-live-edit-line')).toHaveCount(0)
   await session.page.keyboard.press('ControlOrMeta+s')
   await expect.poll(() => readFile(file, 'utf8')).toBe(original.replace('二级标题', '二级标题已编辑'))
 })
 
-test('图片等比放大且完整可见，双击图片、公式、图表、表格及代码展开源码', async () => {
+test('图片等比放大且完整可见，双击图片、公式、图表和表格展开源码', async () => {
   await writeFile(path.join(session.root, 'small.svg'), '<svg xmlns="http://www.w3.org/2000/svg" width="200" height="120"><rect width="200" height="120" fill="#53789a"/></svg>')
   await writeFile(path.join(session.root, 'portrait.svg'), '<svg xmlns="http://www.w3.org/2000/svg" width="600" height="2400"><rect width="600" height="2400" fill="#53789a"/></svg>')
   const original = '# 资源\n\n![小图片](small.svg)\n\n![竖图](portrait.svg)\n\n$$x^2$$\n\n```mermaid\ngraph LR\nA[开始] --> B[结束]\n```\n\n| Name | State |\n| --- | --- |\n| 原值 | 完成 |\n\n```js\nconst answer = 42\n```\n\n结束\n'
@@ -161,7 +165,7 @@ test('图片等比放大且完整可见，双击图片、公式、图表、表�
     await session.page.keyboard.press('Escape')
     await expect(image).toBeVisible()
   }
-  for (const selector of ['.md-math math', '.md-mermaid svg', '[data-testid="live-table"] tbody td:first-child', '.cm-live-code-body']) {
+  for (const selector of ['.md-math math', '.md-mermaid svg', '[data-testid="live-table"] tbody td:first-child']) {
     const target = editor.locator(selector).first()
     await expect(target).toBeVisible()
     await target.dblclick()

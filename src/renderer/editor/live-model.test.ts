@@ -102,11 +102,9 @@ describe('opaque live blocks require explicit edit focus', () => {
     expect(previewCount(current)).toBe(1)
     expect(current.doc.toString()).toBe(doc)
   })
-  it('reveals all heading and inline syntax for the requested line without changing the canonical source', () => {
+  it('reveals all heading and inline syntax while its selection is focused without changing the canonical source', () => {
     const doc = '## **标题**\n\n正文 **粗体**\n\n结束'
-    let current = EditorState.create({ doc, extensions: [markdown({ base: markdownLanguage }), hybridExtension(options)] })
-    const range = sourceEditRange(current, 5)
-    current = current.update({ effects: editLiveBlock.of(range), selection: { anchor: 5 } }).state
+    let current = EditorState.create({ doc, selection: { anchor: doc.indexOf('\n') }, extensions: [markdown({ base: markdownLanguage }), hybridExtension(options)] })
     const classes: string[] = []
     for (const decoration of current.facet(EditorView.decorations)) {
       if (typeof decoration === 'function') continue
@@ -116,6 +114,12 @@ describe('opaque live blocks require explicit edit focus', () => {
     expect(classes).not.toContain('cm-live-heading cm-live-heading-2')
     expect(current.doc.toString()).toBe(doc)
     current = current.update({ selection: { anchor: doc.length } }).state
+    const collapsedClasses: string[] = []
+    for (const decorations of current.facet(EditorView.decorations)) {
+      if (typeof decorations === 'function') continue
+      decorations.between(0, doc.length, (_from, _to, value) => { if (value.spec.class) collapsedClasses.push(value.spec.class) })
+    }
+    expect(collapsedClasses).toContain('cm-live-heading cm-live-heading-2')
     expect(current.doc.toString()).toBe(doc)
     expect(inlinePreviewSpans(current)).toContainEqual({ from: 0, to: 3, hidden: true })
   })

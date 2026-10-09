@@ -15,13 +15,26 @@ export function sourceEditRange(state: EditorState, position: number): { from: n
   return { from: line.from, to: line.to }
 }
 
+export function focusedHeadingEditRange(state: EditorState): { from: number; to: number } | null {
+  const position = state.selection.main.head
+  for (const side of [1, -1] as const) {
+    let node = syntaxTree(state).resolveInner(position, side)
+    for (;;) {
+      if (/^(?:ATX|Setext)Heading\d$/.test(node.name)) return sourceEditRange(state, position)
+      if (!node.parent) break
+      node = node.parent
+    }
+  }
+  return null
+}
+
 // Capture also reaches widgets that intentionally ignore CodeMirror's text events.
 export const liveSourceEditExtension = ViewPlugin.fromClass(class {
   private doubleClick = (event: MouseEvent): void => {
     const view = this.view
     const target = event.target instanceof Element ? event.target : null
     if (!target || view.state.readOnly || view.composing || event.ctrlKey || event.metaKey ||
-        target.closest('button,input,select,textarea,.cm-live-edit-line,.cm-live-edit-block')) return
+        target.closest('button,input,select,textarea,.cm-live-edit-line,.cm-live-edit-block,.cm-live-code-body')) return
     const widget = target.closest<HTMLElement>('.cm-live-block,.cm-live-table,.cm-live-media')
     const line = target.closest<HTMLElement>('.cm-line')
     if (!widget && !line) return

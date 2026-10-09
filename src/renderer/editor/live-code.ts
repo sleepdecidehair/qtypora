@@ -158,7 +158,12 @@ function codePreviews(state: EditorState): DecorationSet {
 
 const codeDecorations = StateField.define<DecorationSet>({
   create: codePreviews,
-  update: (value, transaction) => transaction.docChanged || transaction.reconfigured || transaction.selection || transaction.effects.some(effect => effect.is(editLiveBlock)) ? codePreviews(transaction.state) : value,
+  update: (value, transaction) => {
+    const previousEditing = transaction.startState.field(liveEditingBlock, false)
+    const nextEditing = transaction.state.field(liveEditingBlock, false)
+    const editingChanged = previousEditing?.from !== nextEditing?.from || previousEditing?.to !== nextEditing?.to
+    return transaction.docChanged || transaction.reconfigured || editingChanged || transaction.effects.some(effect => effect.is(editLiveBlock)) ? codePreviews(transaction.state) : value
+  },
   provide: (field) => [EditorView.decorations.from(field), EditorView.atomicRanges.of((view) => view.state.field(field).update({ filter: (_from, _to, decoration) => decoration.spec.block === true }))],
 })
 

@@ -68,6 +68,15 @@ export class DocumentSession {
     throw new DesktopError('PERMISSION_DENIED', '请先通过原生对话框打开文件或其所在文件夹。')
   }
 
+  async createImported(content: string): Promise<DocumentRecord> {
+    const record = this.create(content)
+    const state = this.get(record.id)
+    state.savedContent = null
+    state.record = { ...state.record, unsaved: true }
+    await this.persistDraft(state)
+    return { ...state.record }
+  }
+
   async open(filePath: string, chosenByUser = false): Promise<DocumentRecord> {
     const resolved = path.resolve(filePath)
     const recent = this.store.recentFiles.some((item) => item.toLowerCase() === resolved.toLowerCase())
@@ -119,8 +128,9 @@ export class DocumentSession {
     return serialized('save-document:' + request.id, async () => {
       const current = this.get(request.id)
       if (request.revision < current.savedRevision) throw new DesktopError('CONFLICT', '较新的内容已经保存，此保存请求已过期。')
-      const saved = await saveMarkdown(current.record, canonicalDestination, request.content,
-        !needsDestination || (current.record.path?.toLowerCase() === canonicalDestination.toLowerCase()))
+      if (!needsDestination && current.record.path !== canonicalDestination) throw new DesktopError('CONFLICT', '文件路径已经改变，请重新保存当前文档。')
+      const saved = { ...await saveMarkdown(current.record, canonicalDestination, request.content,
+        !needsDestination || (current.record.path?.toLowerCase() === canonicalDestination.toLowerCase())), unsaved: false }
       current.record = saved
       current.savedContent = request.content
       current.savedRevision = request.revision
@@ -223,6 +233,16 @@ export class DocumentSession {
     }
     for (const id of this.documents.keys()) await this.store.discardDraft(id)
     return true
+  }
+
+  async withPathLocks<T>(source: string, operation: () => Promise<T>): Promise<T> {
+    const prefix = source.toLowerCase()
+    const ids = [...this.documents.values()].filter(state => {
+      const current = state.record.path?.toLowerCase()
+      return current === prefix || current?.startsWith(prefix + path.sep)
+    }).map(state => state.record.id).sort()
+    const lock = (index: number): Promise<T> => index === ids.length ? operation() : serialized('save-document:' + ids[index], () => lock(index + 1))
+    return lock(0)
   }
 
   async updatePaths(source: string, destination: string | null): Promise<void> {

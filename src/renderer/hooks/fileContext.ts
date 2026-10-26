@@ -60,7 +60,8 @@ export function fileContextActions(target: FileContextTarget): ContextMenuAction
   const isWorkspaceRoot = target.entry.kind === 'directory' && target.workspacePath !== null && filePathKey(target.entry.path) === filePathKey(target.workspacePath)
   if (isInWorkspace) {
     actions.push('file-new-file', 'file-new-folder')
-    if (target.entry.kind === 'file') actions.push('file-duplicate')
+    if (target.entry.kind === 'file') actions.push('file-duplicate', 'file-move')
+    actions.push('file-undo-move')
     if (!isWorkspaceRoot) actions.push('file-rename', 'file-trash')
   }
   actions.push('file-copy-path', 'file-reveal')

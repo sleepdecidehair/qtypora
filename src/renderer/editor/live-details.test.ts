@@ -11,7 +11,7 @@ describe('live HTML disclosure block boundaries', () => {
     const result = blocks(doc)
     expect(result).toHaveLength(1)
     expect(result[0]).toMatchObject({ from: doc.indexOf('<details>'), to: doc.indexOf('\n\n后文'), source: disclosure, kind: 'html' })
-    expect(result[0].html).toContain('<h4>中文界面文案</h4>')
+    expect(result[0].html).toContain('<h4 id="中文界面文案">中文界面文案</h4>')
     expect(result[0].html).toContain('<strong>粗体</strong>')
     expect(result[0].html).toContain('<table>')
     expect(result[0].html.trimEnd()).toMatch(/<\/details>$/)

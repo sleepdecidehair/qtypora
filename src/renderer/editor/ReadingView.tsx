@@ -1,11 +1,16 @@
+import { previewContentLength, MAX_PREVIEW_CHARACTERS } from './preview-budget'
 import { forwardRef, useEffect, useImperativeHandle, useLayoutEffect, useRef, useState } from 'react'
 import { hydratePreview, renderReadingMarkdown } from './markdown'
 import { ReadingSearch, type ReadingSearchHandle } from './ReadingSearch'
 import { readReadingAnchor, restoreReadingAnchor, type SemanticScrollAnchor } from './semantic-scroll'
 import type { EditorCommand, JumpRequest } from './types'
+import type { MarkdownOptions } from '../../shared/markdown-options'
+import { getMarkdownParser } from './markdown-parser'
+import type { MathExpression } from './markdown-features'
 import { primaryShortcut } from '../platform-shortcuts'
 
 interface ReadingViewProps {
+  markdownOptions?: MarkdownOptions
   platform: string
   documentId: string
   content: string
@@ -67,21 +72,25 @@ export const ReadingView = forwardRef<ReadingViewHandle, ReadingViewProps>(funct
     setStatus('loading')
     article.style.visibility = 'hidden'
     article.replaceChildren()
-    if (props.content.length > 200000) {
+    if (previewContentLength(props.content) > MAX_PREVIEW_CHARACTERS) {
       setStatus('limit')
       return
     }
     void (async () => {
       try {
         const staging = document.createElement('div')
-        staging.innerHTML = renderReadingMarkdown(props.content)
+        staging.innerHTML = renderReadingMarkdown(props.content, props.markdownOptions)
         const sources = new Map<HTMLElement, string>()
         for (const element of staging.querySelectorAll<HTMLElement>('[data-math], [data-mermaid]')) {
           sources.set(element, element.textContent || '')
           element.replaceChildren()
         }
         article.replaceChildren(...Array.from(staging.childNodes))
+        const environment: Record<string, unknown> = {}
+        getMarkdownParser(props.markdownOptions).parse(props.content, environment)
         await hydratePreview(article, {
+          markdownOptions: props.markdownOptions,
+          mathExpressions: environment.mathExpressions as MathExpression[],
           theme: props.theme,
           resolveResource: (source) => callbackRef.current.resolveResource(source),
           sourceText: (element) => sources.get(element) || '',
@@ -96,7 +105,7 @@ export const ReadingView = forwardRef<ReadingViewHandle, ReadingViewProps>(funct
       }
     })()
     return () => { canceled = true }
-  }, [props.documentId, props.content, props.theme])
+  }, [props.documentId, props.content, props.theme, props.markdownOptions])
 
   useLayoutEffect(() => {
     if (status !== 'ready' || !articleRef.current || !rootRef.current) return
@@ -123,13 +132,13 @@ export const ReadingView = forwardRef<ReadingViewHandle, ReadingViewProps>(funct
   }, [status])
 
   useEffect(() => {
-    if (status !== 'ready' || !props.jumpToLine || props.jumpToLine.id === jumpIdRef.current || !articleRef.current) return
+    if (status !== 'ready' || !props.jumpToLine || (props.jumpToLine.documentId && props.jumpToLine.documentId !== props.documentId) || props.jumpToLine.id === jumpIdRef.current || !articleRef.current) return
     jumpIdRef.current = props.jumpToLine.id
     automaticAnchorRef.current = false
     const targets = Array.from(articleRef.current.querySelectorAll<HTMLElement>('[data-source-line]'))
     const target = targets.find((element) => Number(element.dataset.sourceLine) >= props.jumpToLine!.line) || targets.at(-1)
     target?.scrollIntoView({ block: 'center' })
-  }, [props.jumpToLine?.id, status])
+  }, [props.jumpToLine?.id, props.documentId, status])
 
   useEffect(() => {
     if (props.command?.id === commandIdRef.current) return
@@ -158,7 +167,7 @@ export const ReadingView = forwardRef<ReadingViewHandle, ReadingViewProps>(funct
     }}
     onClick={(event) => {
       const target = event.target instanceof Element ? event.target : null
-      const anchor = target?.closest('a')
+      const anchor = target?.closest('a,[data-math] [href]')
       if (!anchor) return
       event.preventDefault()
       const href = anchor.getAttribute('href')
@@ -173,7 +182,7 @@ export const ReadingView = forwardRef<ReadingViewHandle, ReadingViewProps>(funct
     }}>
     <ReadingSearch ref={searchRef} articleRef={articleRef} ready={status === 'ready'} version={props.content} onClose={() => rootRef.current?.focus({ preventScroll: true })} />
     {status === 'loading' ? <p className="reading-status" role="status">正在排版阅读视图…</p> : null}
-    {status === 'limit' ? <p className="reading-status" role="alert">当前阅读模式支持不超过 20 万个字符的文档。请按 {primaryShortcut(props.platform, 'E')} 返回编辑模式查看此文档。</p> : null}
+    {status === 'limit' ? <p className="reading-status" role="alert">当前阅读模式支持正文不超过 20 万个字符的文档（已验证的内嵌图片数据不计入）。请按 {primaryShortcut(props.platform, 'E')} 返回编辑模式查看此文档。</p> : null}
     {status === 'error' ? <p className="reading-status" role="alert">阅读排版失败，请按 {primaryShortcut(props.platform, 'E')} 返回编辑模式检查文档。</p> : null}
     <article ref={articleRef} className="md-preview-block reading-article" aria-label="Markdown 阅读内容" aria-hidden={status !== 'ready'} style={{ visibility: status === 'ready' ? 'visible' : 'hidden' }} />
   </div>

@@ -1,7 +1,7 @@
 import { test, expect } from '@playwright/test'
 import { readFile, writeFile } from 'node:fs/promises'
 import path from 'node:path'
-import { launchDesktop, openFixture, stopDesktop, type DesktopSession } from './desktop-helpers'
+import { captureDesktop, launchDesktop, openFixture, stopDesktop, type DesktopSession } from './desktop-helpers'
 
 let session: DesktopSession
 test.beforeEach(async () => { session = await launchDesktop() })
@@ -97,7 +97,7 @@ test('工具栏切换留白并恢复自定义宽度，两种编辑视图和重�
   }).toBe(true)
   await session.app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].setSize(1600, 860))
   await expect.poll(async () => (await geometry()).width).toBe(960)
-  await session.page.screenshot({ path: '.debug/content-width-fixed.png' })
+  await captureDesktop(session, '.debug/content-width-fixed.png', { presentInactive: true })
 })
 
 test('标题没有下划线，聚焦标题及双击正文、列表和引用展开本行并可编辑、收起', async () => {

@@ -1,17 +1,32 @@
-import { StateField, type EditorState, type Extension, type Range } from '@codemirror/state'
-import { Decoration, type DecorationSet, EditorView, WidgetType } from '@codemirror/view'
+import { supportsPreview } from './preview-budget'
+import { closeCompletion } from '@codemirror/autocomplete'
+import { Prec, StateField, type EditorState, type Extension, type Range } from '@codemirror/state'
+import { Decoration, type DecorationSet, EditorView, WidgetType, keymap } from '@codemirror/view'
 import { inlinePreviewSpans } from './live-inline'
 import { editLiveBlock, liveBlocks, liveEditingBlock, LiveBlockWidget } from './live-blocks'
 import { LiveTableWidget } from './live-table'
 import type { LiveOptions } from './live-types'
+import { markdownOptionsFacet, markdownDocumentModel } from './markdown-config'
 import { isSafeLink } from './markdown'
 import { syntaxTree } from '@codemirror/language'
 import { LiveMediaWidget } from './live-media'
 import { resourceFitExtension } from './resource-fit'
 import { liveCodeBlocks, liveCodeExtension } from './live-code'
-import { focusedHeadingEditRange, liveSourceEditExtension } from './live-source-edit'
+import { focusedHeadingEditRange, headingInputPreview, liveSourceEditExtension } from './live-source-edit'
 
 export type HybridOptions = LiveOptions
+
+class InlineTextWidget extends WidgetType {
+  constructor(readonly text: string, readonly href?: string) { super() }
+  eq(other: InlineTextWidget): boolean { return this.text === other.text && this.href === other.href }
+  toDOM(): HTMLElement {
+    const span = document.createElement(this.href ? 'a' : 'span')
+    span.textContent = this.text
+    if (this.href) { span.className = 'cm-live-footnote cm-live-link'; span.dataset.href = this.href; span.setAttribute('href', this.href); span.setAttribute('aria-label', `跳转到脚注 ${this.text}`) }
+    return span
+  }
+  ignoreEvent(): boolean { return false }
+}
 
 class TaskWidget extends WidgetType {
   constructor(readonly from: number, readonly checked: boolean, readonly readOnly: boolean) { super() }
@@ -31,7 +46,10 @@ class TaskWidget extends WidgetType {
 }
 
 function decorations(state: EditorState, options: HybridOptions): DecorationSet {
-  if (state.doc.length > 200000) return Decoration.none
+  if (!supportsPreview(state)) return Decoration.none
+  const settings = state.facet(markdownOptionsFacet)
+  const model = markdownDocumentModel(state)
+  options = { ...options, markdownOptions: settings, mathExpressions: model.mathExpressions, mathKey: model.mathKey }
   const ranges: Range<Decoration>[] = []
   const blocks = liveBlocks(state)
   const editing = state.field(liveEditingBlock) ?? (options.readOnly ? null : focusedHeadingEditRange(state))
@@ -55,6 +73,7 @@ function decorations(state: EditorState, options: HybridOptions): DecorationSet 
   }
   for (const span of inlinePreviewSpans(state, [...excluded, ...mediaRanges, ...codeBlocks, ...(editing ? [editing] : [])])) {
     if (span.line) ranges.push(Decoration.line({ class: span.className }).range(span.from))
+    else if (span.replacement !== undefined) ranges.push(Decoration.replace({ widget: new InlineTextWidget(span.replacement, span.href) }).range(span.from, span.to))
     else if (span.hidden && span.to > span.from) ranges.push(Decoration.replace({}).range(span.from, span.to))
     else if (span.className && span.to > span.from) ranges.push(Decoration.mark({ class: span.className, ...(span.href && isSafeLink(span.href) ? { attributes: { 'data-href': span.href } } : {}) }).range(span.from, span.to))
   }
@@ -67,8 +86,8 @@ function decorations(state: EditorState, options: HybridOptions): DecorationSet 
       continue
     }
     const task = line.text.match(/^(\s*(?:>\s*)*(?:[-+*]|\d+[.)])\s+)\[([ xX])\]/)
-    if (task) ranges.push(Decoration.replace({ widget: new TaskWidget(line.from + task[1].length, task[2] !== ' ', options.readOnly) }).range(line.from + task[1].length, line.from + task[1].length + 3))
-    for (const match of line.text.matchAll(/(?<!\\)\$(?!\$)(\S(?:[^$\n]*?\S)?)\$(?!\$)/g)) {
+    if (task && !settings.strictMode) ranges.push(Decoration.replace({ widget: new TaskWidget(line.from + task[1].length, task[2] !== ' ', options.readOnly) }).range(line.from + task[1].length, line.from + task[1].length + 3))
+    if (settings.inlineMath) for (const match of line.text.matchAll(/(?<!\\)\$(?!\$)(\S(?:[^$\n]*?\S)?)\$(?!\$)/g)) {
       const from = line.from + match.index
       const to = from + match[0].length
       if (isEditing(from, to) || mediaRanges.some((range) => from >= range.from && to <= range.to) || /\d/.test(line.text[match.index + match[0].length] || '')) continue
@@ -85,18 +104,19 @@ function decorations(state: EditorState, options: HybridOptions): DecorationSet 
 export function hybridExtension(options: HybridOptions): Extension {
   const previews = StateField.define<DecorationSet>({
     create: (state) => decorations(state, options),
-    update: (value, transaction) => transaction.docChanged || transaction.selection || transaction.effects.some((effect) => effect.is(editLiveBlock)) ? decorations(transaction.state, options) : value,
+    update: (value, transaction) => transaction.docChanged || transaction.reconfigured || transaction.selection || transaction.effects.some((effect) => effect.is(editLiveBlock)) ? decorations(transaction.state, options) : value,
     provide: (field) => EditorView.decorations.from(field),
   })
-  return [liveEditingBlock, liveCodeExtension(), previews, resourceFitExtension, liveSourceEditExtension, EditorView.domEventHandlers({
+  return [liveEditingBlock, headingInputPreview, Prec.highest(keymap.of([{ key: 'Escape', run: view => {
+    if (!view.state.field(liveEditingBlock, false)) return false
+    closeCompletion(view)
+    view.dispatch({ effects: editLiveBlock.of(null) })
+    return true
+  } }])), liveCodeExtension(), previews, resourceFitExtension, liveSourceEditExtension, EditorView.domEventHandlers({
     mousedown: (event) => {
       const link = event.target instanceof Element ? event.target.closest<HTMLElement>('.cm-live-link[data-href]') : null
-      if (!link || !(event.ctrlKey || event.metaKey)) return false
+      if (!link || !(link.classList.contains('cm-live-footnote') || event.ctrlKey || event.metaKey)) return false
       event.preventDefault(); options.onLinkOpen(link.dataset.href!); return true
-    },
-    keydown: (event, view) => {
-      if (event.key !== 'Escape' || !view.state.field(liveEditingBlock, false)) return false
-      view.dispatch({ effects: editLiveBlock.of(null) }); return true
     },
   })]
 }

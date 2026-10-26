@@ -1,6 +1,6 @@
 import { test, expect } from '@playwright/test'
 import { readFile } from 'node:fs/promises'
-import { launchDesktop, openFixture, redoKey, stopDesktop, type DesktopSession } from './desktop-helpers'
+import { captureDesktop, launchDesktop, openFixture, redoKey, stopDesktop, type DesktopSession } from './desktop-helpers'
 
 let session: DesktopSession
 test.beforeEach(async () => { session = await launchDesktop() })
@@ -107,7 +107,9 @@ test('语言候选按前缀和别名搜索，支持键盘及鼠标选择并独�
   await languages.first().fill('py')
   await expect(suggestions.getByRole('option')).toHaveText('Python')
   expect(await suggestions.evaluate(element => element.scrollHeight - element.clientHeight)).toBe(0)
-  await session.page.screenshot({ path: '.debug/code-language-suggestions.png' })
+  await captureDesktop(session, '.debug/code-language-suggestions.png')
+  await expect(languages.first()).toBeFocused()
+  expect((await editorState()).text).toBe(expected)
   await languages.first().press('Escape')
   await expect(session.page.getByRole('listbox', { name: '代码语言建议' })).toHaveCount(0)
   expect((await editorState()).text).toBe(expected)
@@ -208,7 +210,7 @@ test('三个反引号加 Enter 创建可编辑代码块，撤销和源码切换�
   await session.page.keyboard.insertText('后续正文')
   await session.page.keyboard.press('ControlOrMeta+s')
   await expect.poll(() => readFile(destination, 'utf8')).toBe('```\nconst answer = 42;\n- [ ] **literal**\n```\n\n后续正文')
-  await session.page.screenshot({ path: '.debug/code-fence-created.png' })
+  await captureDesktop(session, '.debug/code-fence-created.png')
 })
 
 test('代码块保留显式语言，修改语言后正文仍可直接输入', async () => {

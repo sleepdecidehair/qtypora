@@ -4,6 +4,8 @@ import * as fs from 'node:fs/promises'
 import path from 'node:path'
 import type { DocumentRecord, FileEntry, LineEnding, SearchHit, SearchRequest } from '../shared/contracts'
 import { DesktopError, invalid } from './errors'
+import { compareWorkspaceEntries, matchesFileFilter, normalizeWorkspaceOptions, type WorkspaceOptions } from '../shared/workspace-options'
+import { createTextSearch } from '../shared/search'
 
 export const MAX_DOCUMENT_BYTES = 16 * 1024 * 1024
 export const MARKDOWN_EXTENSIONS = new Set(['.md', '.markdown', '.mdown', '.mkd', '.txt'])
@@ -129,15 +131,16 @@ export async function saveMarkdown(record: DocumentRecord, destination: string, 
   })
 }
 
-export async function listDirectory(directory: string): Promise<FileEntry[]> {
+export async function listDirectory(directory: string, input?: WorkspaceOptions): Promise<FileEntry[]> {
+  const options = normalizeWorkspaceOptions(input)
   const names = await fs.readdir(directory, { withFileTypes: true })
-  const entries = await Promise.all(names.filter((entry) => !entry.name.startsWith('.') && !entry.isSymbolicLink() &&
-    (entry.isDirectory() || (entry.isFile() && MARKDOWN_EXTENSIONS.has(path.extname(entry.name).toLowerCase())))).map(async (entry) => {
+  const entries = await Promise.all(names.filter((entry) => (options.showHidden || !entry.name.startsWith('.')) && !entry.isSymbolicLink() &&
+    (entry.isDirectory() || (entry.isFile() && (options.showAllFiles || MARKDOWN_EXTENSIONS.has(path.extname(entry.name).toLowerCase())) && matchesFileFilter(entry.name, options.filter)))).map(async (entry) => {
     const entryPath = path.join(directory, entry.name)
     const stat = await fs.stat(entryPath)
-    return { name: entry.name, path: entryPath, kind: entry.isDirectory() ? 'directory' as const : 'file' as const, modifiedAt: stat.mtimeMs }
+    return { name: entry.name, path: entryPath, kind: entry.isDirectory() ? 'directory' as const : 'file' as const, modifiedAt: stat.mtimeMs, createdAt: stat.birthtimeMs }
   }))
-  return entries.sort((a, b) => a.kind !== b.kind ? (a.kind === 'directory' ? -1 : 1) : a.name.localeCompare(b.name, 'zh-CN', { numeric: true }))
+  return entries.sort((first, second) => compareWorkspaceEntries(first, second, options))
 }
 
 export function insidePath(candidate: string, root: string): boolean {
@@ -185,7 +188,10 @@ export async function duplicateMarkdown(source: string): Promise<FileEntry> {
 
 export async function searchMarkdown(request: SearchRequest): Promise<SearchHit[]> {
   if (request.query.length > 256) invalid('搜索关键字最长 256 字符。')
-  const needle = request.caseSensitive ? request.query : request.query.toLocaleLowerCase()
+  if (!request.query.trim()) return []
+  let search: ReturnType<typeof createTextSearch>
+  try { search = createTextSearch(request.query, request) }
+  catch (error) { throw new DesktopError('INVALID_INPUT', error instanceof Error ? error.message : '搜索条件无效。') }
   const hits: SearchHit[] = []
   let visited = 0
   async function walk(directory: string, depth: number): Promise<void> {
@@ -197,7 +203,13 @@ export async function searchMarkdown(request: SearchRequest): Promise<SearchHit[
       const lines = (await fs.readFile(entry.path, 'utf8')).split(/\r?\n/)
       for (let index = 0; index < lines.length && hits.length < 1000; index++) {
         const line = lines[index]
-        if ((request.caseSensitive ? line : line.toLocaleLowerCase()).includes(needle)) hits.push({ path: entry.path, name: entry.name, line: index + 1, text: line.trim().slice(0, 2000) })
+        const match = search.find(line, 1)[0]
+        if (match) {
+          // Retain a late match rather than returning an excerpt that cannot show the hit.
+          const from = Math.max(0, match.from - 40)
+          const start = from && (line.codePointAt(from - 1) ?? 0) > 0xffff ? from - 1 : from
+          hits.push({ path: entry.path, name: entry.name, line: index + 1, text: (start ? '…' : '') + line.slice(start, start + 2000) })
+        }
       }
     }
   }

@@ -1,0 +1,92 @@
+import { test, expect } from '@playwright/test'
+import { readFile, writeFile } from 'node:fs/promises'
+import path from 'node:path'
+import { launchDesktop, stopDesktop, openFixture, setSaveDialog, clickNativeMenu } from './desktop-helpers'
+
+test('更多导出生成无样式HTML和真实PNG，保留源文档', async () => {
+  const session = await launchDesktop()
+  try {
+    const original = '# 导出标题\n\n**粗体内容**\n\n第二段。\n'
+    const source = await openFixture(session, 'export-features.md', original)
+    const htmlPath = path.join(session.root, 'unstyled.html')
+    await setSaveDialog(session, htmlPath)
+    await clickNativeMenu(session, '更多导出格式与设置…')
+    await session.page.getByLabel('导出格式', { exact: true }).selectOption('html-plain')
+    await session.page.getByRole('button', { name: '导出…', exact: true }).click()
+    await expect.poll(async () => { try { return await readFile(htmlPath, 'utf8') } catch { return '' } }).toContain('粗体内容')
+    expect(await readFile(htmlPath, 'utf8')).not.toContain('<style>')
+    await session.page.getByLabel('关闭导出文档', { exact: true }).click()
+    const pngPath = path.join(session.root, 'article.png')
+    await setSaveDialog(session, pngPath)
+    await clickNativeMenu(session, '更多导出格式与设置…')
+    await session.page.getByLabel('导出格式', { exact: true }).selectOption('png')
+    await session.page.getByRole('button', { name: '导出…', exact: true }).click()
+    await expect.poll(async () => { try { return (await readFile(pngPath)).length } catch { return 0 } }).toBeGreaterThan(100)
+    const png = await readFile(pngPath)
+    expect(png.subarray(1, 4).toString()).toBe('PNG')
+    expect(png.readUInt32BE(16)).toBe(1000)
+    expect(png.readUInt32BE(20)).toBeGreaterThan(100)
+    expect(await readFile(source, 'utf8')).toBe(original)
+  } finally { await stopDesktop(session) }
+})
+
+test('纸张设置持久化、配置导出失败不会覆盖已有文件', async () => {
+  const session = await launchDesktop()
+  try {
+    await openFixture(session, 'paper.md', '# 文档\n\n内容')
+    await clickNativeMenu(session, '偏好设置…')
+    await session.page.getByLabel('纸张尺寸', { exact: true }).selectOption('Letter')
+    await session.page.getByLabel('横向纸张', { exact: true }).check()
+    await session.page.getByLabel('页边距', { exact: true }).fill('20')
+    await session.page.getByLabel('页眉', { exact: true }).fill('测试页眉')
+    await session.page.getByLabel('Pandoc 路径', { exact: true }).fill('/missing/qtypora-pandoc')
+    await session.page.getByRole('button', { name: '完成', exact: true }).click()
+    const output = path.join(session.root, 'letter.pdf')
+    await setSaveDialog(session, output)
+    await clickNativeMenu(session, 'PDF…')
+    await expect.poll(async () => { try { return (await readFile(output)).subarray(0, 4).toString() } catch { return '' } }).toBe('%PDF')
+    const bootstrap = await session.page.evaluate(() => window.desktop.bootstrap())
+    expect(bootstrap.ok && bootstrap.data.preferences.export.pageSize).toBe('Letter')
+    const preserved = path.join(session.root, 'protected.docx')
+    await writeFile(preserved, 'existing-output')
+    await setSaveDialog(session, preserved)
+    await clickNativeMenu(session, '更多导出格式与设置…')
+    await session.page.getByLabel('导出格式', { exact: true }).selectOption('docx')
+    await session.page.getByRole('button', { name: '导出…', exact: true }).click()
+    await expect(session.page.getByRole('alert')).toContainText('Pandoc')
+    expect(await readFile(preserved, 'utf8')).toBe('existing-output')
+  } finally { await stopDesktop(session) }
+})
+
+test('内建导出预设恢复自定义纸张、四边页边距和主题，PDF使用实际尺寸', async () => {
+  const session = await launchDesktop()
+  try {
+    await openFixture(session, 'presets.md', '# 印刷预设\n\n可复用的纸张设置。')
+    await clickNativeMenu(session, '偏好设置…')
+    await session.page.getByLabel('纸张尺寸', { exact: true }).selectOption('custom')
+    await session.page.getByLabel('纸张宽度', { exact: true }).fill('254')
+    await session.page.getByLabel('纸张高度', { exact: true }).fill('381')
+    await session.page.getByLabel('分别设置四边页边距', { exact: true }).check()
+    await session.page.getByLabel('上页边距', { exact: true }).fill('20')
+    await session.page.getByLabel('下页边距', { exact: true }).fill('15')
+    await session.page.getByLabel('左页边距', { exact: true }).fill('10')
+    await session.page.getByLabel('右页边距', { exact: true }).fill('5')
+    await session.page.getByLabel('导出主题', { exact: true }).selectOption('dark')
+    await session.page.getByRole('button', { name: '完成', exact: true }).click()
+    await clickNativeMenu(session, '更多导出格式与设置…')
+    await session.page.getByLabel('内建导出预设名称').fill('长页印刷')
+    await session.page.getByRole('button', { name: '保存当前导出预设' }).click()
+    await expect.poll(async () => { const result = await session.page.evaluate(() => window.desktop.bootstrap()); return result.ok ? result.data.preferences.export.savedPresets.length : 0 }).toBe(1)
+    await session.page.getByLabel('关闭导出文档').click()
+    await session.page.evaluate(() => window.desktop.patchPreferences({ export: { pageSize: 'A4', separateMargins: false, theme: 'light' } }))
+    await clickNativeMenu(session, '更多导出格式与设置…')
+    await session.page.getByLabel('选择导出预设').selectOption('长页印刷')
+    const output = path.join(session.root, 'custom-paper.pdf')
+    await setSaveDialog(session, output)
+    await session.page.getByRole('button', { name: '导出…', exact: true }).click()
+    await expect.poll(async () => { try { return (await readFile(output)).toString('latin1') } catch { return '' } }).toMatch(/\/MediaBox\s*\[0 0 720 1080\]/)
+    const result = await session.page.evaluate(() => window.desktop.bootstrap())
+    expect(result.ok && result.data.preferences.export).toMatchObject({ pageSize: 'custom', theme: 'dark', separateMargins: true, marginTopMm: 20, marginBottomMm: 15, marginLeftMm: 10, marginRightMm: 5 })
+    expect(session.errors).toEqual([])
+  } finally { await stopDesktop(session) }
+})

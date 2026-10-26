@@ -3,12 +3,17 @@ import path from 'node:path'
 import { DEFAULT_PREFERENCES, type DraftRecord, type Preferences } from '../shared/contracts'
 import { atomicWrite, serialized } from './files'
 import { boolean, invalid, object, string } from './errors'
+import { normalizeExportOptions } from '../shared/export-options'
+import { normalizeMarkdownOptions } from '../shared/markdown-options'
+import { normalizeWorkspaceOptions } from '../shared/workspace-options'
+import { normalizeShortcutOverrides } from '../shared/shortcuts'
+import { normalizeImageOptions } from '../shared/image-options'
 
 export function validatePreferences(input: unknown): Preferences {
   const value = object(input)
-  if (!['light', 'dark', 'system'].includes(String(value.theme))) invalid('主题无效。')
-  if (!['files', 'outline', 'search'].includes(String(value.sidebarMode))) invalid('侧栏模式无效。')
-  if (!['LF', 'CRLF'].includes(String(value.lineEnding))) invalid('换行格式无效。')
+  if (!['light', 'dark', 'system'].includes(typeof value.theme === 'string' ? value.theme : '')) invalid('主题无效。')
+  if (!['files', 'outline', 'search'].includes(typeof value.sidebarMode === 'string' ? value.sidebarMode : '')) invalid('侧栏模式无效。')
+  if (!['LF', 'CRLF'].includes(typeof value.lineEnding === 'string' ? value.lineEnding : '')) invalid('换行格式无效。')
   if (value.readingMode !== undefined) boolean(value.readingMode, '旧版阅读模式')
   const number = (key: string, min: number, max: number): number => {
     const candidate = value[key]
@@ -20,22 +25,49 @@ export function validatePreferences(input: unknown): Preferences {
   const contentWidthMode = value.contentWidthMode === undefined
     ? (contentWidth === DEFAULT_PREFERENCES.contentWidth ? 'auto' : 'fixed') : value.contentWidthMode
   if (contentWidthMode !== 'auto' && contentWidthMode !== 'fixed') invalid('正文宽度模式无效。')
+  const optionalNumber = (key: 'readingSpeed' | 'lineHeight' | 'zoomFactor', min: number, max: number): number => {
+    const candidate = value[key] ?? DEFAULT_PREFERENCES[key]
+    if (typeof candidate !== 'number' || !Number.isFinite(candidate) || candidate < min || candidate > max) invalid(`${key}超出允许范围。`)
+    return candidate
+  }
+  const optionalText = (key: 'fontFamily' | 'customCss' | 'startupFolder', max: number): string => {
+    const candidate = value[key] ?? DEFAULT_PREFERENCES[key]
+    if (typeof candidate !== 'string' || candidate.length > max || candidate.includes('\0')) invalid(`${key}无效。`)
+    return candidate
+  }
+  const lightTheme = value.lightTheme ?? 'paper'
+  const darkTheme = value.darkTheme ?? 'night'
+  const startup = value.startup ?? 'new'
+  if (!['paper', 'sepia', 'blue'].includes(typeof lightTheme === 'string' ? lightTheme : '') || !['night', 'charcoal'].includes(typeof darkTheme === 'string' ? darkTheme : '')) invalid('配色无效。')
+  if (!['new', 'last-file', 'last-folder', 'custom-folder'].includes(typeof startup === 'string' ? startup : '')) invalid('启动方式无效。')
+  const spellcheckLanguages = value.spellcheckLanguages ?? ['en-US']
+  const statisticsUnit = value.statisticsUnit === undefined ? DEFAULT_PREFERENCES.statisticsUnit : value.statisticsUnit
+  if (statisticsUnit !== 'words' && statisticsUnit !== 'characters') invalid('统计单位无效。')
+  if (!Array.isArray(spellcheckLanguages) || spellcheckLanguages.length > 8 || !spellcheckLanguages.every(item => typeof item === 'string' && /^[a-z]{2,3}(?:-[A-Za-z]{2,4})?$/.test(item))) invalid('拼写检查语言无效。')
+  let extensions: Pick<Preferences, 'markdown' | 'workspace' | 'image' | 'export' | 'shortcuts'>
+  try { extensions = { shortcuts: normalizeShortcutOverrides(value.shortcuts, process.platform), markdown: normalizeMarkdownOptions(value.markdown), workspace: normalizeWorkspaceOptions(value.workspace), image: normalizeImageOptions(value.image), export: normalizeExportOptions(value.export) } }
+  catch (error) { invalid(error instanceof Error ? error.message : '扩展设置无效。') }
   return {
+    ...extensions,
     theme: value.theme as Preferences['theme'], sidebarMode: value.sidebarMode as Preferences['sidebarMode'],
     lineEnding: value.lineEnding as Preferences['lineEnding'], fontSize: number('fontSize', 12, 32),
     contentWidth, contentWidthMode, autoSaveSeconds: number('autoSaveSeconds', 5, 3600),
     showSidebar: boolean(value.showSidebar, '侧栏'), showToolbar: boolean(value.showToolbar, '工具栏'),
     sourceMode: boolean(value.sourceMode, '源码模式'), focusMode: boolean(value.focusMode, '专注模式'),
-    readingMode: false,
+    readingMode: false, floatingToolbar: value.floatingToolbar === undefined ? true : boolean(value.floatingToolbar, '浮动工具栏'),
     typewriterMode: boolean(value.typewriterMode, '打字机模式'), autoSave: boolean(value.autoSave, '自动保存'),
     spellcheck: boolean(value.spellcheck, '拼写检查'), showLineNumbers: boolean(value.showLineNumbers, '行号'),
     wrapLines: boolean(value.wrapLines, '自动折行'),
+    readingSpeed: optionalNumber('readingSpeed', 50, 2000), statisticsUnit, lineHeight: optionalNumber('lineHeight', 1, 3), zoomFactor: optionalNumber('zoomFactor', 0.5, 2),
+    fontFamily: optionalText('fontFamily', 200), customCss: optionalText('customCss', 40000), startupFolder: optionalText('startupFolder', 4096),
+    lightTheme: lightTheme as Preferences['lightTheme'], darkTheme: darkTheme as Preferences['darkTheme'], startup: startup as Preferences['startup'], spellcheckLanguages,
   }
 }
 
 export class LocalStore {
   preferences: Preferences = { ...DEFAULT_PREFERENCES }
   recentFiles: string[] = []
+  recentFolders: string[] = []
   drafts = new Map<string, DraftRecord>()
   private unknownSettings: Record<string, unknown> = {}
   private unknownPreferences: Record<string, unknown> = {}
@@ -50,6 +82,7 @@ export class LocalStore {
       this.unknownPreferences = Object.fromEntries(Object.entries(storedPreferences).filter(([key]) => !Object.hasOwn(DEFAULT_PREFERENCES, key)))
       this.preferences = validatePreferences(settings.preferences)
       if (Array.isArray(settings.recentFiles)) this.recentFiles = settings.recentFiles.filter((item): item is string => typeof item === 'string').slice(0, 20)
+      if (Array.isArray(settings.recentFolders)) this.recentFolders = settings.recentFolders.filter((item): item is string => typeof item === 'string' && path.isAbsolute(item)).slice(0, 20)
     } catch (error) {
       if (!isMissing(error)) console.error('[store] Settings invalid; defaults restored')
     }
@@ -71,9 +104,11 @@ export class LocalStore {
   }
 
   async updatePreferences(preferences: Preferences): Promise<Preferences> {
-    this.preferences = preferences
-    await this.persistSettings()
-    return this.preferences
+    return serialized('settings:' + this.directory, async () => {
+      await this.writeSettings(preferences)
+      this.preferences = preferences
+      return preferences
+    })
   }
 
   async addRecent(filePath: string): Promise<void> {
@@ -81,10 +116,19 @@ export class LocalStore {
     await this.persistSettings()
   }
 
+  async addRecentFolder(folderPath: string): Promise<void> {
+    this.recentFolders = [folderPath, ...this.recentFolders.filter(item => item !== folderPath)].slice(0, 20)
+    await this.persistSettings()
+  }
+
   private async persistSettings(): Promise<void> {
-    await serialized('settings:' + this.directory, () => atomicWrite(path.join(this.directory, 'settings.json'), Buffer.from(JSON.stringify({
-      ...this.unknownSettings, preferences: { ...this.unknownPreferences, ...this.preferences }, recentFiles: this.recentFiles,
-    }, null, 2))))
+    await serialized('settings:' + this.directory, () => this.writeSettings(this.preferences))
+  }
+
+  private async writeSettings(preferences: Preferences): Promise<void> {
+    await atomicWrite(path.join(this.directory, 'settings.json'), Buffer.from(JSON.stringify({
+      ...this.unknownSettings, preferences: { ...this.unknownPreferences, ...preferences }, recentFiles: this.recentFiles, recentFolders: this.recentFolders,
+    }, null, 2)))
   }
 
   async writeDraft(draft: DraftRecord): Promise<void> {

@@ -14,7 +14,7 @@ function imageSources(tokens: Token[]): string[] {
       if (source) sources.push(source)
     }
     if (token.type === 'html_inline' || token.type === 'html_block') {
-      for (const match of token.content.matchAll(/<img\b[^>]*\bsrc\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s>]+))/gi)) {
+      for (const match of token.content.replace(/<!--[\s\S]*?-->/g, '').matchAll(/<img\b[^>]*\bsrc\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s>]+))/gi)) {
         const source = match[1] ?? match[2] ?? match[3]
         if (source) sources.push(source)
       }
@@ -25,7 +25,7 @@ function imageSources(tokens: Token[]): string[] {
 }
 
 export function markdownImageSources(content: string): string[] {
-  const markdown = content.replace(/^---\r?\n[\s\S]*?\r?\n---(?:\r?\n|$)/, '')
+  const markdown = content.replace(/^---\r?\n[\s\S]*?\r?\n(?:---|\.\.\.)\s*(?:\r?\n|$)/, '')
   return [...new Set(imageSources(parser.parse(markdown, {})))]
 }
 

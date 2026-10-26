@@ -41,3 +41,22 @@ describe('Markdown outline text and source locations', () => {
     expect(extractHeadings('#not a heading\n\n###also_not\n')).toEqual([])
   })
 })
+
+describe('explicit HTML anchor positions', () => {
+  it('resolves id/name and entities in parsed inline or multiline block HTML', async () => {
+    const { resolveExplicitAnchor } = await import('./outline')
+    const source = '前文\n\n<a id="中文&amp;锚点"></a>\n\n<div>\n<a\n name="later">anchor</a>\n</div>\n'
+    expect(resolveExplicitAnchor(source, '#%E4%B8%AD%E6%96%87%26%E9%94%9A%E7%82%B9')).toBe(3)
+    expect(resolveExplicitAnchor(source, '#later')).toBe(6)
+    expect(resolveExplicitAnchor('text\n<a name=inline></a>', '#inline')).toBe(2)
+  })
+  it('does not resolve fenced, indented, inline code, comments or stripped script content', async () => {
+    const { resolveExplicitAnchor } = await import('./outline')
+    const source = '```html\n<a id="hidden"></a>\n```\n\n    <a id="hidden"></a>\n\n`<a id="hidden"></a>`\n\n<!--\n<a id="hidden"></a>\n-->\n\n<script><a id="hidden"></a></script>\n'
+    expect(resolveExplicitAnchor(source, '#hidden')).toBeNull()
+    expect(resolveExplicitAnchor(source + '\n<a id="hidden"></a>', '#hidden')).toBe(15)
+    expect(resolveExplicitAnchor(source, '#%broken')).toBeNull()
+    expect(resolveExplicitAnchor("<a title=' id=\"fake\"' id='real'></a>", '#fake')).toBeNull()
+    expect(resolveExplicitAnchor("<a title=' id=\"fake\"' id='real'></a>", '#real')).toBe(1)
+  })
+})

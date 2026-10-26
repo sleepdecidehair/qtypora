@@ -23,6 +23,7 @@ export function quickOpenItems(documents: QuickOpenDocument[], recentFiles: stri
     items.push({ key, name: path.split(/[\\/]/).pop() ?? path, path, id: null, scope: 'recent', isDirty: false })
   }
   for (const file of files) {
+    if (!/\.(?:md|markdown|mdown|mkd|txt)$/i.test(file.name)) continue
     const key = filePathKey(file.path)
     if (seen.has(key)) continue
     seen.add(key)

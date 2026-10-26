@@ -1,7 +1,7 @@
 import { test, expect } from '@playwright/test'
 import { chmod, mkdir, readFile, writeFile } from 'node:fs/promises'
 import path from 'node:path'
-import { launchDesktop, setOpenDialog, stopDesktop, type DesktopSession } from './desktop-helpers'
+import { captureDesktop, launchDesktop, setOpenDialog, stopDesktop, type DesktopSession } from './desktop-helpers'
 
 let session: DesktopSession
 test.beforeEach(async () => { session = await launchDesktop() })
@@ -15,6 +15,7 @@ async function searchFolder(folder: string, query: string): Promise<void> {
   await setOpenDialog(session, [folder])
   await session.page.getByTestId('export-menu').click()
   await session.page.getByTestId('open-folder').click()
+  await expect(session.page.getByTestId('workspace-folder')).toContainText(path.basename(folder))
   await session.page.getByTestId('search-tab').click()
   await session.page.getByTestId('folder-search-input').fill(query)
 }
@@ -48,7 +49,7 @@ test('目录搜索高亮摘要、标题和表格，跳转后保持高亮且清�
   await results.first().click()
   await expect(results.first()).toHaveAttribute('aria-current', 'location')
   await expect.poll(() => renderedMatches(true)).toEqual(['002'])
-  await expect(session.page.locator('.cm-live-heading-2')).toHaveText('002｜沃尔玛')
+  await expect(session.page.locator('.cm-line[data-source-line="3"]')).toHaveText('002｜沃尔玛')
   await results.last().click()
   await expect.poll(() => renderedMatches(true)).toEqual(['002'])
   expect(await source()).toBe(original)
@@ -84,6 +85,7 @@ test('只读文档、源码视图、大小写和深色主题均支持高亮，�
     await session.page.getByTestId('preferences-button').click()
     await session.page.getByTestId('theme-select').selectOption('dark')
     await session.page.getByRole('button', { name: '完成', exact: true }).click()
+    await expect(session.page.getByRole('dialog', { name: '偏好设置' })).toHaveCount(0)
     await expect(session.page.locator('html')).toHaveAttribute('data-theme', 'dark')
     await expect.poll(() => renderedMatches()).toEqual(['word'])
     await expect(result.locator('mark')).toHaveCSS('background-color', 'rgb(99, 85, 41)')
@@ -118,7 +120,8 @@ test('滚动、切换文件和编辑后更新高亮，匹配摘要不会被前�
   expect(visible).toBe(true)
   await results.filter({ hasText: '末尾标题' }).click()
   await expect.poll(() => renderedMatches(true)).toEqual(['002'])
-  const heading = session.page.locator('.cm-live-heading-2')
+  const heading = session.page.locator('.cm-line[data-source-line="301"]')
+  await expect(heading).toHaveText('002｜末尾标题')
   const box = await heading.boundingBox(); const scroller = await session.page.locator('.cm-scroller').boundingBox()
   expect(box!.y).toBeGreaterThanOrEqual(scroller!.y)
   expect(box!.y + box!.height).toBeLessThanOrEqual(scroller!.y + scroller!.height)
@@ -133,5 +136,5 @@ test('滚动、切换文件和编辑后更新高亮，匹配摘要不会被前�
   await results.filter({ hasText: '末尾标题' }).click()
   await expect.poll(() => renderedMatches(true)).toEqual(['002'])
   expect(await source()).toBe(original)
-  await session.page.screenshot({ path: '.debug/folder-search-highlight.png' })
+  await captureDesktop(session, '.debug/folder-search-highlight.png')
 })

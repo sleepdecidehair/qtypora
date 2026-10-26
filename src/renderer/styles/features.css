@@ -1,0 +1,14 @@
+.desktop-app[data-palette=sepia] { --color-surface: #fbf6e9; --color-surface-muted: #f4ecdb; --color-sidebar: #f3eddf; --color-text: #463c2e; --color-code: #eee5d3; --color-border: #ded2b8; }
+.desktop-app[data-palette=blue] { --color-surface: #f7fbff; --color-surface-muted: #edf3fa; --color-sidebar: #edf3fa; --color-text: #293d52; --color-code: #e8eff7; --color-border: #d2dfea; }
+.desktop-app[data-palette=charcoal] { --color-surface: #171717; --color-surface-muted: #242424; --color-sidebar: #202020; --color-text: #e0e0e0; --color-code: #282828; --color-border: #3a3a3a; }
+.document-pane .cm-content { line-height: var(--writing-line-height, 1.8); }
+.preferences-search { padding: 12px 20px 0; }
+.preferences-search input { width: 100%; }
+.preferences-content { max-height: min(68vh, 650px); overflow: auto; }
+.preferences-content .setting-row textarea { width: 60%; resize: vertical; padding: 8px; background: var(--color-surface); color: var(--color-text); border: 1px solid var(--color-border); }
+.preferences-content .setting-row input:not([type=checkbox]):not([type=number]) { width: 58%; }
+.preferences-content > section:not(:has(.setting-row, .shortcut-row)) { display: none; }
+.document-path { max-width: 45%; }
+
+.spelling-dictionary ul { max-height: 180px; overflow: auto; padding: 0; list-style: none; }
+.spelling-dictionary li, .setting-actions { display: flex; justify-content: space-between; gap: 12px; margin: 8px 0; }

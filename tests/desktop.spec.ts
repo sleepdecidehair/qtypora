@@ -1,7 +1,7 @@
 import { test, expect } from '@playwright/test'
 import { mkdir, readFile, readdir, unlink, writeFile } from 'node:fs/promises'
 import path from 'node:path'
-import { appendText, clickNativeMenu, launchDesktop, openFixture, readCreatedBytes, readCreatedText, redoKey, setMessageResponse, setOpenDialog, setSaveDialog, stopDesktop, type DesktopSession } from './desktop-helpers'
+import { captureDesktop, appendText, clickNativeMenu, launchDesktop, openFixture, readCreatedBytes, readCreatedText, redoKey, setMessageResponse, setOpenDialog, setSaveDialog, stopDesktop, type DesktopSession } from './desktop-helpers'
 
 let session: DesktopSession
 
@@ -194,7 +194,7 @@ test('模式切换保留编辑位置，深色偏好持久保存', async () => {
   await session.page.getByTestId('theme-select').selectOption('dark')
   await session.page.getByRole('button', { name: '完成', exact: true }).click()
   await expect.poll(async () => JSON.parse(await readFile(path.join(session.userData, 'settings.json'), 'utf8')).preferences?.theme).toBe('dark')
-  await session.page.screenshot({ path: '.debug/desktop-dark.png' })
+  await captureDesktop(session, '.debug/desktop-dark.png')
 })
 
 test('保存对话框迟到时保留之后的输入和草稿', async () => {
@@ -261,7 +261,7 @@ test('实时预览呈现离线公式图表、本地图片与可编辑任务，�
   await checkbox.check()
   await session.page.keyboard.press('ControlOrMeta+s')
   await expect.poll(async () => readFile(destination, 'utf8')).toBe(source.replace('- [ ] 待办事项', '- [x] 待办事项'))
-  await session.page.screenshot({ path: '.debug/desktop-preview.png' })
+  await captureDesktop(session, '.debug/desktop-preview.png')
   const htmlPath = path.join(session.root, 'portable-preview.html')
   await setSaveDialog(session, htmlPath)
   await session.page.getByTestId('export-menu').click()
@@ -409,7 +409,7 @@ test('仅滚动到表格和图表不会暴露源码或激活整个块编辑', as
     return Reflect.get(window, 'qtyporaExposedSource')
   })
   expect(exposed, 'Attached live-preview nodes must never contain table or Mermaid source during scrolling').toEqual([])
-  await session.page.screenshot({ path: '.debug/desktop-live-tables.png' })
+  await captureDesktop(session, '.debug/desktop-live-tables.png')
 })
 
 test('源码和实时预览切换保留当前可见段落、光标和撤销历史', async () => {

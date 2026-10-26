@@ -1,8 +1,25 @@
-import type { EditorState } from '@codemirror/state'
+import { StateEffect, StateField, type EditorState } from '@codemirror/state'
 import { syntaxTree } from '@codemirror/language'
 import { EditorView, ViewPlugin } from '@codemirror/view'
 import { editLiveBlock, liveBlocks } from './live-blocks'
 import { sourceContextTarget } from './context-target'
+
+// Newly typed headings render immediately; explicitly entering an existing heading reveals its source.
+export const preserveHeadingPreview = StateEffect.define<number>({ map: (value, changes) => changes.mapPos(value, -1) })
+export const headingInputPreview = StateField.define<number | null>({
+  create: () => null,
+  update: (value, transaction) => {
+    for (const effect of transaction.effects) if (effect.is(preserveHeadingPreview)) return transaction.state.doc.lineAt(effect.value).from
+    if (!transaction.docChanged) return transaction.selection ? null : value
+    if (!transaction.isUserEvent('input.type') && !transaction.isUserEvent('delete')) return null
+    const position = transaction.state.selection.main.head
+    const line = transaction.state.doc.lineAt(position)
+    if (value !== null && transaction.changes.mapPos(value, -1) === line.from) return line.from
+    const previous = transaction.startState.doc.lineAt(transaction.startState.selection.main.head)
+    if (transaction.startState.selection.main.empty && /^ {0,3}#{0,6}$/.test(previous.text) && /^ {0,3}#{1,6}(?:[ \t].*)?$/.test(line.text)) return line.from
+    return null
+  },
+})
 
 export function sourceEditRange(state: EditorState, position: number): { from: number; to: number } {
   const bounded = Math.max(0, Math.min(state.doc.length, position))
@@ -17,6 +34,7 @@ export function sourceEditRange(state: EditorState, position: number): { from: n
 
 export function focusedHeadingEditRange(state: EditorState): { from: number; to: number } | null {
   const position = state.selection.main.head
+  if (state.field(headingInputPreview, false) === state.doc.lineAt(position).from) return null
   for (const side of [1, -1] as const) {
     let node = syntaxTree(state).resolveInner(position, side)
     for (;;) {

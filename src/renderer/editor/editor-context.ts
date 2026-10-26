@@ -1,6 +1,6 @@
 import { EditorSelection } from '@codemirror/state'
 import { EditorView } from '@codemirror/view'
-import { undoDepth, redoDepth } from '@codemirror/commands'
+import { undoDepth, redoDepth, isolateHistory } from '@codemirror/commands'
 import { indentRange } from '@codemirror/language'
 import type { ClipboardContent, ContextMenuAction, ContextMenuRequest, Result } from '../../shared/contracts'
 import type { EditorAction, MarkdownEditorProps } from './types'
@@ -11,12 +11,19 @@ import { editLiveBlock, liveEditingBlock } from './live-blocks'
 import { renderMarkdown, isSafeLink } from './markdown'
 import { mathMarkup, diagramSvg, rasterizeDiagram, type ViewedResource } from './context-resource'
 import { focusLiveTableSelection } from './live-table'
+import { markdownOptionsFacet } from './markdown-config'
+import type { MarkdownOptions } from '../../shared/markdown-options'
+import { chooseImageSize, currentImageSize, imageSizeEdit } from './image-size'
+import { clipboardHtmlToMarkdown } from './clipboard-import'
+import { validSpellingWord } from '../../shared/spelling'
 
 interface ContextSnapshot {
   documentId: string
+  revision: number
   content: string
   target: ContextTarget
   selection: { from: number; to: number; text: string }
+  spelling?: { from: number; to: number; word: string; suggestions: string[] }
 }
 type ApplyAction = (view: EditorView, action: EditorAction, value?: string) => boolean
 const formatActions = ['bold', 'italic', 'strike', 'inline-code', 'clear-format', 'heading-1', 'heading-2', 'heading-3', 'heading-4', 'heading-5', 'heading-6', 'paragraph', 'quote', 'ordered-list', 'bullet-list', 'task-list', 'code', 'math', 'table', 'link'] as const
@@ -26,11 +33,16 @@ function resultValue<T>(result: Result<T>): T {
   return result.data
 }
 
-function plainText(markdown: string): string {
+function plainText(markdown: string, options: MarkdownOptions): string {
   const container = document.createElement('div')
-  container.innerHTML = renderMarkdown(markdown)
+  container.innerHTML = renderMarkdown(markdown, options)
   for (const image of container.querySelectorAll('img')) image.replaceWith(document.createTextNode(image.alt))
   return container.textContent || ''
+}
+
+async function apiSpelling(props: MarkdownEditorProps, word: string) {
+  const result = await props.desktopApi.readSpelling(word)
+  return result.ok ? result.data : null
 }
 
 export function contextMenuRequest(view: EditorView, target: ContextTarget, hasSelection: boolean, resourceReady = true): ContextMenuRequest {
@@ -59,7 +71,8 @@ export function contextMenuRequest(view: EditorView, target: ContextTarget, hasS
   if (target.kind === 'image' && target.address) {
     actions.push('image-copy-path', 'view-resource')
     if (isLocalResource(target.address.value)) { actions.push('image-save-as'); if (!readOnly) actions.push('image-copy', 'image-move', 'image-delete') }
-    if (!readOnly) actions.push('image-remove')
+    if (!readOnly) actions.push('image-remove', 'image-resize')
+    if (!readOnly && isLocalResource(target.address.value)) actions.push('image-upload')
   }
   return { kind: target.kind, readOnly, hasSelection, availableActions: actions, hasLocalResource: target.kind === 'image' && Boolean(target.address && isLocalResource(target.address.value)), canUndo: undoDepth(view.state) > 0, canRedo: redoDepth(view.state) > 0 }
 }
@@ -68,10 +81,14 @@ export function installEditorContext(view: EditorView, getProps: () => MarkdownE
   let requestId = 0
   let disposed = false
   function unchanged(snapshot: ContextSnapshot): boolean {
-    return !disposed && getProps().documentId === snapshot.documentId && view.state.doc.toString() === snapshot.content && contextTargetUnchanged(snapshot.target, view.state.doc.toString())
+    return !disposed && getProps().documentId === snapshot.documentId && getProps().revision === snapshot.revision && view.state.doc.toString() === snapshot.content && contextTargetUnchanged(snapshot.target, view.state.doc.toString())
   }
   function requireCurrent(snapshot: ContextSnapshot): void {
     if (!unchanged(snapshot)) throw new Error('文档或目标内容已变化，请重新打开右键菜单。')
+  }
+  function requireEditable(snapshot: ContextSnapshot): void {
+    requireCurrent(snapshot)
+    if (view.state.readOnly || getProps().readOnly) throw new Error('文档已变为只读，未修改原文。')
   }
   function focus(): void { if (!focusLiveTableSelection(view)) view.focus() }
   async function write(snapshot: ContextSnapshot, content: ClipboardContent): Promise<void> {
@@ -82,12 +99,28 @@ export function installEditorContext(view: EditorView, getProps: () => MarkdownE
     requireCurrent(snapshot)
     const { target, selection } = snapshot
     const props = getProps(), api = props.desktopApi
+    const markdownOptions = view.state.facet(markdownOptionsFacet)
+    if ((action === 'spell-learn' || action === 'spell-ignore') && snapshot.spelling) {
+      requireEditable(snapshot)
+      if (action === 'spell-ignore') resultValue(await api.ignoreSpelling(snapshot.spelling.word))
+      else resultValue(await api.learnSpelling(snapshot.spelling.word))
+      if (unchanged(snapshot)) view.focus()
+      return
+    }
+    if (action.startsWith('spell-suggestion-') && snapshot.spelling) {
+      requireEditable(snapshot)
+      const spelling = snapshot.spelling
+      const suggestion = spelling.suggestions[Number(action.slice('spell-suggestion-'.length))]
+      if (!suggestion || view.state.doc.sliceString(spelling.from, spelling.to) !== spelling.word) return
+      view.dispatch({ changes: { from: spelling.from, to: spelling.to, insert: suggestion }, selection: { anchor: spelling.from + suggestion.length }, userEvent: 'input.spelling', annotations: isolateHistory.of('full') })
+      view.focus(); return
+    }
     const select = (): void => { view.dispatch({ selection: EditorSelection.range(selection.from, selection.to) }) }
-    const clipboardSelection = (): ClipboardContent => props.mode === 'hybrid' ? { text: selection.text, html: renderMarkdown(selection.text) } : { text: selection.text }
+    const clipboardSelection = (): ClipboardContent => props.mode === 'hybrid' ? { text: selection.text, html: renderMarkdown(selection.text, markdownOptions) } : { text: selection.text }
     if (action === 'copy') { await write(snapshot, clipboardSelection()); return }
     if (action === 'copy-markdown') { await write(snapshot, { text: selection.text }); return }
-    if (action === 'copy-plain') { await write(snapshot, { text: plainText(selection.text) }); return }
-    if (action === 'copy-html') { const html = renderMarkdown(selection.text); await write(snapshot, { text: html, html }); return }
+    if (action === 'copy-plain') { await write(snapshot, { text: plainText(selection.text, markdownOptions) }); return }
+    if (action === 'copy-html') { const html = renderMarkdown(selection.text, markdownOptions); await write(snapshot, { text: html, html }); return }
     if (action === 'copy-table') { await write(snapshot, { text: target.source }); return }
     if (action === 'copy-code' || action === 'copy-math' || action === 'copy-diagram') { await write(snapshot, { text: contextObjectSource(target) }); return }
     if (action === 'copy-mathml') { await write(snapshot, { text: await mathMarkup(target) }); return }
@@ -109,13 +142,24 @@ export function installEditorContext(view: EditorView, getProps: () => MarkdownE
     }
     if (view.state.readOnly) return
     if (action === 'cut') {
-      await write(snapshot, clipboardSelection()); requireCurrent(snapshot)
+      await write(snapshot, clipboardSelection()); requireEditable(snapshot)
       view.dispatch({ changes: { from: selection.from, to: selection.to, insert: '' }, selection: { anchor: selection.from }, userEvent: 'delete.cut' }); focus(); return
     }
     if (action === 'paste' || action === 'paste-plain') {
-      const text = resultValue(await api.readClipboardText()); requireCurrent(snapshot)
+      let text: string
+      if (action === 'paste-plain') text = resultValue(await api.readClipboardText())
+      else {
+        const clipboard = resultValue(await api.readClipboard())
+        requireEditable(snapshot)
+        if (clipboard.images?.length) {
+          const imported = resultValue(await api.importImages({ id: snapshot.documentId, content: snapshot.content, revision: snapshot.revision, images: clipboard.images }))
+          if (!imported) return
+          text = imported.markdown
+        } else text = props.mode === 'hybrid' && props.imageOptions.smartPaste && clipboard.html ? clipboardHtmlToMarkdown(clipboard.html) ?? clipboard.text : clipboard.text
+      }
+      requireEditable(snapshot)
       const insert = target.kind === 'table' ? escapeCellInput(text) : text
-      view.dispatch({ changes: { from: selection.from, to: selection.to, insert }, selection: { anchor: selection.from + insert.length }, userEvent: 'input.paste' }); focus(); return
+      view.dispatch({ changes: { from: selection.from, to: selection.to, insert }, selection: { anchor: selection.from + insert.length }, userEvent: 'input.paste', annotations: isolateHistory.of('full') }); focus(); return
     }
     if (action.startsWith('table-') && target.kind === 'table') {
       const changes = tableOperation(target.source, target.from, target.row || 0, target.column || 0, action)
@@ -128,16 +172,32 @@ export function installEditorContext(view: EditorView, getProps: () => MarkdownE
     }
     if (action === 'indent-code' && target.body) { view.dispatch({ changes: indentRange(view.state, target.body.from, target.body.to), userEvent: 'input.indent' }); focus(); return }
     if (action === 'image-remove') { view.dispatch({ changes: { from: target.from, to: target.to, insert: '' }, userEvent: 'delete.image' }); view.focus(); return }
+    if (action === 'image-resize') {
+      const size = await chooseImageSize(currentImageSize(target.source))
+      if (!size) return
+      requireEditable(snapshot)
+      const changes = imageSizeEdit(target, size, markdownOptions)
+      if (changes) view.dispatch({ changes, userEvent: 'input.image-size', annotations: isolateHistory.of('full') })
+      view.focus(); return
+    }
+    if (action === 'image-upload' && target.address) {
+      const outcome = resultValue(await api.uploadImages({ id: snapshot.documentId, content: snapshot.content, revision: props.revision, sources: [target.address.value] }))
+      requireEditable(snapshot)
+      const replacement = outcome.replacements[0]?.url
+      if (!replacement) throw new Error('上传器没有返回图片地址。')
+      const insert = /^<img\b/i.test(target.source) ? replacement.replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/'/g, '&#39;') : replacement.replace(/[()]/g, value => value === '(' ? '%28' : '%29')
+      view.dispatch({ changes: { from: target.address.from, to: target.address.to, insert }, userEvent: 'input.image-upload', annotations: isolateHistory.of('full') }); view.focus(); return
+    }
     if (['image-copy', 'image-move', 'image-delete', 'image-save-as'].includes(action) && target.address) {
       const imageAction = action === 'image-save-as' ? 'save-as' : action.slice('image-'.length) as 'copy' | 'move' | 'delete'
       const outcome = resultValue(await api.imageOperation({ id: snapshot.documentId, content: snapshot.content, revision: props.revision, source: target.address.value, action: imageAction }))
       if (!outcome) return
-      requireCurrent(snapshot)
+      requireEditable(snapshot)
       if (imageAction === 'save-as') return
       const changes = outcome.source === null ? { from: target.from, to: target.to, insert: '' } : { from: target.address.from, to: target.address.to, insert: outcome.source.replace(/\\/g, '/').replace(/[ <>()[\]]/g, encodeURIComponent) }
       view.dispatch({ changes, userEvent: 'input.image-resource' }); focus(); return
     }
-    if (action === 'insert-image') { const markdown = resultValue(await api.insertImage(snapshot.documentId)); if (markdown) { requireCurrent(snapshot); select(); applyAction(view, 'image', markdown) }; return }
+    if (action === 'insert-image') { const markdown = resultValue(await api.insertImage(snapshot.documentId)); if (markdown) { requireEditable(snapshot); select(); applyAction(view, 'image', markdown) }; return }
     select()
     if (action === 'horizontal-rule') applyAction(view, 'rule')
     else if (action === 'undo' || action === 'redo' || formatActions.includes(action as typeof formatActions[number])) applyAction(view, action as EditorAction)
@@ -169,7 +229,7 @@ export function installEditorContext(view: EditorView, getProps: () => MarkdownE
     const current = view.state.selection.main
     const from = pos >= current.from && pos <= current.to ? current.from : pos
     const to = pos >= current.from && pos <= current.to ? current.to : pos
-    const snapshot: ContextSnapshot = { documentId: props.documentId, content: view.state.doc.toString(), target, selection: { from, to, text: view.state.doc.sliceString(from, to) } }
+    const snapshot: ContextSnapshot = { documentId: props.documentId, revision: props.revision, content: view.state.doc.toString(), target, selection: { from, to, text: view.state.doc.sliceString(from, to) } }
     const id = ++requestId
     try {
       let cachedSvg: string | null = null
@@ -178,6 +238,19 @@ export function installEditorContext(view: EditorView, getProps: () => MarkdownE
       }
       if (disposed || id !== requestId || !unchanged(snapshot)) return
       const menu = contextMenuRequest(view, target, to > from, target.kind !== 'diagram' || cachedSvg !== null)
+      if (props.spellcheck && !props.readOnly && !view.state.readOnly && ['editor', 'table'].includes(target.kind)) {
+        const wordRange = view.state.wordAt(view.posAtCoords(coordinates) ?? pos)
+        const word = wordRange && view.state.doc.sliceString(wordRange.from, wordRange.to)
+        if (wordRange && validSpellingWord(word)) {
+          const spelling = await apiSpelling(props, word)
+          if (disposed || id !== requestId || !unchanged(snapshot)) return
+          if (spelling?.misspelled && !spelling.ignored) {
+            snapshot.spelling = { from: wordRange.from, to: wordRange.to, word, suggestions: spelling.suggestions }
+            menu.spelling = { word, suggestions: spelling.suggestions }
+            menu.availableActions.push('spell-learn', 'spell-ignore', ...spelling.suggestions.map((_, index) => `spell-suggestion-${index}` as ContextMenuAction))
+          }
+        }
+      }
       const action = resultValue(await props.desktopApi.showContextMenu(menu))
       if (disposed || id !== requestId || action === null) return
       if (!menu.availableActions.includes(action)) throw new Error('该右键操作当前不可用。')

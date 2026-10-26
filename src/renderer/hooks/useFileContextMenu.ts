@@ -15,6 +15,7 @@ interface FileContextMenuOptions {
   onFileAction: (action: PendingFileAction) => void
   onError: (message: string) => void
   onRefresh: () => void
+  onMove?: (entry: FileEntry) => void
 }
 
 export function useFileContextMenu(options: FileContextMenuOptions) {
@@ -38,7 +39,7 @@ export function useFileContextMenu(options: FileContextMenuOptions) {
     const inScope = () => mounted.current && requestId.current === token && scope.current.revision === revision
     const isCurrent = () => inScope() && isFileContextTargetCurrent(target, latest.current.workspace, latest.current.getChildren(), latest.current.documents)
     if (!isCurrent()) return
-    const availableActions = fileContextActions(target)
+    const availableActions = fileContextActions(target).filter(action => action !== 'file-move' || initial.onMove)
     const readOnly = initial.documents.some(document => document.path && filePathKey(document.path) === filePathKey(entry.path) && document.readOnly)
     try {
       const result = await initial.api.showContextMenu({ kind: entry.kind === 'directory' ? 'folder' : 'file', readOnly, hasSelection: true, availableActions })
@@ -50,6 +51,15 @@ export function useFileContextMenu(options: FileContextMenuOptions) {
       const targetPath = target.entry.path
       const createPath = target.entry.kind === 'directory' ? targetPath : parentDirectory(targetPath)
       switch (action) {
+        case 'file-move': handlers.onMove?.(target.entry); return
+        case 'file-undo-move': {
+          const response = await handlers.api.undoFileOperation()
+          if (!inScope()) return
+          if (!response.ok) latest.current.onError(response.error.message)
+          else if (response.data) latest.current.onRefresh()
+          else latest.current.onError('当前窗口没有可以撤销的文件操作。')
+          return
+        }
         case 'file-open':
           if (target.entry.kind === 'directory') handlers.onOpenFolder(targetPath)
           else handlers.onOpen(targetPath)

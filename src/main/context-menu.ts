@@ -1,5 +1,6 @@
 import type { BrowserWindow, Menu } from 'electron'
 import type { ContextMenuAction, ContextMenuKind, ContextMenuRequest } from '../shared/contracts'
+import { validSpellingWord } from '../shared/spelling'
 import { boolean, invalid, object } from './errors'
 import type { DesktopMenuItem } from './menu'
 
@@ -24,30 +25,38 @@ const code: MenuGroup = [['edit-block', '编辑代码块'], ['copy-code', '复�
 const math: MenuGroup = [['edit-block', '编辑公式'], ['copy-math', '复制公式源码'], ['copy-mathml', '复制 MathML']]
 const diagrams: MenuGroup = [['edit-block', '编辑图表源码'], ['copy-diagram', '复制图表源码']]
 const resources: MenuGroup = [['resource-save-svg', '保存为 SVG'], ['resource-save-png', '保存为 PNG'], ['resource-save-jpeg', '保存为 JPEG'], ['view-resource', '查看资源']]
-const images: MenuGroup = [['view-resource', '查看原图片'], ['image-copy-path', '复制图片地址'], ['image-copy', '复制图片到…'], ['image-move', '移动 / 重命名图片…'], ['image-save-as', '图片另存为…'], ['image-remove', '移除图片引用'], ['image-delete', '删除图片（原文件及引用）…']]
+const images: MenuGroup = [['image-resize', '设置图片尺寸…'], ['image-upload', '上传图片'], ['view-resource', '查看原图片'], ['image-copy-path', '复制图片地址'], ['image-copy', '复制图片到…'], ['image-move', '移动 / 重命名图片…'], ['image-save-as', '图片另存为…'], ['image-remove', '移除图片引用'], ['image-delete', '删除图片（原文件及引用）…']]
 const links: MenuGroup = [['open-link', '打开链接'], ['copy-link', '复制链接地址']]
-const files: MenuGroup = [['file-open', '打开'], ['file-new-window', '在新窗口打开'], ['file-new-file', '新建文件…'], ['file-new-folder', '新建文件夹…'], ['file-duplicate', '创建副本'], ['file-rename', '重命名…'], ['file-trash', '移到回收站…'], ['file-copy-path', '复制路径'], ['file-reveal', '在文件管理器中显示'], ['file-refresh', '刷新']]
+const files: MenuGroup = [['file-move', '移动到…'], ['file-undo-move', '撤销文件操作'], ['file-open', '打开'], ['file-new-window', '在新窗口打开'], ['file-new-file', '新建文件…'], ['file-new-folder', '新建文件夹…'], ['file-duplicate', '创建副本'], ['file-rename', '重命名…'], ['file-trash', '移到回收站…'], ['file-copy-path', '复制路径'], ['file-reveal', '在文件管理器中显示'], ['file-refresh', '刷新']]
 const groupsByKind: Record<ContextMenuKind, MenuGroup[]> = {
   editor: [editing, copying, inline, blocks, inserts], table: [tables, editing, copying, inline, blocks, inserts],
   code: [code, editing, copying, inline, blocks, inserts], math: [math, resources, editing, copying],
   diagram: [diagrams, resources, editing, copying], image: [images, editing, copying], link: [links, editing, copying, inline],
   file: [files], folder: [files.filter(([action]) => action !== 'file-duplicate')],
 }
+const spellingActions: ContextMenuAction[] = ['spell-learn', 'spell-ignore', 'spell-suggestion-0', 'spell-suggestion-1', 'spell-suggestion-2', 'spell-suggestion-3', 'spell-suggestion-4']
 const knownActions = new Set(Object.values(groupsByKind).flat(2).filter((entry): entry is readonly [ContextMenuAction, string] => Array.isArray(entry)).map(([action]) => action))
+for (const action of spellingActions) knownActions.add(action)
 const readonlyActions = new Set<ContextMenuAction>([
   'copy', 'select-all', 'copy-markdown', 'copy-html', 'copy-plain', 'copy-table', 'copy-code', 'copy-math', 'copy-mathml', 'copy-diagram',
   'open-link', 'copy-link', 'image-copy-path', 'image-save-as', 'resource-save-svg', 'resource-save-png', 'resource-save-jpeg', 'view-resource',
   ...files.map(([action]) => action),
 ])
 const selectionActions = new Set<ContextMenuAction>(['cut', 'copy', 'copy-markdown', 'copy-html', 'copy-plain'])
-const localImageActions = new Set<ContextMenuAction>(['image-copy', 'image-move', 'image-save-as', 'image-delete'])
+const localImageActions = new Set<ContextMenuAction>(['image-copy', 'image-move', 'image-save-as', 'image-delete', 'image-upload'])
 
 export function validateContextMenu(value: unknown): ContextMenuRequest {
   const input = object(value)
   if (typeof input.kind !== 'string' || !Object.hasOwn(groupsByKind, input.kind)) invalid('右键菜单类型无效。')
   if (!Array.isArray(input.availableActions) || input.availableActions.length > 100 || input.availableActions.some((action) => typeof action !== 'string' || !knownActions.has(action as ContextMenuAction))) invalid('右键菜单操作无效。')
+  let spelling: ContextMenuRequest['spelling']
+  if (input.spelling !== undefined) {
+    const candidate = object(input.spelling)
+    if (!validSpellingWord(candidate.word) || !Array.isArray(candidate.suggestions) || candidate.suggestions.length > 5 || candidate.suggestions.some(item => typeof item !== 'string' || item.length > 128 || /[\x00-\x1f\x7f]/.test(item))) invalid('拼写建议无效。')
+    spelling = { word: candidate.word, suggestions: candidate.suggestions as string[] }
+  }
   return {
-    kind: input.kind as ContextMenuKind, readOnly: boolean(input.readOnly, '只读状态'), hasSelection: boolean(input.hasSelection, '选区状态'),
+    spelling, kind: input.kind as ContextMenuKind, readOnly: boolean(input.readOnly, '只读状态'), hasSelection: boolean(input.hasSelection, '选区状态'),
     availableActions: [...new Set(input.availableActions)] as ContextMenuAction[],
     hasLocalResource: input.hasLocalResource === undefined ? false : boolean(input.hasLocalResource, '本地图片状态'),
     canUndo: input.canUndo === undefined ? false : boolean(input.canUndo, '撤销状态'),
@@ -58,6 +67,14 @@ export function validateContextMenu(value: unknown): ContextMenuRequest {
 export function contextMenuTemplate(request: ContextMenuRequest, select: (action: ContextMenuAction) => void): DesktopMenuItem[] {
   const available = new Set(request.availableActions)
   const result: DesktopMenuItem[] = []
+  if (request.spelling && !request.readOnly) {
+    request.spelling.suggestions.forEach((suggestion, index) => {
+      const action = `spell-suggestion-${index}` as ContextMenuAction
+      if (available.has(action)) result.push({ id: action, label: suggestion.replaceAll('&', '&&'), click: () => select(action) })
+    })
+    if (available.has('spell-learn')) result.push({ id: 'spell-learn', label: '加入拼写词典', click: () => select('spell-learn') })
+    if (available.has('spell-ignore')) result.push({ id: 'spell-ignore', label: '忽略此词的拼写建议（当前窗口）', click: () => select('spell-ignore') })
+  }
   for (const group of groupsByKind[request.kind]) {
     const items = group.filter(([action]) => available.has(action) && (!request.readOnly || readonlyActions.has(action)) &&
       (!selectionActions.has(action) || request.hasSelection) && (!localImageActions.has(action) || request.hasLocalResource) &&

@@ -1,7 +1,7 @@
 import { test, expect } from '@playwright/test'
 import { readFile } from 'node:fs/promises'
 import path from 'node:path'
-import { launchDesktop, openFixture, readCreatedText, setSaveDialog, stopDesktop, type DesktopSession } from './desktop-helpers'
+import { captureDesktop, launchDesktop, openFixture, readCreatedText, setSaveDialog, stopDesktop, type DesktopSession } from './desktop-helpers'
 
 let session: DesktopSession
 test.beforeEach(async () => { session = await launchDesktop() })
@@ -51,7 +51,7 @@ test('ONB 十二个分组默认收起，点击或键盘展开正文且不修改�
   expect(await source()).toBe(original)
   await expect(session.page.getByTestId('dirty-indicator')).toHaveCount(0)
   expect(await readFile(file, 'utf8')).toBe(original)
-  await session.page.screenshot({ path: '.debug/details-collapsed.png' })
+  await captureDesktop(session, '.debug/details-collapsed.png')
 })
 
 test('嵌套分组独立折叠，显式 open 属性在预览和导出中保留，未闭合正文仍可见', async () => {

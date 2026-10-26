@@ -12,6 +12,19 @@ function popupWindow() {
 }
 
 describe('Context menus', () => {
+  it('only offers temporary spelling suppression for editable misspelled words', () => {
+    const select = vi.fn()
+    const value = validateContextMenu(request({ availableActions: ['spell-ignore', 'spell-learn'], spelling: { word: 'helo', suggestions: [] } }))
+    const menu = contextMenuTemplate(value, select)
+    expect(ids(menu)).toEqual(['spell-learn', 'spell-ignore'])
+    const ignore = menu.find(item => item.id === 'spell-ignore')!
+    expect(ignore.label).toContain('当前窗口')
+    ignore.click?.()
+    expect(select).toHaveBeenCalledWith('spell-ignore')
+    expect(contextMenuTemplate({ ...value, readOnly: true }, select)).toEqual([])
+    expect(contextMenuTemplate({ ...value, spelling: undefined }, select)).toEqual([])
+  })
+
   it('only accepts fixed kinds/actions and filters selection, undo, read-only and local capabilities', () => {
     expect(() => validateContextMenu({ ...request(), kind: 'constructor' })).toThrow()
     expect(() => validateContextMenu({ ...request(), availableActions: ['execute-script'] })).toThrow()

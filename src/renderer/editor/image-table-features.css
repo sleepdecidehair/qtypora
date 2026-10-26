@@ -1,0 +1,27 @@
+.cm-table-tools { margin: 6px 0 0; color: var(--color-text-muted); font: 12px/1.5 var(--font-interface); }
+.cm-table-tools > summary { width: fit-content; padding: 2px 4px; border-radius: 4px; cursor: pointer; user-select: none; }
+.cm-table-tools > summary:hover { color: var(--color-text); background: var(--color-hover); }
+.cm-table-tools > summary:focus-visible { outline: 2px solid var(--color-link); outline-offset: 2px; }
+.cm-table-controls { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; padding: 7px 4px; font: 12px/1.5 var(--font-ui, sans-serif); color: var(--color-text-muted); }
+.cm-table-controls label { display: inline-flex; align-items: center; gap: 4px; }
+.cm-table-controls input { width: 55px; padding: 3px; color: var(--color-text); background: var(--color-surface); border: 1px solid var(--color-border); border-radius: 4px; }
+.cm-table-controls button, .cm-table-drag-handles button { padding: 3px 6px; color: var(--color-text); background: var(--color-surface); border: 1px solid var(--color-border); border-radius: 4px; cursor: pointer; font: inherit; }
+.cm-table-controls button:hover, .cm-table-drag-handles button:hover { background: var(--color-hover); }
+.cm-table-controls small { flex-basis: 100%; font-size: 11px; }
+.cm-table-controls [role=status] { color: var(--color-text-muted); }
+.cm-table-drag-handles { display: flex; flex-wrap: wrap; gap: 8px; margin: 5px 0; font: 11px/1.4 var(--font-ui, sans-serif); color: var(--color-text-muted); }
+.cm-table-handle-group { display: flex; gap: 3px; align-items: center; overflow-x: auto; max-width: 100%; }
+.cm-table-handle-group button { flex: 0 0 auto; cursor: grab; }
+.cm-live-table .cm-table-cell-selected { background: color-mix(in srgb, var(--color-link) 18%, var(--color-surface)) !important; outline: 1px solid var(--color-link); outline-offset: -1px; }
+.cm-live-table.cm-table-selecting-range, .cm-live-table.cm-table-selecting-range * { cursor: crosshair; user-select: none; }
+.cm-table-controls button:focus-visible, .cm-table-drag-handles button:focus-visible, .cm-table-controls input:focus-visible { outline: 2px solid var(--color-link); outline-offset: 2px; }
+@media print { .cm-table-tools { display: none; } }
+.cm-image-size-dialog { width: 360px; max-width: calc(100vw - 40px); padding: 22px; color: var(--color-text); background: var(--color-surface); border: 1px solid var(--color-border); border-radius: 10px; box-shadow: var(--shadow-dialog); font: 14px/1.5 var(--font-interface); }
+.cm-image-size-dialog::backdrop { background: var(--color-backdrop); }
+.cm-image-size-dialog h2 { margin: 0 0 8px; font-size: 18px; }
+.cm-image-size-dialog p { color: var(--color-text-muted); font-size: 13px; }
+.cm-image-size-dialog label { display: flex; justify-content: space-between; align-items: center; margin: 12px 0; }
+.cm-image-size-dialog input, .cm-image-size-dialog select { width: 130px; padding: 6px 8px; color: var(--color-text); background: var(--color-surface); border: 1px solid var(--color-border); border-radius: 4px; }
+.cm-image-size-actions { display: flex; justify-content: flex-end; gap: 8px; }
+.cm-image-size-actions button { padding: 6px 12px; cursor: pointer; color: var(--color-text); background: var(--color-surface-muted); border: 1px solid var(--color-border); border-radius: 4px; }
+.cm-image-size-dialog [role=alert] { color: var(--color-error); }

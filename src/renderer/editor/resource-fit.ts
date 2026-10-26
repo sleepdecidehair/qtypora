@@ -2,6 +2,13 @@ import { EditorView, ViewPlugin } from '@codemirror/view'
 
 export interface ResourceSize { width: number; height: number }
 
+export function requestedImageSize(natural: ResourceSize, width: string | null, height: string | null): ResourceSize | null {
+  const dimension = (value: string | null) => value && /^\d+$/.test(value) && Number(value) >= 1 && Number(value) <= 10000 ? Number(value) : null
+  const requestedWidth = dimension(width), requestedHeight = dimension(height)
+  if ((!requestedWidth && !requestedHeight) || !natural.width || !natural.height) return null
+  return { width: requestedWidth ?? requestedHeight! * natural.width / natural.height, height: requestedHeight ?? requestedWidth! * natural.height / natural.width }
+}
+
 export function containResource(size: ResourceSize, available: ResourceSize, allowUpscale = false): ResourceSize {
   if (![size.width, size.height, available.width, available.height].every((value) => Number.isFinite(value) && value > 0)) return { width: 0, height: 0 }
   const scale = Math.min(allowUpscale ? Infinity : 1, available.width / size.width, available.height / size.height)
@@ -38,7 +45,9 @@ export function fitEditorResources(view: EditorView): void {
     if (!image.naturalWidth || !image.naturalHeight) continue
     const inline = image.closest<HTMLElement>('.cm-live-media')
     const imageAvailable = inline ? { ...available, width: Math.max(1, available.width - (inline.querySelector('button')?.getBoundingClientRect().width || 0)) } : available
-    changed = applySize(image, containResource({ width: image.naturalWidth, height: image.naturalHeight }, imageAvailable, !inline)) || changed
+    const natural = { width: image.naturalWidth, height: image.naturalHeight }
+    const requested = requestedImageSize(natural, image.getAttribute('width'), image.getAttribute('height'))
+    changed = applySize(image, containResource(requested ?? natural, imageAvailable, requested ? false : !inline)) || changed
   }
   for (const node of view.contentDOM.querySelectorAll<HTMLElement>('.md-math')) {
     const math = node.querySelector('math')

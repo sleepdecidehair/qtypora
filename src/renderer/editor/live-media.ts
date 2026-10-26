@@ -1,12 +1,12 @@
 import { EditorView, WidgetType } from '@codemirror/view'
 import { editLiveBlock } from './live-blocks'
-import { hydratePreview, markdownParser, sanitizeMarkdownHtml } from './markdown'
+import { hydratePreview, getMarkdownParser, sanitizeMarkdownHtml } from './markdown'
 import type { LiveOptions } from './live-types'
 import { fitEditorResources } from './resource-fit'
 
 export class LiveMediaWidget extends WidgetType {
   constructor(readonly from: number, readonly to: number, readonly line: number, readonly source: string, readonly kind: 'math' | 'image', readonly options: LiveOptions) { super() }
-  eq(other: LiveMediaWidget): boolean { return this.from === other.from && this.source === other.source && this.options.theme === other.options.theme && this.options.readOnly === other.options.readOnly }
+  eq(other: LiveMediaWidget): boolean { return this.from === other.from && this.source === other.source && this.options.mathKey === other.options.mathKey && this.options.theme === other.options.theme && this.options.readOnly === other.options.readOnly }
   toDOM(view: EditorView): HTMLElement {
     const container = document.createElement('span')
     container.className = 'cm-live-media'
@@ -16,10 +16,14 @@ export class LiveMediaWidget extends WidgetType {
     container.dataset.sourceEnd = String(this.line)
     const content = document.createElement('span')
     const staging = document.createElement('span')
-    staging.innerHTML = sanitizeMarkdownHtml(markdownParser.renderInline(this.source))
+    staging.innerHTML = sanitizeMarkdownHtml(getMarkdownParser(this.options.markdownOptions).renderInline(this.source))
     const sources = new Map<HTMLElement, string>()
     for (const node of staging.querySelectorAll<HTMLElement>('[data-math]')) {
-      sources.set(node, node.textContent || '')
+      const source = node.textContent || ''
+      sources.set(node, source)
+      const index = this.options.mathExpressions?.findIndex(expression => expression.source === source && expression.line === this.line && !expression.display)
+      if (index !== undefined && index >= 0) node.dataset.mathIndex = String(index)
+      else node.removeAttribute('data-math-index')
       node.replaceChildren()
       node.dataset.sourceFrom = String(this.from)
       node.dataset.sourceLine = String(this.line)
@@ -28,6 +32,14 @@ export class LiveMediaWidget extends WidgetType {
     content.style.visibility = 'hidden'
     content.append(...Array.from(staging.childNodes))
     container.append(content)
+    content.addEventListener('click', event => {
+      const link = event.target instanceof Element ? event.target.closest('[href]') : null
+      const href = link?.getAttribute('href')
+      if (href && /^#mjx-eqn(?::|%3a)/i.test(href)) {
+        event.preventDefault()
+        if (this.options.readOnly || event.ctrlKey || event.metaKey) this.options.onLinkOpen(href)
+      }
+    })
     if (!this.options.readOnly) {
       const edit = document.createElement('button')
       edit.type = 'button'; edit.dataset.action = 'edit-block'; edit.className = 'cm-live-media-edit'

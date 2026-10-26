@@ -36,6 +36,17 @@ export async function launchDesktop(existingRoot?: string): Promise<DesktopSessi
   }
   env.QTYPORA_TEST_USER_DATA = userData
   const app = await _electron.launch({ args: [process.cwd()], cwd: process.cwd(), env })
+  if (env.QTYPORA_TEST_VISIBLE !== '1') await app.evaluate(({ app, BrowserWindow }) => {
+    const isolate = (window: Electron.BrowserWindow): void => {
+      window.webContents.setBackgroundThrottling(false)
+      const hide = () => window.hide()
+      Reflect.set(window, 'qtyporaTestHideWindow', hide)
+      window.on('show', hide)
+      window.hide()
+    }
+    BrowserWindow.getAllWindows().forEach(isolate)
+    app.on('browser-window-created', (_event, window) => isolate(window))
+  })
   const page = await app.firstWindow()
   const errors: string[] = []
   page.on('pageerror', error => errors.push(error.message))
@@ -61,6 +72,46 @@ export async function launchDesktop(existingRoot?: string): Promise<DesktopSessi
     await stopDesktop(session, !existingRoot)
     throw error
   }
+}
+
+/** Capture Chromium's real layout while keeping automated windows away from host keyboard input. */
+export async function captureDesktop(session: DesktopSession, destination: string, options: { presentInactive?: boolean } = {}): Promise<void> {
+  await mkdir(path.dirname(destination), { recursive: true })
+  if (process.env.QTYPORA_TEST_VISIBLE === '1') {
+    await session.page.screenshot({ path: destination })
+    return
+  }
+  const nativeWindow = await session.app.browserWindow(session.page)
+  const png = await nativeWindow.evaluate(async (window, presentInactive) => {
+    if (window.isVisible()) throw new Error('Background capture requires a hidden native window')
+    const hide = Reflect.get(window, 'qtyporaTestHideWindow') as (() => void) | undefined
+    const focusable = window.isFocusable()
+    let timer: ReturnType<typeof setTimeout> | undefined
+    if (presentInactive && hide) window.removeListener('show', hide)
+    try {
+      // Present only when a resize needs a fresh native surface. Changing native focusability
+      // can blur active inputs, so ordinary screenshots must keep the window entirely hidden.
+      if (presentInactive) { window.setFocusable(false); window.showInactive() }
+      if (window.isFocused()) throw new Error('Screenshot window unexpectedly acquired keyboard focus')
+      const image = await Promise.race([
+        window.webContents.capturePage(undefined, { stayAwake: true, stayHidden: !presentInactive }),
+        new Promise<never>((_resolve, reject) => { timer = setTimeout(() => reject(new Error('Timed out waiting for an Electron screenshot frame')), 10000) }),
+      ])
+      if (window.isFocused()) throw new Error('Screenshot window unexpectedly acquired keyboard focus')
+      if (image.isEmpty()) throw new Error('Electron returned an empty desktop screenshot')
+      return image.toPNG().toString('base64')
+    } finally {
+      if (timer) clearTimeout(timer)
+      if (presentInactive) {
+        window.hide()
+        window.setFocusable(focusable)
+        if (hide) window.on('show', hide)
+      }
+    }
+  }, options.presentInactive === true)
+  const bytes = Buffer.from(png, 'base64')
+  if (bytes.length < 24 || !bytes.subarray(0, 8).equals(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10])) || bytes.readUInt32BE(16) < 1 || bytes.readUInt32BE(20) < 1) throw new Error('Electron returned an invalid PNG screenshot')
+  await writeFile(destination, bytes)
 }
 
 export async function stopDesktop(session: DesktopSession, removeRoot = true): Promise<void> {

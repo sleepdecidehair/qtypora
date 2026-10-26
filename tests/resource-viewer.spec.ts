@@ -1,7 +1,7 @@
 import { test, expect } from '@playwright/test'
 import { readFile, writeFile } from 'node:fs/promises'
 import path from 'node:path'
-import { launchDesktop, openFixture, setContextMenuChoice, setMessageResponse, stopDesktop, type DesktopSession } from './desktop-helpers'
+import { captureDesktop, launchDesktop, openFixture, setContextMenuChoice, setMessageResponse, stopDesktop, type DesktopSession } from './desktop-helpers'
 
 let session: DesktopSession
 test.beforeEach(async () => { session = await launchDesktop() })
@@ -62,7 +62,7 @@ test('大图片按鼠标位置缩放、拖动、恢复全图，关闭保留文�
   const moved = await viewportGeometry()
   expect(moved.x - zoomed.x).toBeCloseTo(110, 0)
   expect(moved.y - zoomed.y).toBeCloseTo(70, 0)
-  await session.page.screenshot({ path: test.info().outputPath('image-detail.png') })
+  await captureDesktop(session, test.info().outputPath('image-detail.png'))
   // Native menu accelerators must also be isolated from the article behind the modal.
   await session.page.keyboard.press('ControlOrMeta+/')
   await session.page.keyboard.press('ControlOrMeta+Shift+=')

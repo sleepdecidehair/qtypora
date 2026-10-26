@@ -1,8 +1,9 @@
 import { StateEffect, StateField } from '@codemirror/state'
 import { ViewPlugin, type EditorView, type ViewUpdate } from '@codemirror/view'
-import { findTextMatches, indexArticleText, matchRange } from './reading-search'
+import { indexArticleText, matchRange } from './reading-search'
+import { createTextSearch } from '../../shared/search'
 
-export interface FolderSearchQuery { query: string; caseSensitive: boolean }
+export interface FolderSearchQuery { query: string; caseSensitive: boolean; wholeWord?: boolean; regex?: boolean }
 
 export const setFolderSearch = StateEffect.define<FolderSearchQuery | null>()
 const folderSearch = StateField.define<FolderSearchQuery | null>({
@@ -43,12 +44,15 @@ const highlights = ViewPlugin.fromClass(class {
     this.matches.clear(); this.active.clear()
     const search = this.view.state.field(folderSearch)
     if (!search?.query.trim()) { this.clear(); return }
+    let matcher: ReturnType<typeof createTextSearch>
+    try { matcher = createTextSearch(search.query, search) }
+    catch { this.clear(); return }
     const activeLine = this.view.state.doc.lineAt(this.view.state.selection.main.head).number
     for (const root of this.view.contentDOM.querySelectorAll<HTMLElement>(SEARCH_ROOTS)) {
       if (root.parentElement?.closest(SEARCH_ROOTS)) continue
       const index = indexArticleText(root, 'button,input,select,textarea')
       const sourceLine = root.dataset.sourceLine ? Number(root.dataset.sourceLine) : root.classList.contains('cm-line') ? this.view.state.doc.lineAt(this.view.posAtDOM(root)).number : Number(root.closest<HTMLElement>('[data-source-line]')?.dataset.sourceLine)
-      for (const match of findTextMatches(index.text, search.query, search.caseSensitive)) {
+      for (const match of matcher.find(index.text).filter(match => match.to > match.from)) {
         const range = matchRange(index, match)
         if (!range) continue
         this.matches.add(range)

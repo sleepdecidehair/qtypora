@@ -259,3 +259,45 @@ describe('Document sessions and independent drafts', () => {
     await expect(fs.stat(path.join(directory, 'older.md'))).rejects.toMatchObject({ code: 'ENOENT' })
   })
 })
+
+
+describe('Imported content and moved paths', () => {
+  it('keeps imported content dirty and recoverable before the first save', async () => {
+    const session = makeSession()
+    const record = await session.createImported('# Imported\n')
+    expect(record.unsaved).toBe(true)
+    expect(store.drafts.get(record.id)?.content).toBe(record.content)
+    expect(await session.close({ id: record.id, content: record.content, revision: 0 })).toBe(false)
+    const saved = await session.save({ id: record.id, content: record.content, revision: 0 })
+    expect(saved?.unsaved).toBe(false)
+    expect(await fs.readFile(saved!.path!, 'utf8')).toBe(record.content)
+    expect(store.drafts.has(record.id)).toBe(false)
+  })
+
+  it('does not let a save queued before a move recreate the former path', async () => {
+    const source = path.join(directory, 'original.md')
+    const destination = path.join(directory, 'moved.md')
+    await fs.writeFile(source, 'before')
+    const session = makeSession()
+    const record = await session.open(source, true)
+    let release: (() => void) | undefined
+    let entered: (() => void) | undefined
+    const ready = new Promise<void>(resolve => { entered = resolve })
+    const move = session.withPathLocks(source, async () => {
+      entered!()
+      await new Promise<void>(resolve => { release = resolve })
+      await fs.rename(source, destination)
+      await session.updatePaths(source, destination)
+    })
+    await ready
+    const saving = session.save({ id: record.id, content: 'after', revision: 1 })
+    await new Promise(resolve => setTimeout(resolve, 20))
+    const rejection = expect(saving).rejects.toMatchObject({ code: 'CONFLICT' })
+    release!()
+    await move
+    await rejection
+    await expect(fs.stat(source)).rejects.toMatchObject({ code: 'ENOENT' })
+    expect(await fs.readFile(destination, 'utf8')).toBe('before')
+    expect(store.drafts.get(record.id)?.content).toBe('after')
+  })
+})

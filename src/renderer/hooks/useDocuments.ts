@@ -9,7 +9,7 @@ export interface EditorDocument extends DocumentRecord {
 }
 
 function editorDocument(record: DocumentRecord): EditorDocument {
-  return { ...record, revision: 0, savedContent: record.content, isSaving: false, externalChange: null }
+  return { ...record, revision: 0, savedContent: record.unsaved ? null : record.content, isSaving: false, externalChange: null }
 }
 
 export function snapshot(document: EditorDocument): DocumentSnapshot {
@@ -25,6 +25,7 @@ export function useDocuments(api: DesktopApi, reportError: (message: string) => 
   const documentsRef = useRef<EditorDocument[]>([])
   const [activeId, setActiveId] = useState<string | null>(null)
   const activeIdRef = useRef<string | null>(null)
+  const navigationGeneration = useRef(0)
   const pendingSync = useRef(new Set<string>())
   const syncTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   const saveLocks = useRef(new Set<string>())
@@ -37,15 +38,16 @@ export function useDocuments(api: DesktopApi, reportError: (message: string) => 
   }, [])
 
   const activate = useCallback((id: string) => {
+    navigationGeneration.current++
     activeIdRef.current = id
     setActiveId(id)
   }, [])
 
-  const addDocument = useCallback((record: DocumentRecord) => {
+  const addDocument = useCallback((record: DocumentRecord, shouldActivate = true) => {
     update(current => current.some(item => item.id === record.id)
       ? current
       : [...current, editorDocument(record)])
-    activate(record.id)
+    if (shouldActivate) activate(record.id)
   }, [activate, update])
 
   const acceptResult = useCallback(<T,>(result: Result<T>): T | undefined => {
@@ -85,16 +87,37 @@ export function useDocuments(api: DesktopApi, reportError: (message: string) => 
   }, [flushSync, update])
 
   const create = useCallback(async () => {
+    const generation = ++navigationGeneration.current
     const record = acceptResult(await api.createDocument())
-    if (record) addDocument(record)
+    if (record) addDocument(record, generation === navigationGeneration.current)
+  }, [api, acceptResult, addDocument])
+
+  const importFile = useCallback(async () => {
+    const generation = ++navigationGeneration.current
+    const record = acceptResult(await api.importDocument())
+    if (record) addDocument(record, generation === navigationGeneration.current)
   }, [api, acceptResult, addDocument])
 
   const open = useCallback(async (path?: string) => {
     const existing = path ? documentsRef.current.find(item => item.path?.toLowerCase() === path.toLowerCase()) : null
-    if (existing) { activate(existing.id); return }
+    if (existing) { activate(existing.id); return existing }
+    const generation = ++navigationGeneration.current
     const record = acceptResult(await api.openFile(path))
-    if (record) addDocument(record)
+    const isCurrent = generation === navigationGeneration.current
+    if (record) addDocument(record, isCurrent)
+    return isCurrent ? record ?? null : null
   }, [api, acceptResult, activate, addDocument])
+
+  const openLinked = useCallback(async (id: string, target: string) => {
+    const generation = ++navigationGeneration.current
+    const result = acceptResult(await api.openLinkedFile({ id, target }))
+    const isCurrent = generation === navigationGeneration.current
+    if (result?.document) addDocument(result.document, isCurrent)
+    if (!isCurrent || !result) return null
+    // An already-open target can contain edits not yet flushed to the main process.
+    const local = result.document && documentsRef.current.find(item => item.id === result.document!.id)
+    return local ? { ...result, document: local } : result
+  }, [api, acceptResult, addDocument])
 
   const save = useCallback(async (saveAs = false, documentId = activeIdRef.current): Promise<boolean> => {
     const current = documentsRef.current.find(item => item.id === documentId)
@@ -169,9 +192,10 @@ export function useDocuments(api: DesktopApi, reportError: (message: string) => 
   }, [update])
 
   const recover = useCallback(async (id: string) => {
+    const generation = ++navigationGeneration.current
     const record = acceptResult(await api.recoverDraft(id))
     if (!record) return false
-    addDocument(record)
+    addDocument(record, generation === navigationGeneration.current)
     update(all => all.map(item => item.id === record.id ? { ...item, savedContent: null } : item))
     return true
   }, [api, acceptResult, addDocument, update])
@@ -187,7 +211,7 @@ export function useDocuments(api: DesktopApi, reportError: (message: string) => 
 
   return {
     documents, documentsRef, activeId, active: documents.find(item => item.id === activeId) ?? null,
-    activate, addDocument, changeContent, create, open, save, close, requestClose, reload,
+    activate, addDocument, changeContent, create, importFile, open, openLinked, save, close, requestClose, reload,
     externalChange, renamed, recover, nextDocument, flushSync, acceptResult,
   }
 }

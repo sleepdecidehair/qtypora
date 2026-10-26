@@ -1,7 +1,9 @@
 import type { EditorState } from '@codemirror/state'
+import type { SyntaxNode } from '@lezer/common'
 import { syntaxTree } from '@codemirror/language'
 import type { ContextMenuKind } from '../../shared/contracts'
-import { markdownParser } from './markdown'
+import { getMarkdownParser } from './markdown'
+import { markdownOptionsFacet } from './markdown-config'
 import { parseTableSource } from './table-model'
 
 export interface ContextTarget {
@@ -11,8 +13,34 @@ export interface ContextTarget {
   source: string
   body?: { from: number; to: number; text: string }
   address?: { from: number; to: number; value: string }
+  imageText?: { alt: string; title: string }
   row?: number
   column?: number
+}
+
+function referenceImageTarget(state: EditorState, node: SyntaxNode): ContextTarget | null {
+  const parser = getMarkdownParser(state.facet(markdownOptionsFacet))
+  const source = state.doc.sliceString(node.from, node.to)
+  const label = node.getChild('LinkLabel')
+  const explicit = label ? state.doc.sliceString(label.from + 1, label.to - 1) : ''
+  const implicit = source.match(/^!\[((?:\\.|[^\]])*)\]/)?.[1] || ''
+  const normalize = (value: string) => parser.utils.unescapeAll(value).trim().replace(/\s+/g, ' ').toUpperCase()
+  const key = normalize(explicit || implicit)
+  let address: ContextTarget['address']
+  syntaxTree(state).iterate({ enter(definition) {
+    if (address || definition.name !== 'LinkReference') return
+    const name = definition.node.getChild('LinkLabel'), url = definition.node.getChild('URL')
+    if (!name || !url || normalize(state.doc.sliceString(name.from + 1, name.to - 1)) !== key) return
+    let from = url.from, to = url.to
+    if (state.doc.sliceString(from, from + 1) === '<') { from++; to-- }
+    address = { from, to, value: parser.normalizeLink(parser.utils.unescapeAll(state.doc.sliceString(from, to))) }
+  } })
+  if (!address) return null
+  const environment = {}
+  parser.parse(state.doc.toString(), environment)
+  const image = parser.parseInline(source, environment).flatMap(token => token.children || []).find(token => token.type === 'image')
+  if (!image) return null
+  return { kind: 'image', from: node.from, to: node.to, source, address, imageText: { alt: parser.renderer.renderInlineAsText(image.children || [], parser.options, environment), title: image.attrGet('title') || '' } }
 }
 
 export function sourceContextTarget(state: EditorState, position: number): ContextTarget {
@@ -31,11 +59,16 @@ export function sourceContextTarget(state: EditorState, position: number): Conte
         if (state.doc.sliceString(from, from + 1) === '<') { from++; to-- }
         return { kind: node.name === 'Image' ? 'image' : 'link', from: node.from, to: node.to, source: state.doc.sliceString(node.from, node.to), address: { from, to, value: state.doc.sliceString(from, to).replace(/\\([\\() ])/g, '$1') } }
       }
+      if (node.name === 'Image') {
+        const reference = referenceImageTarget(state, node)
+        if (reference) return reference
+      }
     }
     node = node.parent
   }
   // Token maps preserve canonical source offsets; no rich-text serialization is involved.
   if (state.doc.length <= 200000) {
+    const markdownParser = getMarkdownParser(state.facet(markdownOptionsFacet))
     for (const token of markdownParser.parse(state.doc.toString(), {})) {
       if (!token.map || token.nesting === -1) continue
       const from = state.doc.line(token.map[0] + 1).from
@@ -56,7 +89,7 @@ export function sourceContextTarget(state: EditorState, position: number): Conte
         const isClosedFence = fenced && firstFence && new RegExp(`^\\s{0,3}${firstFence[1][0]}{${firstFence[1].length},}\\s*$`).test(lastLine) && source.includes('\n')
         const closing = isClosedFence ? source.lastIndexOf('\n') : token.type === 'math_block' ? source.lastIndexOf('$$') : source.length
         const end = Math.max(start, closing)
-        return { kind: token.type === 'math_block' ? 'math' : fenced && token.info.trim().split(/\s+/)[0] === 'mermaid' ? 'diagram' : 'code', from, to, source, body: { from: from + start, to: from + end, text: source.slice(start, end) } }
+        return { kind: token.type === 'math_block' ? 'math' : fenced && ['mermaid', 'sequence', 'flow'].includes(token.info.trim().split(/\s+/)[0]) ? 'diagram' : 'code', from, to, source, body: { from: from + start, to: from + end, text: source.slice(start, end) } }
       }
     }
   }
@@ -76,14 +109,15 @@ export function contextObjectSource(target: ContextTarget): string { return targ
 
 export function imageContextTarget(state: EditorState, source: string, from: number, to: number): ContextTarget | null {
   let match: ContextTarget | null = null
+  const parser = getMarkdownParser(state.facet(markdownOptionsFacet))
+  const normalize = (value: string) => parser.normalizeLink(parser.utils.unescapeAll(value))
   syntaxTree(state).iterate({ from, to, enter: (node) => {
     if (match || node.name !== 'Image') return
-    const url = node.node.getChild('URL')
-    if (!url) return
-    const candidate = sourceContextTarget(state, url.from)
-    if (candidate.kind === 'image' && candidate.address?.value === source) match = candidate
+    const candidate = sourceContextTarget(state, node.from + 2)
+    if (candidate.kind === 'image' && candidate.address && normalize(candidate.address.value) === normalize(source)) match = candidate
   } })
   if (!match) {
+    const markdownParser = getMarkdownParser(state.facet(markdownOptionsFacet))
     const section = state.doc.sliceString(from, to)
     for (const tag of section.matchAll(/<img\b[^>]*>/gi)) {
       const attribute = tag[0].match(/\bsrc\s*=\s*(["'])(.*?)\1/i)

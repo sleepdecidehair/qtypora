@@ -6,10 +6,12 @@ interface SearchHighlightProps {
   query: string
   caseSensitive: boolean
   excerpt?: boolean
+  wholeWord?: boolean
+  regex?: boolean
 }
 
-export function SearchHighlight({ text, query, caseSensitive, excerpt = false }: SearchHighlightProps): React.JSX.Element {
-  const matches = findTextMatches(text, query, caseSensitive)
+export function SearchHighlight({ text, query, caseSensitive, excerpt = false, wholeWord = false, regex = false }: SearchHighlightProps): React.JSX.Element {
+  const matches = findTextMatches(text, query, caseSensitive, { wholeWord, regex }).filter(match => match.to > match.from)
   // Keep a late match in view when the sidebar truncates a long result line.
   let start = excerpt && matches.length ? Math.max(0, matches[0].from - 12) : 0
   if (start && (text.codePointAt(start - 1) ?? 0) > 0xffff) start--

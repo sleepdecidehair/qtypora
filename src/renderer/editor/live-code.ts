@@ -1,9 +1,11 @@
+import { supportsPreview } from './preview-budget'
 import { EditorSelection, Prec, StateField, type EditorState, type Extension, type Range, type TransactionSpec } from '@codemirror/state'
 import { syntaxTree } from '@codemirror/language'
 import { isolateHistory } from '@codemirror/commands'
 import { Decoration, EditorView, WidgetType, keymap, type DecorationSet } from '@codemirror/view'
 import { editLiveBlock, liveEditingBlock } from './live-blocks'
 import { attachCodeLanguageSuggestions } from './code-language-suggestions'
+import { markdownOptionsFacet } from './markdown-config'
 import { codeLanguageInputValue } from './code-languages'
 
 export interface LiveCodeBlock {
@@ -19,7 +21,7 @@ export interface LiveCodeBlock {
 
 export function liveCodeBlocks(state: EditorState): LiveCodeBlock[] {
   const blocks: LiveCodeBlock[] = []
-  if (state.doc.length > 200000) return blocks
+  if (!supportsPreview(state)) return blocks
   syntaxTree(state).iterate({ enter: (node) => {
     if (node.name !== 'FencedCode') return
     if (node.node.parent?.name !== 'Document') return false
@@ -29,7 +31,7 @@ export function liveCodeBlocks(state: EditorState): LiveCodeBlock[] {
     const last = state.doc.lineAt(marks[1].from)
     const language = node.node.getChild('CodeInfo')
     const info = language ? state.doc.sliceString(language.from, language.to).trim() : ''
-    if (info.split(/\s+/)[0].toLowerCase() === 'mermaid' || last.number <= first.number + 1) return false
+    if ((state.facet(markdownOptionsFacet).diagrams && ['mermaid', 'sequence', 'flow'].includes(info.split(/\s+/)[0].toLowerCase())) || last.number <= first.number + 1) return false
     blocks.push({ from: first.from, to: last.to, bodyFrom: first.to + 1, bodyTo: last.from - 1, firstLine: first.number, lastLine: last.number, opening: first.text, language: info })
     return false
   } })
@@ -38,21 +40,22 @@ export function liveCodeBlocks(state: EditorState): LiveCodeBlock[] {
 
 export function fenceCreation(state: EditorState): TransactionSpec | null {
   const selection = state.selection.main
-  if (state.readOnly || state.doc.length > 200000 || state.selection.ranges.length !== 1 || !selection.empty) return null
+  if (state.readOnly || !supportsPreview(state) || state.selection.ranges.length !== 1 || !selection.empty) return null
   const line = state.doc.lineAt(selection.head)
   const match = /^( {0,3})(`{3,})([^`\n]*)$/.exec(line.text)
   if (!match || selection.head !== line.to) return null
   let node = syntaxTree(state).resolveInner(selection.head, -1)
   while (node.parent && node.name !== 'FencedCode') node = node.parent
   if (node.name !== 'FencedCode' || node.parent?.name !== 'Document' || state.doc.lineAt(node.from).number !== line.number || node.getChildren('CodeMark').length > 1) return null
-  const insert = `\n\n${match[1]}${match[2]}`
+  const language = match[3].trim() ? '' : state.facet(markdownOptionsFacet).defaultCodeLanguage
+  const insert = `${language}\n\n${match[1]}${match[2]}`
   return {
     changes: { from: line.to, insert },
-    selection: EditorSelection.cursor(line.to + 1),
+    selection: EditorSelection.cursor(line.to + language.length + 1),
     annotations: isolateHistory.of('full'),
     userEvent: 'input.code-fence',
     scrollIntoView: true,
-    ...(match[3].trim().toLowerCase() === 'mermaid' ? { effects: editLiveBlock.of({ from: line.from, to: line.to + insert.length }) } : {}),
+    ...(state.facet(markdownOptionsFacet).diagrams && ['mermaid', 'sequence', 'flow'].includes((match[3].trim() || language).toLowerCase()) ? { effects: editLiveBlock.of({ from: line.from, to: line.to + insert.length }) } : {}),
   }
 }
 
@@ -142,6 +145,7 @@ class CodeLanguageWidget extends WidgetType {
 }
 
 function codePreviews(state: EditorState): DecorationSet {
+  const settings = state.facet(markdownOptionsFacet)
   const ranges: Range<Decoration>[] = []
   const editing = state.field(liveEditingBlock, false)
   for (const block of liveCodeBlocks(state)) {
@@ -149,7 +153,7 @@ function codePreviews(state: EditorState): DecorationSet {
     ranges.push(Decoration.replace({ block: true, inclusiveStart: true, inclusiveEnd: false }).range(block.from, block.bodyFrom))
     for (let number = block.firstLine + 1; number < block.lastLine; number++) {
       const edge = `${number === block.firstLine + 1 ? ' cm-live-code-first' : ''}${number === block.lastLine - 1 ? ' cm-live-code-last' : ''}`
-      ranges.push(Decoration.line({ class: `cm-live-code-body${edge}`, attributes: { 'data-source-line': String(number), 'data-source-end': String(number) } }).range(state.doc.line(number).from))
+      ranges.push(Decoration.line({ class: `cm-live-code-body${edge}${settings.codeLineNumbers ? ' cm-live-code-numbered' : ''}${settings.codeWrapLines ? '' : ' cm-live-code-nowrap'}`, attributes: { 'data-source-line': String(number), 'data-source-end': String(number), 'data-code-line': String(number - block.firstLine) } }).range(state.doc.line(number).from))
     }
     ranges.push(Decoration.replace({ widget: new CodeLanguageWidget(block, state.readOnly), block: true }).range(state.doc.line(block.lastLine).from, block.to))
   }

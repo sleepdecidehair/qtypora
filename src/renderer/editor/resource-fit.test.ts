@@ -1,7 +1,15 @@
 import { describe, expect, it } from 'vitest'
-import { containResource } from './resource-fit'
+import { containResource, requestedImageSize } from './resource-fit'
 
 describe('complete resource fit in the visible editor region', () => {
+  it('honors explicit image dimensions and computes a missing side from the natural ratio', () => {
+    const natural = { width: 160, height: 90 }
+    expect(requestedImageSize(natural, '120', '60')).toEqual({ width: 120, height: 60 })
+    expect(requestedImageSize(natural, '80', null)).toEqual({ width: 80, height: 45 })
+    expect(requestedImageSize(natural, null, '45')).toEqual({ width: 80, height: 45 })
+    expect(requestedImageSize(natural, '10001', '-1')).toBeNull()
+    expect(containResource(requestedImageSize(natural, '120', '60')!, { width: 700, height: 500 })).toEqual({ width: 120, height: 60 })
+  })
   it('contains a wide diagram without horizontal clipping or changing its ratio', () => {
     const fit = containResource({ width: 2734, height: 643 }, { width: 736, height: 618 })
     expect(fit.width).toBe(736)

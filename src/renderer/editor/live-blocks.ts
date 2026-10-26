@@ -1,8 +1,11 @@
+import { supportsPreview } from './preview-budget'
 import { StateEffect, StateField, type EditorState } from '@codemirror/state'
 import { EditorView, WidgetType } from '@codemirror/view'
-import { hydratePreview, markdownParser, sanitizeMarkdownHtml } from './markdown'
+import { hydratePreview, getMarkdownParser, sanitizeMarkdownHtml } from './markdown'
 import type { LiveBlock, LiveOptions } from './live-types'
+import { markdownOptionsFacet, markdownDocumentModel } from './markdown-config'
 import { fitEditorResources } from './resource-fit'
+import { markdownDefinitions, renderedFootnoteDefinition } from './markdown-references'
 
 export const editLiveBlock = StateEffect.define<{ from: number; to: number } | null>({ map: (value, changes) => value ? { from: changes.mapPos(value.from), to: changes.mapPos(value.to, 1) } : null })
 export const liveEditingBlock = StateField.define<{ from: number; to: number } | null>({
@@ -15,7 +18,7 @@ export const liveEditingBlock = StateField.define<{ from: number; to: number } |
   },
 })
 
-function detailsBlockEnd(tokens: ReturnType<typeof markdownParser.parse>, start: number): number | null {
+function detailsBlockEnd(tokens: ReturnType<ReturnType<typeof getMarkdownParser>['parse']>, start: number): number | null {
   if (tokens[start].type !== 'html_block' || !/^\s*<details(?=[\s>])/i.test(tokens[start].content)) return null
   let depth = 0
   for (let index = start; index < tokens.length; index++) {
@@ -32,20 +35,24 @@ function detailsBlockEnd(tokens: ReturnType<typeof markdownParser.parse>, start:
 }
 
 export function liveBlocks(state: EditorState): LiveBlock[] {
-  if (state.doc.length > 200000) return []
-  const env: Record<string, unknown> = {}
-  const tokens = markdownParser.parse(state.doc.toString(), env)
+  if (!supportsPreview(state)) return []
+  const settings = state.facet(markdownOptionsFacet)
+  const { parser: markdownParser, environment: env, tokens } = markdownDocumentModel(state)
   const blocks: LiveBlock[] = []
   for (let index = 0; index < tokens.length; index++) {
     const token = tokens[index]
     if (!token.map || token.level !== 0 || token.nesting === -1) continue
     let kind: LiveBlock['kind'] | null = null
+    if (token.type === 'front_matter') kind = 'front-matter'
+    if (token.type === 'table_of_contents') kind = 'toc'
+    if (token.type === 'blockquote_open' && token.attrGet('class')?.includes('md-alert')) kind = 'alert'
     if (token.type === 'table_open') kind = 'table'
     if (token.type === 'math_block') kind = 'math'
-    if (token.type === 'fence' && token.info.trim().split(/\s+/)[0] === 'mermaid') kind = 'mermaid'
+    if (settings.diagrams && token.type === 'fence' && ['mermaid', 'sequence', 'flow'].includes(token.info.trim().split(/\s+/)[0])) kind = 'mermaid'
     if (token.type === 'html_block') kind = 'html'
     if (token.type === 'hr') kind = 'rule'
     if (token.type === 'paragraph_open' && tokens[index + 1]?.children?.every((child) => child.type === 'image' || (child.type === 'text' && !child.content.trim()))) kind = 'image'
+    if (token.type === 'paragraph_open' && /^\s*<(audio|video)\b[\s\S]*<\/\1\s*>\s*$/i.test(tokens[index + 1]?.content ?? '')) kind = 'html'
     if (!kind) continue
     const [start, originalEnd] = token.map
     let last = index + 1
@@ -62,12 +69,21 @@ export function liveBlocks(state: EditorState): LiveBlock[] {
     blocks.push({ from, to, firstLine: start + 1, lastLine: end, source: state.doc.sliceString(from, to), html: markdownParser.renderer.render(tokens.slice(index, last), markdownParser.options, env), kind })
     index = last - 1
   }
-  return blocks
+  for (const definition of markdownDefinitions(env)) {
+    if (definition.kind !== 'footnote') continue
+    const html = renderedFootnoteDefinition(markdownParser, tokens, env, definition.label)
+    if (!html) continue
+    const from = state.doc.line(definition.line).from
+    const to = state.doc.line(Math.min(definition.endLine, state.doc.lines)).to
+    if (blocks.some(block => from < block.to && to > block.from)) continue
+    blocks.push({ from, to, firstLine: definition.line, lastLine: definition.endLine, source: state.doc.sliceString(from, to), html, kind: 'footnote' })
+  }
+  return blocks.sort((left, right) => left.from - right.from)
 }
 
 export class LiveBlockWidget extends WidgetType {
   constructor(readonly block: LiveBlock, readonly options: LiveOptions) { super() }
-  eq(other: LiveBlockWidget): boolean { return this.block.from === other.block.from && this.block.source === other.block.source && this.options.theme === other.options.theme && this.options.readOnly === other.options.readOnly }
+  eq(other: LiveBlockWidget): boolean { return this.block.from === other.block.from && this.block.source === other.block.source && this.block.html === other.block.html && this.options.mathKey === other.options.mathKey && this.options.theme === other.options.theme && this.options.readOnly === other.options.readOnly }
   toDOM(view: EditorView): HTMLElement {
     const container = document.createElement('div')
     container.className = 'md-preview-block cm-live-block'
@@ -108,11 +124,11 @@ export class LiveBlockWidget extends WidgetType {
       container.append(edit)
     }
     content.addEventListener('click', (event) => {
-      const anchor = event.target instanceof Element ? event.target.closest('a') : null
+      const anchor = event.target instanceof Element ? event.target.closest('a,[data-math] [href]') : null
       if (anchor) {
         event.preventDefault()
         const href = anchor.getAttribute('href')
-        if (href && (event.ctrlKey || event.metaKey)) this.options.onLinkOpen(href)
+        if (href && (this.block.kind === 'toc' || this.block.kind === 'footnote' || this.options.readOnly || event.ctrlKey || event.metaKey)) this.options.onLinkOpen(href)
       }
     })
     void hydratePreview(content, { ...this.options, sourceText: (node) => sources.get(node) || '', errorMode: 'placeholder' }).then(() => {

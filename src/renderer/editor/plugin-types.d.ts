@@ -27,3 +27,7 @@ declare module 'markdown-it-emoji' {
   import type { PluginSimple } from 'markdown-it'
   export const full: PluginSimple
 }
+declare module 'markdown-it-emoji/lib/data/full.mjs' {
+  const values: Record<string, string>
+  export default values
+}

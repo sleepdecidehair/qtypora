@@ -5,6 +5,12 @@ import { history, historyKeymap, indentWithTab, redo, selectAll, undo } from '@c
 import { bracketMatching, defaultHighlightStyle, HighlightStyle, indentOnInput, syntaxHighlighting } from '@codemirror/language'
 import { tags } from '@lezer/highlight'
 import { closeBrackets, closeBracketsKeymap } from '@codemirror/autocomplete'
+import { indentUnit } from '@codemirror/language'
+import { markdownCompletionExtension } from './markdown-completion'
+import { markdownInputExtension } from './markdown-input'
+import { markdownOptionsFacet } from './markdown-config'
+import { organizeDocumentImages, uploadDocumentImages } from './image-upload'
+import { clipboardImportExtension } from './clipboard-import'
 import { markdown, markdownLanguage } from '@codemirror/lang-markdown'
 import { codeLanguageForInfo } from './code-languages'
 import { openSearchPanel, search, searchKeymap } from '@codemirror/search'
@@ -16,6 +22,7 @@ import { styleScope } from './live-inline'
 import { focusLiveTableSelection, selectLiveTableCell } from './live-table'
 import { editorDefaultKeymap } from './editor-keymap'
 import { selectLiveCode } from './live-code'
+import { preserveHeadingPreview } from './live-source-edit'
 import { folderSearchHighlight, setFolderSearch } from './folder-search-highlight'
 
 import { installEditorContext } from './editor-context'
@@ -54,12 +61,13 @@ function applyAction(view: EditorView, action: EditorAction, value?: string): bo
 
 function configuration(props: MarkdownEditorProps, callbacks: Pick<MarkdownEditorProps, 'resolveResource' | 'onLinkOpen'>): Extension[] {
   const extensions: Extension[] = [
+    markdownOptionsFacet.of(props.markdownOptions), markdownCompletionExtension, markdownInputExtension, indentUnit.of(' '.repeat(props.markdownOptions.codeIndentSize)),
     EditorState.readOnly.of(props.readOnly), EditorView.editable.of(!props.readOnly),
     EditorView.contentAttributes.of({ 'aria-label': 'Markdown 编辑器', spellcheck: String(props.spellcheck), 'data-mode': props.mode }),
     EditorView.theme({
       '&': { fontSize: `${props.fontSize}px`, color: 'var(--color-text)', backgroundColor: 'var(--color-surface)' },
       '.cm-content': { fontFamily: props.mode === 'source' ? 'Consolas, "Cascadia Code", monospace' : 'var(--font-editor)', caretColor: 'var(--color-text)', minHeight: '100%', paddingBottom: props.typewriterMode ? '45vh' : '120px' },
-      '.cm-line': { lineHeight: '1.85' },
+      '.cm-line': { lineHeight: 'var(--writing-line-height, 1.8)' },
       '.cm-scroller': { fontFamily: 'inherit' },
       '.cm-gutters': { color: 'var(--color-text-muted)', backgroundColor: 'var(--color-surface)', borderRight: '1px solid var(--color-border)' },
       '.cm-activeLine, .cm-activeLineGutter': { backgroundColor: props.mode === 'source' ? 'var(--color-surface-muted)' : 'transparent' },
@@ -67,9 +75,10 @@ function configuration(props: MarkdownEditorProps, callbacks: Pick<MarkdownEdito
       '.cm-cursor': { borderLeftColor: 'var(--color-text)' },
     }, { dark: props.theme === 'dark' }),
   ]
+  if (props.markdownOptions.autoPairBrackets) extensions.push(closeBrackets())
   if (props.wrapLines) extensions.push(EditorView.lineWrapping)
   if (props.lineNumbers && props.mode === 'source') extensions.push(lineNumbers(), highlightActiveLineGutter())
-  if (props.mode === 'hybrid') extensions.push(hybridExtension({ theme: props.theme, focusMode: props.focusMode, readOnly: props.readOnly, ...callbacks }))
+  if (props.mode === 'hybrid') extensions.push(hybridExtension({ theme: props.theme, focusMode: props.focusMode, readOnly: props.readOnly, markdownOptions: props.markdownOptions, ...callbacks }))
   return extensions
 }
 
@@ -119,7 +128,8 @@ export function MarkdownEditor(props: MarkdownEditorProps): React.JSX.Element {
     return EditorState.create({
       doc: current.value,
       extensions: [
-        history(), drawSelection(), indentOnInput(), bracketMatching(), closeBrackets(),
+        history(), drawSelection(), indentOnInput(), bracketMatching(),
+        clipboardImportExtension(() => ({ snapshot: { id: propsRef.current.documentId, content: viewRef.current?.state.doc.toString() ?? propsRef.current.value, revision: propsRef.current.revision }, mode: propsRef.current.mode, readOnly: propsRef.current.readOnly, imageOptions: propsRef.current.imageOptions, readClipboardText: () => propsRef.current.desktopApi.readClipboardText(), importImages: request => propsRef.current.desktopApi.importImages(request), onError: setContextError })),
         markdown({ codeLanguages: codeLanguageForInfo, base: markdownLanguage }), syntaxHighlighting(editorHighlightStyle),
         highlightActiveLine(), search({ top: true }), folderSearchHighlight,
         keymap.of([
@@ -257,10 +267,13 @@ export function MarkdownEditor(props: MarkdownEditorProps): React.JSX.Element {
     if (isReturning) { readingSnapshotRef.current = null; readingReturnAnchorRef.current = null }
     modeScrollAnchorRef.current = null
     modeRef.current = props.mode
-  }, [props.documentId, props.mode, props.theme, props.fontSize, props.focusMode, props.typewriterMode, props.readOnly, props.lineNumbers, props.wrapLines, props.spellcheck])
+  }, [props.documentId, props.mode, props.theme, props.fontSize, props.focusMode, props.typewriterMode, props.readOnly, props.lineNumbers, props.wrapLines, props.spellcheck, props.markdownOptions])
 
   useEffect(() => {
-    if (props.mode !== 'reading' && props.command && viewRef.current) applyAction(viewRef.current, props.command.action, props.command.value)
+    if (props.mode === 'reading' || !props.command || !viewRef.current) return
+    if (props.command.action === 'organize-images') void organizeDocumentImages(viewRef.current, () => propsRef.current).catch((error: unknown) => setContextError(error instanceof Error ? error.message : '图片整理失败。'))
+    else if (props.command.action === 'upload-images') void uploadDocumentImages(viewRef.current, () => propsRef.current).catch((error: unknown) => setContextError(error instanceof Error ? error.message : '图片上传失败。'))
+    else applyAction(viewRef.current, props.command.action, props.command.value)
   }, [props.command?.id])
 
   useEffect(() => {
@@ -269,9 +282,9 @@ export function MarkdownEditor(props: MarkdownEditorProps): React.JSX.Element {
 
   useEffect(() => {
     const view = viewRef.current
-    if (!view || !props.jumpToLine || props.mode === 'reading') return
+    if (!view || !props.jumpToLine || (props.jumpToLine.documentId && props.jumpToLine.documentId !== props.documentId) || props.mode === 'reading') return
     const line = view.state.doc.line(Math.max(1, Math.min(view.state.doc.lines, props.jumpToLine.line)))
-    view.dispatch({ selection: { anchor: line.from }, effects: EditorView.scrollIntoView(line.from, { y: 'center' }) })
+    view.dispatch({ selection: { anchor: line.from }, effects: [preserveHeadingPreview.of(line.from), EditorView.scrollIntoView(line.from, { y: 'center' })] })
     view.focus()
   }, [props.jumpToLine?.id])
 
@@ -290,7 +303,7 @@ export function MarkdownEditor(props: MarkdownEditorProps): React.JSX.Element {
   return <div className={`markdown-editor markdown-editor-${props.mode}${props.focusMode ? ' markdown-editor-focus' : ''}`} data-testid="markdown-editor">
     {contextError ? <div className="editor-context-error" role="alert">{contextError}<button type="button" aria-label="关闭提示" onClick={() => setContextError('')}>×</button></div> : null}
     <div className="editor-mount" ref={mountRef} hidden={props.mode === 'reading'} aria-hidden={props.mode === 'reading'} />
-    {props.mode === 'reading' ? <ReadingView ref={readingRef} platform={props.platform} documentId={props.documentId} content={props.value} theme={props.theme} fontSize={props.fontSize} command={props.command} jumpToLine={props.jumpToLine} onLinkOpen={props.onLinkOpen} resolveResource={props.resolveResource} initialAnchor={readingSnapshotRef.current?.documentId === props.documentId ? readingSnapshotRef.current.anchor : null} /> : null}
+    {props.mode === 'reading' ? <ReadingView markdownOptions={props.markdownOptions} ref={readingRef} platform={props.platform} documentId={props.documentId} content={props.value} theme={props.theme} fontSize={props.fontSize} command={props.command} jumpToLine={props.jumpToLine} onLinkOpen={props.onLinkOpen} resolveResource={props.resolveResource} initialAnchor={readingSnapshotRef.current?.documentId === props.documentId ? readingSnapshotRef.current.anchor : null} /> : null}
     {resource ? <ResourceViewer resource={resource} onClose={closeResource} /> : null}
   </div>
 }

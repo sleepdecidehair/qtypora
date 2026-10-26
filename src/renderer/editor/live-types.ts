@@ -1,4 +1,10 @@
+import type { MathExpression } from './markdown-features'
+import type { MarkdownOptions } from '../../shared/markdown-options'
+
 export interface LiveOptions {
+  markdownOptions?: MarkdownOptions
+  mathExpressions?: MathExpression[]
+  mathKey?: string
   theme: 'light' | 'dark'
   focusMode: boolean
   readOnly: boolean
@@ -13,5 +19,5 @@ export interface LiveBlock {
   lastLine: number
   source: string
   html: string
-  kind: 'table' | 'math' | 'mermaid' | 'image' | 'html' | 'rule'
+  kind: 'table' | 'math' | 'mermaid' | 'image' | 'html' | 'rule' | 'front-matter' | 'toc' | 'alert' | 'footnote'
 }

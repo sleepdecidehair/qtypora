@@ -1,15 +1,23 @@
-import { useCallback, useDeferredValue, useEffect, useMemo, useRef, useState, type CSSProperties } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from 'react'
 import { AlertCircle, Check, X, FileText, FolderOpen } from 'lucide-react'
 import type { AppCommand, BootstrapData, DesktopApi, DraftRecord, Result, Workspace } from '../shared/contracts'
 import { MarkdownEditor } from './editor/MarkdownEditor'
 import type { FolderSearchQuery } from './editor/folder-search-highlight'
 import { renderExportDocument } from './editor/markdown'
+import type { ExportFormat, SavedExportPreset } from '../shared/export-options'
+import type { PresetConflictStrategy } from '../shared/export-preset-file'
+import { resolveHeading, resolveMathLabel, resolveFootnote, resolveExplicitAnchor } from './hooks/outline'
+import { articleCss, exportAppearance, exportTheme } from './hooks/appearance'
+import { WordStatistics } from './components/WordStatistics'
+import { ExportDialog } from './components/ExportDialog'
 import type { EditorAction, EditorCommand, EditorSelection, JumpRequest } from './editor/types'
 import { isDirty, useDocuments } from './hooks/useDocuments'
 import { usePreferences } from './hooks/usePreferences'
 import { isFileContextScopeCurrent } from './hooks/fileContext'
 import { Toolbar } from './components/Toolbar'
 import { Sidebar } from './components/Sidebar'
+import { shortcutCommandForEvent } from '../shared/shortcuts'
+import { FloatingToolbar } from './components/FloatingToolbar'
 import { PreferencesDialog } from './components/PreferencesDialog'
 import { QuickOpen } from './components/QuickOpen'
 import { DraftRecovery } from './components/DraftRecovery'
@@ -18,25 +26,10 @@ import { Dialog } from './components/Dialog'
 import { primaryShortcut } from './platform-shortcuts'
 import './styles/tokens.css'
 import './styles/app.css'
-
-function localLinkPath(source: string, documentPath: string | null): string | null {
-  const pathname = source.split('#')[0].split('?')[0]
-  if (!pathname) return null
-  let decoded: string
-  try { decoded = decodeURIComponent(pathname) } catch { return null }
-  if (/^[a-z]:[\\/]/i.test(decoded)) return decoded
-  if (/^[a-z][a-z\d+.-]*:/i.test(decoded)) return null
-  if (!documentPath) return null
-  const separator = documentPath.includes('\\') ? '\\' : '/'
-  const directory = documentPath.slice(0, Math.max(documentPath.lastIndexOf('\\'), documentPath.lastIndexOf('/')))
-  return `${directory}${separator}${decoded.replace(/[\\/]/g, separator)}`
-}
-
-function wordCount(content: string): number {
-  const chinese = content.match(/[\u3400-\u9fff]/g)?.length ?? 0
-  const words = content.replace(/[\u3400-\u9fff]/g, ' ').match(/[\p{L}\p{N}]+(?:['’_-][\p{L}\p{N}]+)*/gu)?.length ?? 0
-  return chinese + words
-}
+import './styles/features.css'
+import './editor/markdown-features.css'
+import './editor/image-table-features.css'
+import './styles/workspace-features.css'
 
 export default function App() {
   if (!window.desktop) return <div className="startup-state"><AlertCircle size={32} /><h1>桌面服务未连接</h1><p>请通过 Electron 开发命令启动 QTypora。</p></div>
@@ -55,9 +48,10 @@ function DesktopApp({ api }: { api: DesktopApi }) {
   const workspaceRef = useRef<Workspace | null>(null)
   const [refreshVersion, setRefreshVersion] = useState(0)
   const [recentFiles, setRecentFiles] = useState<string[]>([])
+  const [recentFolders, setRecentFolders] = useState<string[]>([])
   const [platform, setPlatform] = useState('win32')
   const [drafts, setDrafts] = useState<DraftRecord[]>([])
-  const [modal, setModal] = useState<'preferences' | 'quick-open' | 'recovery' | null>(null)
+  const [modal, setModal] = useState<'preferences' | 'quick-open' | 'recovery' | 'export' | null>(null)
   const [fileAction, setFileAction] = useState<PendingFileAction | null>(null)
   const [isFileActionPending, setIsFileActionPending] = useState(false)
   const fileActionInProgress = useRef(false)
@@ -70,13 +64,12 @@ function DesktopApp({ api }: { api: DesktopApi }) {
   const bootstrap = useRef<Promise<Result<BootstrapData>> | null>(null)
   const saveAllInProgress = useRef(false)
   const current = documents.active
-  const deferredContent = useDeferredValue(current?.content ?? '')
-  const statistics = useMemo(() => ({ words: wordCount(deferredContent), characters: deferredContent.length, lines: deferredContent.split('\n').length }), [deferredContent])
+  const customStyle = useMemo(() => { try { return articleCss(preferences.customCss) } catch { return '' } }, [preferences.customCss])
   useEffect(() => setSelection({ text: '', from: 0, to: 0 }), [current?.id])
   const issueEditorCommand = useCallback((action: EditorAction, value?: string) => {
     setEditorCommand({ id: ++commandId.current, action, value })
   }, [])
-  const jumpToLine = useCallback((line: number) => setJumpRequest({ id: ++commandId.current, line }), [])
+  const jumpToLine = useCallback((line: number, documentId = current?.id) => setJumpRequest({ id: ++commandId.current, line, documentId }), [current?.id])
   const activePath = current?.path ?? null
   const resolveResource = useCallback(async (source: string) => {
     const result = await api.resolveResource(source, activePath)
@@ -90,12 +83,13 @@ function DesktopApp({ api }: { api: DesktopApi }) {
     void bootstrap.current.then(async result => {
       if (!active) return
       if (!result.ok) { reportError(result.error.message); setIsLoading(false); return }
-      loadPreferences(result.data.preferences)
+      loadPreferences(result.data.preferences, result.data.preferencesVersion)
       setPlatform(result.data.platform)
       setRecentFiles(result.data.recentFiles)
+      setRecentFolders(result.data.recentFolders ?? [])
       setDrafts(result.data.drafts)
       if (result.data.workspace) { workspaceRef.current = result.data.workspace; setWorkspace(result.data.workspace) }
-      result.data.documents.forEach(documents.addDocument)
+      result.data.documents.forEach(record => documents.addDocument(record))
       if (!result.data.documents.length) await documents.create()
       if (active) {
         setIsLoading(false)
@@ -129,23 +123,26 @@ function DesktopApp({ api }: { api: DesktopApi }) {
   const refreshWorkspace = async () => {
     const existing = workspaceRef.current
     if (!existing) return
-    const entries = documents.acceptResult(await api.readDirectory(existing.path))
+    const entries = documents.acceptResult(await api.readDirectory(existing.path, preferencesRef.current.workspace))
     if (!entries || workspaceRef.current?.path !== existing.path) return
     const next = { ...existing, entries }
     workspaceRef.current = next; setWorkspace(next); setRefreshVersion(value => value + 1)
   }
 
   const openFolder = async (path?: string) => {
+    const sidebarAtStart = preferencesRef.current.sidebarMode
     const folder = documents.acceptResult(await api.openFolder(path))
     if (!folder) return
     workspaceRef.current = folder; setWorkspace(folder)
-    updatePreferences({ sidebarMode: 'files', showSidebar: true })
+    setRecentFolders(existing => [folder.path, ...existing.filter(path => path !== folder.path)].slice(0, 20))
+    if (preferencesRef.current.sidebarMode === sidebarAtStart) updatePreferences({ sidebarMode: 'files', showSidebar: true })
   }
 
   const openFile = async (path?: string, line?: number) => {
-    await documents.open(path)
+    const opened = await documents.open(path)
     if (path) setRecentFiles(existing => [path, ...existing.filter(item => item.toLowerCase() !== path.toLowerCase())].slice(0, 30))
-    if (line) jumpToLine(line)
+    if (opened && line) jumpToLine(line, opened.id)
+    return opened
   }
 
   const save = async (saveAs = false) => {
@@ -176,24 +173,62 @@ function DesktopApp({ api }: { api: DesktopApi }) {
     } finally { saveAllInProgress.current = false }
   }
 
-  const exportDocument = async (kind: 'html' | 'pdf') => {
+  const exportDocument = async (kind: ExportFormat, reusePrevious = false, overwritePrevious = false, print = false) => {
     const item = documents.documentsRef.current.find(document => document.id === current?.id)
     if (!item) return
     await documents.flushSync()
-    const html = await renderExportDocument(item.content, { theme: 'light', resolveResource: async source => {
+    if (!await flushPreferences()) return
+    const plan = documents.acceptResult(await api.getExportPlan({ id: item.id, kind, reusePrevious }))
+    if (!plan) return
+    const exportPreferences = { ...preferencesRef.current, export: plan.options }
+    const systemDark = window.matchMedia('(prefers-color-scheme: dark)').matches
+    const remoteImages = new Map<string, Promise<string>>()
+    let remoteBytes = 0
+    let remoteTail: Promise<unknown> = Promise.resolve()
+    const html = !plan.requiresHtml ? undefined : await renderExportDocument(item.content, { theme: exportTheme(exportPreferences, systemDark), exportCss: exportAppearance(exportPreferences, systemDark), markdownOptions: exportPreferences.markdown, resolveResource: async source => {
+      if (/^https?:/i.test(source)) {
+        if (!remoteImages.has(source)) {
+          if (remoteImages.size >= 20) throw new Error('单次导出最多下载 20 张远程图片，请先整理资源。')
+          const download = remoteTail.then(async () => {
+            if (remoteBytes >= 32 * 1024 * 1024) throw new Error('远程图片总大小超过 32 MB，请先整理资源。')
+            const result = await api.resolveExportImage({ id: item.id, source })
+            if (!result.ok) throw new Error(result.error.message)
+            remoteBytes += Math.ceil(result.data.length * 0.75)
+            if (remoteBytes > 32 * 1024 * 1024) throw new Error('远程图片总大小超过 32 MB，请先整理资源。')
+            return result.data
+          })
+          remoteTail = download
+          remoteImages.set(source, download)
+        }
+        return remoteImages.get(source)!
+      }
       const result = await api.resolveResource(source, item.path)
       if (!result.ok) throw new Error(result.error.message)
       return result.data
     }, embedImages: true })
-    const path = documents.acceptResult(await api.exportDocument({ id: item.id, kind, html }))
-    if (path) setNotice(`已导出：${path}`)
+    if (print) {
+      const printed = documents.acceptResult(await api.printDocument({ id: item.id, revision: item.revision, preferencesVersion: plan.preferencesVersion, kind, html }))
+      if (printed) setNotice('已发送到打印机')
+    } else {
+      const path = documents.acceptResult(await api.exportDocument({ id: item.id, revision: item.revision, preferencesVersion: plan.preferencesVersion, kind, html, reusePrevious, overwritePrevious }))
+      if (path) setNotice(`已导出：${path}`)
+    }
+  }
+
+  const importExportPresets = async (presets: SavedExportPreset[], strategy: PresetConflictStrategy) => {
+    if (!await flushPreferences()) throw new Error('当前设置未能保存，请解决错误后重新导入预设。')
+    const result = await api.applyExportPresetImport(presets, strategy)
+    if (!result.ok) throw new Error(result.error.message)
+    loadPreferences(result.data.preferences, result.data.version)
   }
 
   const insertImage = async () => {
     if (!current) return
+    await documents.flushSync()
+    const revision = current.revision
     const markdown = documents.acceptResult(await api.insertImage(current.id))
     if (!markdown) return
-    if (!documents.documentsRef.current.some(item => item.id === current.id)) {
+    if (!documents.documentsRef.current.some(item => item.id === current.id && item.revision === revision)) {
       setNotice('图片已复制。原文档已关闭，未插入图片引用。')
       return
     }
@@ -204,16 +239,23 @@ function DesktopApp({ api }: { api: DesktopApi }) {
   const openLink = (target: string) => {
     if (/^(https?:|mailto:)/i.test(target)) { run(api.openExternal(target).then(documents.acceptResult)); return }
     if (target.startsWith('#')) {
-      let text: string
-      try { text = decodeURIComponent(target.slice(1)).replace(/[-_]/g, ' ').toLowerCase() }
-      catch { reportError('链接的编码格式无效。'); return }
-      const index = current?.content.split('\n').findIndex(line => /^\s*#{1,6}\s/.test(line) && line.replace(/^\s*#+\s*/, '').toLowerCase().includes(text)) ?? -1
-      if (index >= 0) jumpToLine(index + 1)
+      const heading = resolveHeading(current?.content ?? '', target.slice(1), preferences.markdown) ?? resolveMathLabel(current?.content ?? '', target, preferences.markdown) ?? resolveFootnote(current?.content ?? '', target, preferences.markdown) ?? resolveExplicitAnchor(current?.content ?? '', target, preferences.markdown)
+      if (heading) jumpToLine(typeof heading === 'number' ? heading : heading.line)
+      else reportError('没有找到链接对应的标题。')
       return
     }
-    const path = localLinkPath(target, current?.path ?? null)
-    if (path) run(openFile(path))
-    else reportError('无法打开这个链接；本地链接需要先保存当前文档。')
+    if (!current) return
+    run((async () => {
+      const result = await documents.openLinked(current.id, target)
+      const opened = result?.document
+      const fragment = result?.fragment
+      if (opened && fragment) {
+        const heading = resolveHeading(opened.content, fragment, preferences.markdown)
+        const line = heading?.line ?? resolveMathLabel(opened.content, '#' + fragment, preferences.markdown) ?? resolveFootnote(opened.content, '#' + fragment, preferences.markdown) ?? resolveExplicitAnchor(opened.content, fragment, preferences.markdown)
+        if (line) jumpToLine(line, opened.id)
+        else reportError('目标文档中没有找到此锚点。')
+      }
+    })())
   }
 
   const executeCommand = async (command: AppCommand) => {
@@ -233,7 +275,7 @@ function DesktopApp({ api }: { api: DesktopApi }) {
       case 'save-all': await saveAll(); break
       case 'save-as': await save(true); break
       case 'close-document': await documents.close(); break
-      case 'request-window-close': await flushPreferences(); await documents.requestClose(); break
+      case 'request-window-close': if (await flushPreferences()) await documents.requestClose(); break
       case 'undo':
       case 'redo': {
         const focused = document.activeElement
@@ -263,11 +305,19 @@ function DesktopApp({ api }: { api: DesktopApi }) {
       case 'focus': updatePreferences({ focusMode: !options.focusMode }); break
       case 'typewriter': updatePreferences({ typewriterMode: !options.typewriterMode }); break
       case 'toolbar': updatePreferences({ showToolbar: !options.showToolbar }); break
+      case 'organize-images': await documents.flushSync(); if (await flushPreferences()) issueEditorCommand('organize-images'); break
+      case 'upload-images': await documents.flushSync(); if (await flushPreferences()) issueEditorCommand('upload-images'); break
+      case 'export-options': setModal('export'); break
+      case 'export-previous': await exportDocument('html', true); break
+      case 'export-overwrite': await exportDocument('html', true, true); break
+      case 'print': await exportDocument('pdf', false, false, true); break
+      case 'import': await documents.importFile(); break
+      case 'statistics': document.querySelector<HTMLButtonElement>('[data-testid=word-count]')?.click(); break
       case 'export-html': await exportDocument('html'); break
       case 'export-pdf': await exportDocument('pdf'); break
-      case 'zoom-in': updatePreferences({ fontSize: Math.min(32, options.fontSize + 1) }); break
-      case 'zoom-out': updatePreferences({ fontSize: Math.max(12, options.fontSize - 1) }); break
-      case 'zoom-reset': updatePreferences({ fontSize: 16 }); break
+      case 'zoom-in': { const zoomFactor = Math.min(2, Math.round((options.zoomFactor + 0.1) * 10) / 10); updatePreferences({ zoomFactor }); documents.acceptResult(await api.setZoomFactor(zoomFactor)); break }
+      case 'zoom-out': { const zoomFactor = Math.max(0.5, Math.round((options.zoomFactor - 0.1) * 10) / 10); updatePreferences({ zoomFactor }); documents.acceptResult(await api.setZoomFactor(zoomFactor)); break }
+      case 'zoom-reset': updatePreferences({ zoomFactor: 1 }); documents.acceptResult(await api.setZoomFactor(1)); break
       case 'recover-drafts': {
         const result = documents.acceptResult(await api.bootstrap())
         if (result) setDrafts(result.drafts)
@@ -291,19 +341,11 @@ function DesktopApp({ api }: { api: DesktopApi }) {
 
   useEffect(() => {
     const handler = (event: KeyboardEvent) => {
-      if (event.defaultPrevented || (!event.ctrlKey && !event.metaKey)) return
-      const key = event.key.toLowerCase()
-      let command: AppCommand | null = null
-      if (key === 's') command = event.shiftKey ? 'save-as' : 'save'
-      else if (key === 'o') command = event.shiftKey ? (platform === 'darwin' ? 'quick-open' : 'open-folder') : 'open'
-      else if (key === 'n') command = event.shiftKey ? 'new-window' : 'new'
-      else if (key === 'w') command = 'close-document'
-      else if (key === 'p') command = 'quick-open'
-      else if (key === 'i' && event.shiftKey && !modal && !fileAction && !reloadId && document.activeElement?.closest('.cm-content')) command = 'insert-image'
-      else if (key === 'e' && !modal && !fileAction && !reloadId && document.activeElement?.closest('.cm-content')) command = 'select-scope'
-      else if (key === '/' || event.code === 'Slash') command = 'source'
-      else if (key === ',') command = 'preferences'
-      else if (key === 'tab') command = 'next-document'
+      if (event.defaultPrevented || event.isComposing) return
+      const command = shortcutCommandForEvent(event, platform, preferencesRef.current.shortcuts)
+      if (command === 'insert-image' || command === 'select-scope') {
+        if (modal || fileAction || reloadId || !document.activeElement?.closest('.cm-content')) return
+      }
       if (command) { event.preventDefault(); run(commandHandler.current(command)) }
     }
     document.addEventListener('keydown', handler)
@@ -327,22 +369,24 @@ function DesktopApp({ api }: { api: DesktopApi }) {
     } finally { fileActionInProgress.current = false; setIsFileActionPending(false) }
   }
 
-  const appStyle = { '--content-width': preferences.contentWidthMode === 'auto' ? '100%' : `${preferences.contentWidth}px` } as CSSProperties
+  const appStyle = { '--writing-line-height': preferences.lineHeight, ...(preferences.fontFamily ? { '--font-editor': preferences.fontFamily } : {}), '--content-width': preferences.contentWidthMode === 'auto' ? '100%' : `${preferences.contentWidth}px` } as CSSProperties
   if (isLoading) return <div className="startup-state"><FileText size={32} /><p>正在打开写作空间…</p></div>
 
-  return <div className={`desktop-app ${preferences.sourceMode ? 'source-mode' : 'hybrid-mode'}`} style={appStyle} data-testid="desktop-app" data-theme={theme}>
+  return <div className={`desktop-app ${preferences.sourceMode ? 'source-mode' : 'hybrid-mode'}`} style={appStyle} data-testid="desktop-app" data-theme={theme} data-palette={theme === 'dark' ? preferences.darkTheme : preferences.lightTheme}>
+    {customStyle ? <style>{customStyle}</style> : null}
     <Toolbar platform={platform} showFormatting={preferences.showToolbar} sourceMode={preferences.sourceMode} disabled={!current || current.readOnly} isSaving={current?.isSaving ?? false} onAction={issueEditorCommand} onNew={() => run(executeCommand('new'))} onOpen={() => run(executeCommand('open'))} onSave={() => run(save())} onSaveAll={() => run(saveAll())} onSidebar={() => run(executeCommand('sidebar'))} onSource={() => run(executeCommand('source'))} onQuickOpen={() => setModal('quick-open')} onPreferences={() => setModal('preferences')} onOpenFolder={() => run(openFolder())} onExport={kind => run(exportDocument(kind))} onImage={() => run(insertImage())} onCloseDocument={() => run(documents.close())} onSaveAs={() => run(save(true))} onRecovery={() => run(executeCommand('recover-drafts'))} onNewWindow={() => run(executeCommand('new-window'))} focusMode={preferences.focusMode} typewriterMode={preferences.typewriterMode} onFocus={() => run(executeCommand('focus'))} onTypewriter={() => run(executeCommand('typewriter'))} isContentConstrained={preferences.contentWidthMode === 'fixed'} onContentWidthToggle={() => updatePreferences({ contentWidthMode: preferencesRef.current.contentWidthMode === 'fixed' ? 'auto' : 'fixed' })} />
     <div className="writing-space">
-      {preferences.showSidebar ? <Sidebar api={api} mode={preferences.sidebarMode} workspace={workspace} documents={documents.documents} current={current} refreshVersion={refreshVersion} onMode={mode => updatePreferences({ sidebarMode: mode })} onOpenFolder={path => run(openFolder(path))} onOpen={(path, line) => run(openFile(path, line))} onActivate={documents.activate} onJump={jumpToLine} onFileAction={setFileAction} onError={reportError} onRefresh={() => run(refreshWorkspace())} onSearchChange={setFolderSearch} /> : null}
+      {preferences.showSidebar ? <Sidebar recentFolders={recentFolders} markdownOptions={preferences.markdown} workspaceOptions={preferences.workspace} onWorkspaceOptionsChange={workspace => updatePreferences({ workspace })} currentLine={(current?.content.slice(0, selection.from).split('\n').length) ?? 1} api={api} mode={preferences.sidebarMode} workspace={workspace} documents={documents.documents} current={current} refreshVersion={refreshVersion} onMode={mode => updatePreferences({ sidebarMode: mode })} onOpenFolder={path => run(openFolder(path))} onOpen={(path, line) => run(openFile(path, line))} onActivate={documents.activate} onJump={jumpToLine} onFileAction={setFileAction} onError={reportError} onRefresh={() => run(refreshWorkspace())} onSearchChange={setFolderSearch} /> : null}
       <main className="document-pane">
         <div className="document-heading"><span className="document-name" data-testid="document-name">{current?.name ?? '未命名'}</span>{current && isDirty(current) ? <span className="dirty-label" data-testid="dirty-indicator">未保存</span> : null}{current?.readOnly ? <span className="dirty-label">只读</span> : null}<span className="document-heading-spacer" /><button className="document-path" title={current?.path ?? '尚未保存到文件'} disabled={!current?.path} onClick={() => { if (current?.path) run(api.revealFile(current.path).then(documents.acceptResult)) }}>{current?.path ? <><FolderOpen size={12} />{current.path}</> : 'Markdown 文档'}</button></div>
         {current?.externalChange ? <div className="external-change"><AlertCircle size={16} /><span>{current.externalChange === 'removed' ? '文件已被移动或删除。可另存为保留当前编辑。' : '磁盘上的文件已更改，当前编辑仍然保留。'}</span>{current.externalChange === 'changed' ? <button className="text-button" onClick={() => setReloadId(current.id)}>重新载入</button> : null}<button className="text-button" onClick={() => run(save(true))}>另存为</button></div> : null}
-        <div className="editor-area">{current ? <MarkdownEditor platform={platform} desktopApi={api} documentId={current.id} revision={current.revision} value={current.content} mode={preferences.sourceMode ? 'source' : 'hybrid'} theme={theme} fontSize={preferences.fontSize} focusMode={preferences.focusMode} typewriterMode={preferences.typewriterMode} readOnly={current.readOnly} lineNumbers={preferences.showLineNumbers} wrapLines={preferences.wrapLines} spellcheck={preferences.spellcheck} command={editorCommand} jumpToLine={jumpRequest} folderSearch={folderSearch} onChange={value => documents.changeContent(current.id, value)} onSelectionChange={setSelection} onLinkOpen={openLink} resolveResource={resolveResource} /> : <div className="startup-state"><p>开始写下第一个想法。</p><button className="primary-button" onClick={() => run(documents.create())}>新建文档</button></div>}</div>
+        <div className="editor-area">{current ? <FloatingToolbar key={current.id} enabled={preferences.floatingToolbar} documentId={current.id} selection={selection} readOnly={current.readOnly} onAction={issueEditorCommand} /> : null}{current ? <MarkdownEditor markdownOptions={preferences.markdown} imageOptions={preferences.image} platform={platform} desktopApi={api} documentId={current.id} revision={current.revision} value={current.content} mode={preferences.sourceMode ? 'source' : 'hybrid'} theme={theme} fontSize={preferences.fontSize} focusMode={preferences.focusMode} typewriterMode={preferences.typewriterMode} readOnly={current.readOnly} lineNumbers={preferences.showLineNumbers} wrapLines={preferences.wrapLines} spellcheck={preferences.spellcheck} command={editorCommand} jumpToLine={jumpRequest} folderSearch={folderSearch} onChange={value => documents.changeContent(current.id, value)} onSelectionChange={setSelection} onLinkOpen={openLink} resolveResource={resolveResource} /> : <div className="startup-state"><p>开始写下第一个想法。</p><button className="primary-button" onClick={() => run(documents.create())}>新建文档</button></div>}</div>
       </main>
     </div>
-    <footer className="statusbar"><div className="statusbar-left" role="status" aria-live="polite">{current?.isSaving ? '正在保存…' : notice ? <><Check size={12} />{notice}</> : current && isDirty(current) ? '编辑中 · 草稿独立保存' : current?.path ? '已保存' : '尚未保存'}{preferences.focusMode ? <span>专注</span> : null}{preferences.typewriterMode ? <span>打字机</span> : null}</div><div className="statusbar-right"><span>{current?.encoding === 'utf8-bom' ? 'UTF-8 BOM' : 'UTF-8'}</span><span>{current?.lineEnding ?? preferences.lineEnding}</span><button data-testid="editor-mode" title={`切换源码模式 · ${primaryShortcut(platform, '/')}`} onClick={() => run(executeCommand('source'))}>{preferences.sourceMode ? '源码模式' : '实时预览'}</button><span title={`${statistics.characters} 字符 · ${statistics.lines} 行`} data-testid="word-count">{selection.text ? `选中 ${wordCount(selection.text)} / ` : ''}{statistics.words} 字</span></div></footer>
+    <footer className="statusbar"><div className="statusbar-left" role="status" aria-live="polite">{current?.isSaving ? '正在保存…' : notice ? <><Check size={12} />{notice}</> : current && isDirty(current) ? '编辑中 · 草稿独立保存' : current?.path ? '已保存' : '尚未保存'}{preferences.focusMode ? <span>专注</span> : null}{preferences.typewriterMode ? <span>打字机</span> : null}</div><div className="statusbar-right"><span>{current?.encoding === 'utf8-bom' ? 'UTF-8 BOM' : 'UTF-8'}</span><span>{current?.lineEnding ?? preferences.lineEnding}</span><button data-testid="editor-mode" title={`切换源码模式 · ${primaryShortcut(platform, '/')}`} onClick={() => run(executeCommand('source'))}>{preferences.sourceMode ? '源码模式' : '实时预览'}</button><WordStatistics unit={preferences.statisticsUnit} onUnitChange={statisticsUnit => updatePreferences({ statisticsUnit })} content={current?.content ?? ''} selectedText={selection.text} readingSpeed={preferences.readingSpeed} markdownOptions={preferences.markdown} /></div></footer>
     {error ? <div className="error-notification" role="alert" data-testid="error-notification"><AlertCircle size={17} /><span>{error}</span><button className="icon-button" aria-label="关闭错误提示" onClick={() => setError(null)}><X size={16} /></button></div> : null}
-    {modal === 'preferences' ? <PreferencesDialog platform={platform} preferences={preferences} onChange={updatePreferences} onClose={() => { run(flushPreferences()); setModal(null) }} /> : null}
+    {modal === 'export' ? <ExportDialog desktopApi={api} options={preferences.export} onImportPresets={importExportPresets} onOptionsChange={options => updatePreferences({ export: options })} onExport={async format => { try { await exportDocument(format) } catch (error) { reportError(error instanceof Error ? error.message : '导出失败') } }} onSettings={() => setModal('preferences')} onClose={() => setModal(null)} /> : null}
+    {modal === 'preferences' ? <PreferencesDialog desktopApi={api} platform={platform} preferences={preferences} onChange={updatePreferences} onClose={() => { run(flushPreferences().then(saved => { if (saved) setModal(current => current === 'preferences' ? null : current) })) }} /> : null}
     {modal === 'quick-open' ? <QuickOpen api={api} workspace={workspace} documents={documents.documents} recentFiles={recentFiles} onSelectDocument={documents.activate} onOpenFile={path => run(openFile(path))} onClose={() => setModal(null)} /> : null}
     {modal === 'recovery' ? <DraftRecovery drafts={drafts} onRecover={id => run(documents.recover(id).then(accepted => { if (accepted) { setDrafts(existing => existing.filter(item => item.id !== id)); setModal(null); setNotice('草稿已恢复，请保存文档') } }))} onDiscard={id => run(api.discardDraft(id).then(result => { if (result.ok) setDrafts(existing => existing.filter(item => item.id !== id)); else reportError(result.error.message) }))} onClose={() => setModal(null)} /> : null}
     {fileAction ? <FileActionDialog action={fileAction} isSubmitting={isFileActionPending} onSubmit={name => run(performFileAction(name))} onClose={() => { if (!fileActionInProgress.current) setFileAction(null) }} /> : null}

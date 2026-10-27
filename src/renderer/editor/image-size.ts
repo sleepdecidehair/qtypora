@@ -1,6 +1,8 @@
 import type { MarkdownOptions } from '../../shared/markdown-options'
 import { getMarkdownParser } from './markdown'
 import type { ContextTarget } from './context-target'
+import { editorText } from './editor-i18n'
+import type { AppLocale } from '../../shared/i18n'
 
 export interface ImageSize { width: number | null; height: number | null; alignment?: 'left' | 'center' | 'right' | 'auto' }
 const htmlEscape = (text: string) => text.replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
@@ -43,38 +45,39 @@ export function imageSizeEdit(target: ContextTarget, size: ImageSize, options?: 
   return source === target.source ? null : { from: target.from, to: target.to, insert: source }
 }
 
-export function chooseImageSize(initial: ImageSize): Promise<ImageSize | null> {
+export function chooseImageSize(initial: ImageSize, locale?: AppLocale): Promise<ImageSize | null> {
   return new Promise(resolve => {
+    const t = (source: string) => editorText(locale, source)
     const dialog = document.createElement('dialog')
     dialog.className = 'cm-image-size-dialog'
-    dialog.setAttribute('aria-label', '图片尺寸')
-    const heading = document.createElement('h2'); heading.textContent = '图片尺寸'
-    const description = document.createElement('p'); description.textContent = '填写显示像素，留空自动计算。原始图片文件不变。'
+    dialog.setAttribute('aria-label', t('图片尺寸'))
+    const heading = document.createElement('h2'); heading.textContent = t('图片尺寸')
+    const description = document.createElement('p'); description.textContent = t('填写显示像素，留空自动计算。原始图片文件不变。')
     dialog.append(heading, description)
     const inputs = new Map<'width' | 'height', HTMLInputElement>()
     for (const [name, label] of [['width', '宽度'], ['height', '高度']] as const) {
-      const row = document.createElement('label'); row.textContent = label
+      const row = document.createElement('label'); row.textContent = t(label)
       const input = document.createElement('input'); input.type = 'number'; input.min = '1'; input.max = '10000'
-      input.setAttribute('aria-label', `图片${label}`); input.value = initial[name] === null ? '' : String(initial[name]); input.placeholder = '自动'
+      input.setAttribute('aria-label', t(name === 'width' ? '图片宽度' : '图片高度')); input.value = initial[name] === null ? '' : String(initial[name]); input.placeholder = t('自动')
       row.append(input); inputs.set(name, input); dialog.append(row)
     }
-    const alignmentLabel = document.createElement('label'); alignmentLabel.textContent = '对齐'
-    const alignment = document.createElement('select'); alignment.setAttribute('aria-label', '图片对齐')
+    const alignmentLabel = document.createElement('label'); alignmentLabel.textContent = t('对齐')
+    const alignment = document.createElement('select'); alignment.setAttribute('aria-label', t('图片对齐'))
     for (const [value, label] of [['auto', '跟随段落'], ['left', '靠左'], ['center', '居中'], ['right', '靠右']]) {
-      const option = document.createElement('option'); option.value = value; option.textContent = label; alignment.append(option)
+      const option = document.createElement('option'); option.value = value; option.textContent = t(label); alignment.append(option)
     }
     alignment.value = initial.alignment ?? 'auto'; alignmentLabel.append(alignment); dialog.append(alignmentLabel)
     const error = document.createElement('p'); error.setAttribute('role', 'alert')
     const actions = document.createElement('div'); actions.className = 'cm-image-size-actions'
-    const cancel = document.createElement('button'); cancel.type = 'button'; cancel.textContent = '取消'
-    const save = document.createElement('button'); save.type = 'button'; save.textContent = '应用尺寸'
+    const cancel = document.createElement('button'); cancel.type = 'button'; cancel.textContent = t('取消')
+    const save = document.createElement('button'); save.type = 'button'; save.textContent = t('应用尺寸')
     actions.append(cancel, save); dialog.append(error, actions)
     let result: ImageSize | null = null
     cancel.addEventListener('click', () => dialog.close())
     const submit = () => {
       const width = inputs.get('width')!, height = inputs.get('height')!
       const dimensions = { width: width.value === '' ? null : Number(width.value), height: height.value === '' ? null : Number(height.value) }
-      if (!width.checkValidity() || !height.checkValidity() || Object.values(dimensions).some(value => value !== null && !Number.isInteger(value))) { error.textContent = '请输入 1–10000 的整数，或留空使用自动尺寸。'; return }
+      if (!width.checkValidity() || !height.checkValidity() || Object.values(dimensions).some(value => value !== null && !Number.isInteger(value))) { error.textContent = t('请输入 1–10000 的整数，或留空使用自动尺寸。'); return }
       result = { ...dimensions, alignment: alignment.value as ImageSize['alignment'] }; dialog.close()
     }
     save.addEventListener('click', submit)

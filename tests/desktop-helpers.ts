@@ -122,7 +122,14 @@ export async function stopDesktop(session: DesktopSession, removeRoot = true): P
     else await clipboard.clear()
     Reflect.deleteProperty(globalThis, 'qtyporaTestClipboard')
   }).catch(() => undefined)
-  await session.app.evaluate(({ app }) => app.exit(0)).catch(() => undefined)
+  await session.app.evaluate(({ app, BrowserWindow }) => {
+    // Electron's visibility callbacks can run after webContents destruction during
+    // shutdown of hidden test windows. They are no longer needed during teardown.
+    for (const window of BrowserWindow.getAllWindows()) {
+      for (const event of ['show', 'hide', 'minimize', 'maximize', 'restore']) window.removeAllListeners(event)
+    }
+    app.exit(0)
+  }).catch(() => undefined)
   await session.app.close().catch(() => undefined)
   if (removeRoot) {
     const resolved = path.resolve(session.root)

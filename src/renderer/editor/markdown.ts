@@ -7,17 +7,19 @@ import { filterDiagramStyle, validateDiagramStyles } from './diagram-style'
 import { getMarkdownParser, isSafeResource, isSafeLink } from './markdown-parser'
 import { DEFAULT_MARKDOWN_OPTIONS, effectiveMarkdownOptions, type MarkdownOptions } from '../../shared/markdown-options'
 import { documentMetadata, type MathExpression } from './markdown-features'
+import type { AppLocale } from '../../shared/i18n'
+import { editorText } from './editor-i18n'
 export { getMarkdownParser, markdownParser, isSafeResource, isSafeLink } from './markdown-parser'
 
 const HTML_TAGS = ['p', 'u', 'nav', 'br', 'hr', 'strong', 'em', 's', 'del', 'code', 'pre', 'blockquote', 'ul', 'ol', 'li', 'a', 'img', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'table', 'thead', 'tbody', 'tr', 'th', 'td', 'span', 'div', 'section', 'sup', 'sub', 'mark', 'input', 'kbd', 'details', 'summary', 'audio', 'video', 'source', 'iframe']
 
-export function renderMarkdown(content: string, options: MarkdownOptions = DEFAULT_MARKDOWN_OPTIONS): string {
-  return sanitizeMarkdownHtml(getMarkdownParser(options).render(content))
+export function renderMarkdown(content: string, options: MarkdownOptions = DEFAULT_MARKDOWN_OPTIONS, locale?: AppLocale): string {
+  return sanitizeMarkdownHtml(getMarkdownParser(options).render(content, { locale }), locale)
 }
 
-export function renderReadingMarkdown(content: string, options: MarkdownOptions = DEFAULT_MARKDOWN_OPTIONS): string {
+export function renderReadingMarkdown(content: string, options: MarkdownOptions = DEFAULT_MARKDOWN_OPTIONS, locale?: AppLocale): string {
   const markdownParser = getMarkdownParser(options)
-  const environment: Record<string, unknown> = {}
+  const environment: Record<string, unknown> = { locale }
   const tokens = markdownParser.parse(content, environment)
   for (const token of tokens) {
     if (token.map && token.tag && token.nesting !== -1) {
@@ -25,10 +27,10 @@ export function renderReadingMarkdown(content: string, options: MarkdownOptions 
       token.attrSet('data-source-end', String(token.map[1]))
     }
   }
-  return sanitizeMarkdownHtml(markdownParser.renderer.render(tokens, markdownParser.options, environment))
+  return sanitizeMarkdownHtml(markdownParser.renderer.render(tokens, markdownParser.options, environment), locale)
 }
 
-export function sanitizeMarkdownHtml(markup: string): string {
+export function sanitizeMarkdownHtml(markup: string, locale?: AppLocale): string {
   const clean = DOMPurify.sanitize(markup, {
     ALLOWED_TAGS: HTML_TAGS,
     ALLOWED_ATTR: ['class', 'id', 'name', 'href', 'src', 'alt', 'title', 'colspan', 'rowspan', 'start', 'type', 'checked', 'disabled', 'open', 'width', 'height', 'data-math', 'data-math-index', 'data-mermaid', 'data-diagram-type', 'data-resource', 'data-source-line', 'data-source-end', 'aria-label', 'role', 'controls', 'preload', 'align'],
@@ -61,7 +63,7 @@ export function sanitizeMarkdownHtml(markup: string): string {
     else image.removeAttribute('data-resource')
     image.loading = 'lazy'
   }
-  sanitizeEmbeddedMedia(container)
+  sanitizeEmbeddedMedia(container, locale)
   for (const input of container.querySelectorAll('input')) {
     if (input.type !== 'checkbox') input.remove()
     else input.disabled = true
@@ -162,6 +164,7 @@ async function renderDiagram(source: string, theme: 'light' | 'dark', kind = 'me
 }
 
 export interface PreviewOptions {
+  locale?: AppLocale
   exportBudget?: ExportBudget
   exportCss?: string
   markdownOptions?: MarkdownOptions
@@ -213,7 +216,7 @@ export async function hydratePreview(container: HTMLElement, options: PreviewOpt
   }
   // Serial encoding and resource deduplication keep peak memory bounded by one image.
   const embedded = budget ? await prepareExportImages([...imageSources.values()], resolveImage, imageDataUrl, budget).catch(error => {
-    throw new Error(`图片导出失败：${error instanceof Error ? error.message : '资源无法读取'}`)
+    throw new Error(editorText(options.locale, '图片导出失败：{message}', { message: error instanceof Error ? error.message : editorText(options.locale, '资源无法读取') }))
   }) : undefined
   let mathOutputs: string[] | undefined
   let mathFailure: unknown
@@ -223,7 +226,7 @@ export async function hydratePreview(container: HTMLElement, options: PreviewOpt
     catch (error) { mathFailure = error }
   }
   await Promise.all([
-    hydrateEmbeddedMedia(container, { resolveResource: options.resolveResource, exportStatic: options.embedImages, strict: options.strict }),
+    hydrateEmbeddedMedia(container, { locale: options.locale, resolveResource: options.resolveResource, exportStatic: options.embedImages, strict: options.strict }),
     ...mathNodes.map(async (node) => {
       try {
         if (mathFailure) throw mathFailure
@@ -238,12 +241,12 @@ export async function hydratePreview(container: HTMLElement, options: PreviewOpt
           if (!/^#mjx-eqn(?::|%3a)/i.test(link.getAttribute('href') || '')) link.removeAttribute('href')
         }
       } catch (error) {
-        const message = error instanceof Error ? error.message : '未知错误'
-        if (options.strict) throw new Error(`公式导出失败：${message}`)
+        const message = error instanceof Error ? error.message : editorText(options.locale, '未知错误')
+        if (options.strict) throw new Error(editorText(options.locale, '公式导出失败：{message}', { message }))
         node.classList.add('md-preview-error')
         if (options.errorMode === 'placeholder') {
-          node.title = '公式显示失败'
-          node.textContent = '公式显示失败，请编辑并检查公式。'
+          node.title = editorText(options.locale, '公式显示失败')
+          node.textContent = editorText(options.locale, '公式显示失败，请编辑并检查公式。')
         } else node.title = message
       }
     }),
@@ -254,12 +257,12 @@ export async function hydratePreview(container: HTMLElement, options: PreviewOpt
         node.innerHTML = markup
       }
       catch (error) {
-        const message = error instanceof Error ? error.message : '未知错误'
-        if (options.strict) throw new Error(`图表导出失败：${message}`)
+        const message = error instanceof Error ? error.message : editorText(options.locale, '未知错误')
+        if (options.strict) throw new Error(editorText(options.locale, '图表导出失败：{message}', { message }))
         node.classList.add('md-preview-error')
         if (options.errorMode === 'placeholder') {
-          node.title = '图表显示失败'
-          node.textContent = '图表显示失败，请编辑并检查图表语法。'
+          node.title = editorText(options.locale, '图表显示失败')
+          node.textContent = editorText(options.locale, '图表显示失败，请编辑并检查图表语法。')
         } else node.title = message
       }
     }),
@@ -281,12 +284,12 @@ export async function hydratePreview(container: HTMLElement, options: PreviewOpt
         }
         image.removeAttribute('data-resource')
       } catch (error) {
-        const message = error instanceof Error ? error.message : '未知错误'
-        if (options.strict) throw new Error(`图片导出失败（${image.dataset.resource || image.alt}）：${message}`)
+        const message = error instanceof Error ? error.message : editorText(options.locale, '未知错误')
+        if (options.strict) throw new Error(editorText(options.locale, '图片导出失败（{resource}）：{message}', { resource: image.dataset.resource || image.alt, message }))
         if (options.errorMode === 'placeholder') {
           const placeholder = document.createElement('span')
           placeholder.className = 'md-preview-error'
-          placeholder.textContent = '图片显示失败，请检查图片路径。'
+          placeholder.textContent = editorText(options.locale, '图片显示失败，请检查图片路径。')
           image.replaceWith(placeholder)
         } else image.title = message
       }
@@ -296,25 +299,25 @@ export async function hydratePreview(container: HTMLElement, options: PreviewOpt
 
 const EXPORT_STYLE = 'body{max-width:800px;margin:40px auto;padding:0 32px;color:#262b32;background:#fff;font:16px/1.8 "Segoe UI","Microsoft YaHei",sans-serif;overflow-wrap:break-word}h1,h2,h3,h4,h5,h6{line-height:1.35}h1{font-size:2.1em}h2{font-size:1.6em;padding-bottom:.25em}a{color:#366fa0}pre,code{font-family:Consolas,monospace;background:#f3f4f6}pre{padding:16px;overflow:auto}code{padding:2px 4px}pre code{padding:0}table{border-collapse:collapse;margin:16px auto}th,td{border:1px solid #d9dde2;padding:8px 12px}blockquote{border-left:4px solid #d9dde2;padding-left:16px;color:#626a75;margin-left:0}img,svg{max-width:100%}.md-image-paragraph{text-align:center}.md-image-paragraph>img:only-child{display:block;margin-inline:auto}.md-math[data-math=block]{text-align:center;margin:24px 0}.md-mermaid{text-align:center;margin:24px 0}.md-mermaid svg{display:block;margin-inline:auto}math{font-family:"Cambria Math",serif}input[type=checkbox]{margin-right:8px}@media print{body{margin:0;max-width:none}pre,table,blockquote{break-inside:avoid}a{color:inherit}h1,h2,h3{break-after:avoid}}'
 
-function wrapDocument(body: string, metadata: Record<string, string> = {}, css = ''): string {
+function wrapDocument(body: string, metadata: Record<string, string> = {}, css = '', locale?: AppLocale): string {
   const escape = getMarkdownParser().utils.escapeHtml
-  const title = escape(metadata.title || 'Markdown 文档')
+  const title = escape(metadata.title || editorText(locale, 'Markdown 文档'))
   const meta = ['author', 'description', 'keywords'].filter(name => metadata[name]).map(name => `<meta name="${name}" content="${escape(metadata[name])}">`).join('')
-  return `<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${title}</title>${meta}<style>${EXPORT_STYLE}\n${markdownFeatureStyle}\n${css.replace(/<\/style/gi, '')}</style></head><body>${body}</body></html>`
+  return `<!doctype html><html lang="${locale === 'en-US' ? 'en-US' : 'zh-CN'}"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${title}</title>${meta}<style>${EXPORT_STYLE}\n${markdownFeatureStyle}\n${css.replace(/<\/style/gi, '')}</style></head><body>${body}</body></html>`
 }
 
 export function renderMarkdownDocument(content: string, options: MarkdownOptions = DEFAULT_MARKDOWN_OPTIONS): string { return wrapDocument(renderMarkdown(content, options), effectiveMarkdownOptions(options).frontMatter ? documentMetadata(content) : {}) }
 
 export async function renderExportDocument(content: string, options: PreviewOptions = {}): Promise<string> {
   const container = document.createElement('div')
-  container.innerHTML = renderMarkdown(content, options.markdownOptions)
+  container.innerHTML = renderMarkdown(content, options.markdownOptions, options.locale)
   container.querySelectorAll('.md-front-matter').forEach(node => node.remove())
   const environment: Record<string, unknown> = {}
   getMarkdownParser(options.markdownOptions).parse(content, environment)
   const metadata = effectiveMarkdownOptions(options.markdownOptions ?? DEFAULT_MARKDOWN_OPTIONS).frontMatter ? documentMetadata(content) : {}
-  const wrapper = wrapDocument('', metadata, options.exportCss)
+  const wrapper = wrapDocument('', metadata, options.exportCss, options.locale)
   await hydratePreview(container, { ...options, exportBudget: new ExportBudget(wrapper.length), mathExpressions: environment.mathExpressions as MathExpression[], embedImages: true, strict: true })
   const body = container.innerHTML
   new ExportBudget(wrapper.length + body.length)
-  return wrapDocument(body, metadata, options.exportCss)
+  return wrapDocument(body, metadata, options.exportCss, options.locale)
 }

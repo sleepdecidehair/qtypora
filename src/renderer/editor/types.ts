@@ -8,6 +8,7 @@ export interface EditorCommand { id: number; action: EditorAction; value?: strin
 export interface JumpRequest { id: number; line: number; documentId?: string }
 export interface EditorSelection { text: string; from: number; to: number }
 export interface MarkdownEditorProps {
+  locale?: import('../../shared/i18n').AppLocale
   platform: string
   desktopApi: DesktopApi
   documentId: string

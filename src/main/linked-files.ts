@@ -5,6 +5,7 @@ import type { DocumentRecord } from '../shared/contracts'
 import type { DocumentSession } from './documents'
 import { DesktopError, invalid, object, string } from './errors'
 import { MARKDOWN_EXTENSIONS, safeName } from './files'
+import { withWorkspaceStructure } from './workspace-lock'
 
 const EXTERNAL_DOCUMENT_EXTENSIONS = new Set([
   '.pdf', '.docx', '.odt', '.rtf', '.xlsx', '.ods', '.pptx', '.odp', '.epub',
@@ -47,32 +48,44 @@ export async function openLinkedFile(input: unknown, documents: DocumentSession,
   const id = string(request.id, '文档 ID', 100)
   const target = string(request.target, '链接地址', 8192)
   const sourcePath = documents.get(id).record.path
+  const sourceWorkspace = documents.workspace
   const { filePath, fragment } = linkPath(target, sourcePath ? path.dirname(sourcePath) : documents.workspace)
   const extension = path.extname(filePath).toLowerCase()
   const markdown = MARKDOWN_EXTENSIONS.has(extension)
   if (!markdown && !EXTERNAL_DOCUMENT_EXTENSIONS.has(extension)) throw new DesktopError('UNSUPPORTED', '此类型不能从文档链接直接打开。请在文件管理器中处理。')
 
   let canonical: string
+  let create = false
   try { canonical = await documents.authorize(filePath) }
   catch (error) {
     if (!(error && typeof error === 'object' && 'code' in error && error.code === 'ENOENT') || !markdown || extension === '.txt') throw error
     canonical = await documents.authorize(filePath, true)
     safeName(path.basename(canonical))
+    // A native dialog must not hold the shared structure lock.
     if (!await hooks.confirmCreate(canonical)) return null
-    if (documents.get(id).record.path !== sourcePath) throw new DesktopError('CONFLICT', '原文档位置已改变，请重新点击链接。')
-    if (await documents.authorize(filePath, true) !== canonical) throw new DesktopError('CONFLICT', '目标文件夹已改变，请重新点击链接。')
-    const handle = await fs.open(canonical, 'wx', 0o600)
-    await handle.close()
+    create = true
   }
-  const stat = await fs.stat(canonical)
-  if (!stat.isFile()) invalid('链接目标不是普通文件。')
-  documents.get(id)
-  if (markdown) {
-    if (!MARKDOWN_EXTENSIONS.has(path.extname(canonical).toLowerCase())) throw new DesktopError('UNSUPPORTED', '链接实际目标不是 Markdown 文件。')
-    return { document: await documents.open(canonical), fragment }
-  }
-  if (!EXTERNAL_DOCUMENT_EXTENSIONS.has(path.extname(canonical).toLowerCase())) throw new DesktopError('UNSUPPORTED', '链接实际目标类型不受支持。')
-  const error = await hooks.openPath(await documents.authorize(canonical))
+
+  const selected = await withWorkspaceStructure(async () => {
+    if (documents.get(id).record.path !== sourcePath || !sourcePath && documents.workspace !== sourceWorkspace) throw new DesktopError('CONFLICT', '原文档位置已改变，请重新点击链接。')
+    const current = await documents.authorize(filePath, create)
+    if (current !== canonical) throw new DesktopError('CONFLICT', '目标文件夹已改变，请重新点击链接。')
+    if (create) {
+      const handle = await fs.open(canonical, 'wx', 0o600)
+      await handle.close()
+    }
+    const stat = await fs.stat(canonical)
+    if (!stat.isFile()) invalid('链接目标不是普通文件。')
+    if (markdown) {
+      if (!MARKDOWN_EXTENSIONS.has(path.extname(canonical).toLowerCase())) throw new DesktopError('UNSUPPORTED', '链接实际目标不是 Markdown 文件。')
+      return { document: await documents.openAlreadyLocked(canonical), attachment: null }
+    }
+    if (!EXTERNAL_DOCUMENT_EXTENSIONS.has(path.extname(canonical).toLowerCase())) throw new DesktopError('UNSUPPORTED', '链接实际目标类型不受支持。')
+    return { document: null, attachment: canonical }
+  })
+  if (selected.document) return { document: selected.document, fragment }
+  // Opening an external application can take time; no structure lock is held here.
+  const error = await hooks.openPath(selected.attachment!)
   if (error) throw new DesktopError('IO_ERROR', '系统未能打开此附件。请检查是否安装了相应应用。')
   return { document: null, fragment: null }
 }

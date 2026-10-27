@@ -1,7 +1,9 @@
 import { allowedEmbedUrl } from '../../shared/embedded-media'
 import { isSafeLink, isSafeResource } from './markdown-parser'
+import { editorText } from './editor-i18n'
+import type { AppLocale } from '../../shared/i18n'
 
-export function sanitizeEmbeddedMedia(container: HTMLElement): void {
+export function sanitizeEmbeddedMedia(container: HTMLElement, locale?: AppLocale): void {
   for (const media of container.querySelectorAll<HTMLMediaElement>('audio,video')) {
     media.controls = true
     media.preload = 'metadata'
@@ -28,14 +30,14 @@ export function sanitizeEmbeddedMedia(container: HTMLElement): void {
     placeholder.className = 'md-embedded-page'
     placeholder.dataset.embedSource = source
     const label = document.createElement('p')
-    label.textContent = frame.title || '嵌入视频'
+    label.textContent = frame.title || editorText(locale, '嵌入视频')
     const button = document.createElement('button')
     button.type = 'button'
-    button.textContent = '加载嵌入内容'
+    button.textContent = editorText(locale, '加载嵌入内容')
     button.dataset.loadEmbed = 'true'
     const link = document.createElement('a')
     link.href = source
-    link.textContent = '在浏览器中打开'
+    link.textContent = editorText(locale, '在浏览器中打开')
     link.rel = 'noopener noreferrer'
     placeholder.append(label, button, link)
     frame.replaceWith(placeholder)
@@ -46,6 +48,7 @@ export async function hydrateEmbeddedMedia(container: HTMLElement, options: {
   resolveResource?: (source: string) => Promise<string>
   exportStatic?: boolean
   strict?: boolean
+  locale?: AppLocale
 }): Promise<void> {
   for (const placeholder of container.querySelectorAll<HTMLElement>('.md-embedded-page[data-embed-source]')) {
     const button = placeholder.querySelector<HTMLButtonElement>('[data-load-embed]')
@@ -56,7 +59,7 @@ export async function hydrateEmbeddedMedia(container: HTMLElement, options: {
       const source = allowedEmbedUrl(placeholder.dataset.embedSource || '')
       if (!source || placeholder.querySelector('iframe')) return
       const frame = document.createElement('iframe')
-      frame.title = placeholder.querySelector('p')?.textContent || '嵌入视频'
+      frame.title = placeholder.querySelector('p')?.textContent || editorText(options.locale, '嵌入视频')
       frame.sandbox.add('allow-scripts', 'allow-same-origin')
       frame.referrerPolicy = 'no-referrer'
       frame.allow = 'fullscreen'
@@ -71,7 +74,7 @@ export async function hydrateEmbeddedMedia(container: HTMLElement, options: {
     if (options.exportStatic) {
       const source = sources[0]?.getAttribute('data-resource') || ''
       const link = document.createElement('a')
-      link.textContent = `${media.tagName === 'AUDIO' ? '音频' : '视频'}：${source || '未指定资源'}`
+      link.textContent = `${editorText(options.locale, media.tagName === 'AUDIO' ? '音频' : '视频')}${options.locale === 'en-US' ? ': ' : '：'}${source || editorText(options.locale, '未指定资源')}`
       if (isSafeLink(source)) link.setAttribute('href', source)
       media.replaceWith(link)
       return
@@ -89,7 +92,7 @@ export async function hydrateEmbeddedMedia(container: HTMLElement, options: {
     }
     if (usable) media.load()
     else {
-      const message = '媒体显示失败，请检查音频或视频路径。'
+      const message = editorText(options.locale, '媒体显示失败，请检查音频或视频路径。')
       if (options.strict) throw new Error(message)
       const placeholder = document.createElement('span')
       placeholder.className = 'md-preview-error'

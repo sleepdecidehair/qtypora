@@ -3,12 +3,13 @@ import type { ContextMenuAction, ContextMenuKind, ContextMenuRequest } from '../
 import { validSpellingWord } from '../shared/spelling'
 import { boolean, invalid, object } from './errors'
 import type { DesktopMenuItem } from './menu'
+import { translate, type AppLocale } from '../shared/i18n'
 
 type MenuGroup = ReadonlyArray<readonly [ContextMenuAction, string]>
 const editing: MenuGroup = [
   ['undo', '撤销'], ['redo', '重做'], ['cut', '剪切'], ['copy', '复制'], ['paste', '粘贴'], ['select-all', '全选'],
 ]
-const copying: MenuGroup = [['copy-markdown', '复制为 Markdown'], ['copy-html', '复制为 HTML'], ['copy-plain', '复制为纯文本'], ['paste-plain', '粘贴为纯文本']]
+const copying: MenuGroup = [['copy-markdown', '复制为 Markdown'], ['copy-html', '复制为 HTML'], ['copy-plain', '复制为纯文本'], ['copy-without-theme', '复制时不使用主题'], ['paste-plain', '粘贴为纯文本']]
 const inline: MenuGroup = [['bold', '加粗'], ['italic', '斜体'], ['strike', '删除线'], ['inline-code', '行内代码'], ['clear-format', '清除格式']]
 const blocks: MenuGroup = [
   ['heading-1', '一级标题'], ['heading-2', '二级标题'], ['heading-3', '三级标题'], ['heading-4', '四级标题'], ['heading-5', '五级标题'], ['heading-6', '六级标题'],
@@ -38,11 +39,11 @@ const spellingActions: ContextMenuAction[] = ['spell-learn', 'spell-ignore', 'sp
 const knownActions = new Set(Object.values(groupsByKind).flat(2).filter((entry): entry is readonly [ContextMenuAction, string] => Array.isArray(entry)).map(([action]) => action))
 for (const action of spellingActions) knownActions.add(action)
 const readonlyActions = new Set<ContextMenuAction>([
-  'copy', 'select-all', 'copy-markdown', 'copy-html', 'copy-plain', 'copy-table', 'copy-code', 'copy-math', 'copy-mathml', 'copy-diagram',
+  'copy', 'select-all', 'copy-markdown', 'copy-html', 'copy-plain', 'copy-without-theme', 'copy-table', 'copy-code', 'copy-math', 'copy-mathml', 'copy-diagram',
   'open-link', 'copy-link', 'image-copy-path', 'image-save-as', 'resource-save-svg', 'resource-save-png', 'resource-save-jpeg', 'view-resource',
   ...files.map(([action]) => action),
 ])
-const selectionActions = new Set<ContextMenuAction>(['cut', 'copy', 'copy-markdown', 'copy-html', 'copy-plain'])
+const selectionActions = new Set<ContextMenuAction>(['cut', 'copy', 'copy-markdown', 'copy-html', 'copy-plain', 'copy-without-theme'])
 const localImageActions = new Set<ContextMenuAction>(['image-copy', 'image-move', 'image-save-as', 'image-delete', 'image-upload'])
 
 export function validateContextMenu(value: unknown): ContextMenuRequest {
@@ -64,7 +65,7 @@ export function validateContextMenu(value: unknown): ContextMenuRequest {
   }
 }
 
-export function contextMenuTemplate(request: ContextMenuRequest, select: (action: ContextMenuAction) => void): DesktopMenuItem[] {
+export function contextMenuTemplate(request: ContextMenuRequest, select: (action: ContextMenuAction) => void, locale: AppLocale = 'zh-CN'): DesktopMenuItem[] {
   const available = new Set(request.availableActions)
   const result: DesktopMenuItem[] = []
   if (request.spelling && !request.readOnly) {
@@ -72,18 +73,18 @@ export function contextMenuTemplate(request: ContextMenuRequest, select: (action
       const action = `spell-suggestion-${index}` as ContextMenuAction
       if (available.has(action)) result.push({ id: action, label: suggestion.replaceAll('&', '&&'), click: () => select(action) })
     })
-    if (available.has('spell-learn')) result.push({ id: 'spell-learn', label: '加入拼写词典', click: () => select('spell-learn') })
-    if (available.has('spell-ignore')) result.push({ id: 'spell-ignore', label: '忽略此词的拼写建议（当前窗口）', click: () => select('spell-ignore') })
+    if (available.has('spell-learn')) result.push({ id: 'spell-learn', label: translate(locale, '加入拼写词典'), click: () => select('spell-learn') })
+    if (available.has('spell-ignore')) result.push({ id: 'spell-ignore', label: translate(locale, '忽略此词的拼写建议（当前窗口）'), click: () => select('spell-ignore') })
   }
   for (const group of groupsByKind[request.kind]) {
     const items = group.filter(([action]) => available.has(action) && (!request.readOnly || readonlyActions.has(action)) &&
       (!selectionActions.has(action) || request.hasSelection) && (!localImageActions.has(action) || request.hasLocalResource) &&
       (action !== 'undo' || request.canUndo) && (action !== 'redo' || request.canRedo))
-      .map(([action, label]): DesktopMenuItem => ({ id: action, label, click: () => select(action) }))
+      .map(([action, label]): DesktopMenuItem => ({ id: action, label: translate(locale, label), click: () => select(action) }))
     if (items.length) {
       if (result.length) result.push({ type: 'separator' })
       const label = group === copying ? '复制 / 粘贴为' : group === inline ? '格式' : group === blocks ? '段落' : group === inserts ? '插入' : null
-      result.push(...(label ? [{ label, submenu: items }] : items))
+      result.push(...(label ? [{ label: translate(locale, label), submenu: items }] : items))
     }
   }
   return result
@@ -103,7 +104,7 @@ export class NativeContextMenus {
   private readonly pending = new Map<number, PendingMenu>()
   constructor(private readonly create: (template: DesktopMenuItem[]) => PopupMenu) {}
 
-  show(window: PopupWindow, request: ContextMenuRequest): Promise<ContextMenuAction | null> {
+  show(window: PopupWindow, request: ContextMenuRequest, locale: AppLocale = 'zh-CN'): Promise<ContextMenuAction | null> {
     this.cancel(window)
     if (window.isDestroyed()) return Promise.resolve(null)
     return new Promise((resolve, reject) => {
@@ -118,7 +119,7 @@ export class NativeContextMenus {
         resolve(action)
       }
       try {
-        const template = contextMenuTemplate(request, finish)
+        const template = contextMenuTemplate(request, finish, locale)
         if (!template.length) { finish(null); return }
         const menu = this.create(template)
         pending = { menu, finish }

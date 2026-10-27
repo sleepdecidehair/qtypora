@@ -10,6 +10,7 @@ import { IMAGE_MIME, MAX_DOCUMENT_BYTES } from './files'
 import type { DocumentSession } from './documents'
 import { MEDIA_MIME, MAX_MEDIA_BYTES, parseByteRange } from './media-resources'
 import { resolveRootImagePath } from './image-metadata'
+import { isPathWithin, isPossiblyWithin, relocatedPath } from './workspace-lock'
 
 const RESOURCE_MIME = { ...IMAGE_MIME, ...MEDIA_MIME }
 const resourceLimit = (filePath: string): number => MEDIA_MIME[path.extname(filePath).toLowerCase()] ? MAX_MEDIA_BYTES : MAX_DOCUMENT_BYTES
@@ -19,6 +20,21 @@ interface ResourceToken { path: string; owner: number }
 export class ResourceRegistry {
   private readonly resources = new Map<string, ResourceToken>()
   private readonly paths = new Map<string, string>()
+
+  hasPathsWithin(directory: string): boolean {
+    return [...this.resources.values()].some(resource => isPossiblyWithin(resource.path, directory))
+  }
+
+  registeredPaths(): string[] { return [...this.resources.values()].map(resource => resource.path) }
+
+  /** Preserve issued per-window resource tokens when a document directory moves. */
+  relocatePaths(source: string, destination: string): void {
+    for (const resource of this.resources.values()) {
+      if (isPathWithin(resource.path, source)) resource.path = relocatedPath(source, destination, resource.path)
+    }
+    this.paths.clear()
+    for (const [token, resource] of this.resources) this.paths.set(`${resource.owner}:${resource.path}`, token)
+  }
 
   async resolve(source: string, documentPath: string | null, documents: DocumentSession, owner: number): Promise<string> {
     if (/^https?:\/\//i.test(source)) {

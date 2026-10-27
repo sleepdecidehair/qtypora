@@ -6,12 +6,13 @@ export interface WorkspaceOptions {
   showHidden: boolean
   showAllFiles: boolean
   filter: string
+  searchExclude: string
   pinnedFolders: string[]
 }
 
 export const DEFAULT_WORKSPACE_OPTIONS: WorkspaceOptions = {
   view: 'tree', sort: 'natural', descending: false, foldersFirst: true,
-  showHidden: false, showAllFiles: false, filter: '', pinnedFolders: [],
+  showHidden: false, showAllFiles: false, filter: '', searchExclude: '', pinnedFolders: [],
 }
 
 export function normalizeWorkspaceOptions(input?: unknown): WorkspaceOptions {
@@ -36,6 +37,10 @@ export function normalizeWorkspaceOptions(input?: unknown): WorkspaceOptions {
     if (typeof value.filter !== 'string' || value.filter.length > 256 || /[\u0000-\u001f]/.test(value.filter)) throw new Error('文件筛选最长 256 字符，不能含控制字符。')
     result.filter = value.filter
   }
+  if (value.searchExclude !== undefined) {
+    if (typeof value.searchExclude !== 'string' || value.searchExclude.length > 256 || /[\u0000-\u001f\u007f]/.test(value.searchExclude)) throw new Error('搜索排除目录最长 256 字符，不能含控制字符。')
+    result.searchExclude = value.searchExclude
+  }
   if (value.pinnedFolders !== undefined) {
     if (!Array.isArray(value.pinnedFolders) || value.pinnedFolders.length > 20 || value.pinnedFolders.some(path => typeof path !== 'string' || path.length > 4096 || /[\u0000-\u001f]/.test(path) || !/^(?:[a-z]:[\\/]|\/|\\\\)/i.test(path))) throw new Error('固定目录必须是最多 20 个绝对路径。')
     result.pinnedFolders = [...new Set(value.pinnedFolders as string[])]
@@ -59,6 +64,33 @@ export function wildcardMatches(name: string, pattern: string): boolean {
   }
   while (glob[token] === '*') token++
   return token === glob.length
+}
+
+/** Comma-separated directory names or workspace-relative wildcard paths. */
+export function parseSearchExclusions(input: unknown): string[] {
+  if (typeof input !== 'string' || input.length > 256 || /[\u0000-\u001f\u007f]/.test(input)) throw new Error('搜索排除目录最长 256 字符，不能含控制字符。')
+  const patterns = input.split(',').map(part => part.trim()).filter(Boolean).map(part => part.replace(/\\/g, '/').replace(/\/+$/, ''))
+  if (patterns.length > 20 || patterns.some(pattern => !pattern || pattern.length > 128 || pattern.startsWith('/') || /^[a-z]:/i.test(pattern) || pattern.split('/').some(segment => !segment || segment === '.' || segment === '..'))) throw new Error('排除目录请输入最多 20 个目录名或工作区相对路径，不能使用绝对路径或 ..。')
+  return [...new Set(patterns)]
+}
+
+export function excludesSearchDirectory(relativePath: string, patterns: readonly string[]): boolean {
+  const normalized = relativePath.replace(/\\/g, '/')
+  const name = normalized.slice(normalized.lastIndexOf('/') + 1)
+  return patterns.some(pattern => wildcardMatches(pattern.includes('/') ? normalized : name, pattern))
+}
+
+export function isSearchDocumentInScope(root: string, filePath: string | null, exclusions: string): boolean {
+  if (!filePath) return false
+  const normalizedRoot = root.replace(/\\/g, '/').replace(/\/+$/, '') || '/'
+  const prefix = normalizedRoot === '/' ? '/' : `${normalizedRoot}/`
+  const file = filePath.replace(/\\/g, '/')
+  if (!file.toLowerCase().startsWith(prefix.toLowerCase())) return false
+  const segments = file.slice(prefix.length).split('/')
+  if (!segments.at(-1)) return false
+  const patterns = parseSearchExclusions(exclusions)
+  for (let index = 1; index < segments.length; index++) if (excludesSearchDirectory(segments.slice(0, index).join('/'), patterns)) return false
+  return true
 }
 
 export function matchesFileFilter(name: string, filter: string): boolean {

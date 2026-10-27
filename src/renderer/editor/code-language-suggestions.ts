@@ -1,14 +1,16 @@
 import { codeLanguageSuggestions, type CodeLanguageOption } from './code-languages'
+import { editorText } from './editor-i18n'
+import type { AppLocale } from '../../shared/i18n'
 
 let nextSuggestionId = 0
 
-export function attachCodeLanguageSuggestions(input: HTMLInputElement, onPick: (value: string) => void): () => void {
+export function attachCodeLanguageSuggestions(input: HTMLInputElement, onPick: (value: string) => void, locale?: AppLocale): () => void {
   const popup = document.createElement('div')
   popup.className = 'cm-code-language-suggestions'
   popup.popover = 'manual'
   popup.id = `code-language-suggestions-${++nextSuggestionId}`
   popup.setAttribute('role', 'listbox')
-  popup.setAttribute('aria-label', '代码语言建议')
+  popup.setAttribute('aria-label', editorText(locale, '代码语言建议'))
   input.parentElement!.append(popup)
   input.setAttribute('role', 'combobox')
   input.setAttribute('aria-autocomplete', 'list')

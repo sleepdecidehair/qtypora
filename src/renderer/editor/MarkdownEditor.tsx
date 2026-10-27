@@ -11,6 +11,7 @@ import { markdownInputExtension } from './markdown-input'
 import { markdownOptionsFacet } from './markdown-config'
 import { organizeDocumentImages, uploadDocumentImages } from './image-upload'
 import { clipboardImportExtension } from './clipboard-import'
+import { richClipboardExtension } from './rich-clipboard'
 import { markdown, markdownLanguage } from '@codemirror/lang-markdown'
 import { codeLanguageForInfo } from './code-languages'
 import { openSearchPanel, search, searchKeymap } from '@codemirror/search'
@@ -21,7 +22,8 @@ import { readReadingAnchor, readSourceAnchor, restoreReadingAnchor, type Semanti
 import { styleScope } from './live-inline'
 import { focusLiveTableSelection, selectLiveTableCell } from './live-table'
 import { editorDefaultKeymap } from './editor-keymap'
-import { selectLiveCode } from './live-code'
+import { editorText } from './editor-i18n'
+import { autoIndentSelectedCode, codeBlockDisplay, editorLocale, selectLiveCode } from './live-code'
 import { preserveHeadingPreview } from './live-source-edit'
 import { folderSearchHighlight, setFolderSearch } from './folder-search-highlight'
 
@@ -52,7 +54,9 @@ function applyAction(view: EditorView, action: EditorAction, value?: string): bo
   if (action === 'undo') { const result = undo(view); if (!focusLiveTableSelection(view)) view.focus(); return result }
   if (action === 'redo') { const result = redo(view); if (!focusLiveTableSelection(view)) view.focus(); return result }
   const { from, to } = view.state.selection.main
-  const edit = createTextEdit(action, view.state.doc.toString(), from, to, value)
+  const settings = view.state.facet(markdownOptionsFacet)
+  const actionValue = action === 'code' && settings.codeDefaultLanguageMode !== 'typed' ? settings.defaultCodeLanguage : value
+  const edit = createTextEdit(action, view.state.doc.toString(), from, to, actionValue)
   if (!edit) return false
   view.dispatch({ changes: { from: edit.from, to: edit.to, insert: edit.insert }, selection: edit.selection, scrollIntoView: true, userEvent: 'input.format' })
   if (!focusLiveTableSelection(view)) view.focus()
@@ -61,9 +65,9 @@ function applyAction(view: EditorView, action: EditorAction, value?: string): bo
 
 function configuration(props: MarkdownEditorProps, callbacks: Pick<MarkdownEditorProps, 'resolveResource' | 'onLinkOpen'>): Extension[] {
   const extensions: Extension[] = [
-    markdownOptionsFacet.of(props.markdownOptions), markdownCompletionExtension, markdownInputExtension, indentUnit.of(' '.repeat(props.markdownOptions.codeIndentSize)),
+    markdownOptionsFacet.of(props.markdownOptions), editorLocale.of(props.locale ?? 'zh-CN'), markdownCompletionExtension, markdownInputExtension, indentUnit.of(' '.repeat(props.markdownOptions.codeIndentSize)),
     EditorState.readOnly.of(props.readOnly), EditorView.editable.of(!props.readOnly),
-    EditorView.contentAttributes.of({ 'aria-label': 'Markdown 编辑器', spellcheck: String(props.spellcheck), 'data-mode': props.mode }),
+    EditorView.contentAttributes.of({ 'aria-label': editorText(props.locale, 'Markdown 编辑器'), spellcheck: String(props.spellcheck), 'data-mode': props.mode }),
     EditorView.theme({
       '&': { fontSize: `${props.fontSize}px`, color: 'var(--color-text)', backgroundColor: 'var(--color-surface)' },
       '.cm-content': { fontFamily: props.mode === 'source' ? 'Consolas, "Cascadia Code", monospace' : 'var(--font-editor)', caretColor: 'var(--color-text)', minHeight: '100%', paddingBottom: props.typewriterMode ? '45vh' : '120px' },
@@ -78,7 +82,7 @@ function configuration(props: MarkdownEditorProps, callbacks: Pick<MarkdownEdito
   if (props.markdownOptions.autoPairBrackets) extensions.push(closeBrackets())
   if (props.wrapLines) extensions.push(EditorView.lineWrapping)
   if (props.lineNumbers && props.mode === 'source') extensions.push(lineNumbers(), highlightActiveLineGutter())
-  if (props.mode === 'hybrid') extensions.push(hybridExtension({ theme: props.theme, focusMode: props.focusMode, readOnly: props.readOnly, markdownOptions: props.markdownOptions, ...callbacks }))
+  if (props.mode === 'hybrid') extensions.push(hybridExtension({ locale: props.locale, theme: props.theme, focusMode: props.focusMode, readOnly: props.readOnly, markdownOptions: props.markdownOptions, ...callbacks }))
   return extensions
 }
 
@@ -128,8 +132,9 @@ export function MarkdownEditor(props: MarkdownEditorProps): React.JSX.Element {
     return EditorState.create({
       doc: current.value,
       extensions: [
-        history(), drawSelection(), indentOnInput(), bracketMatching(),
+        history(), drawSelection(), indentOnInput(), bracketMatching(), codeBlockDisplay,
         clipboardImportExtension(() => ({ snapshot: { id: propsRef.current.documentId, content: viewRef.current?.state.doc.toString() ?? propsRef.current.value, revision: propsRef.current.revision }, mode: propsRef.current.mode, readOnly: propsRef.current.readOnly, imageOptions: propsRef.current.imageOptions, readClipboardText: () => propsRef.current.desktopApi.readClipboardText(), importImages: request => propsRef.current.desktopApi.importImages(request), onError: setContextError })),
+        richClipboardExtension(() => ({ mode: propsRef.current.mode, api: propsRef.current.desktopApi, onError: setContextError })),
         markdown({ codeLanguages: codeLanguageForInfo, base: markdownLanguage }), syntaxHighlighting(editorHighlightStyle),
         highlightActiveLine(), search({ top: true }), folderSearchHighlight,
         keymap.of([
@@ -147,6 +152,7 @@ export function MarkdownEditor(props: MarkdownEditorProps): React.JSX.Element {
           { key: 'Mod-Shift-`', run: (view) => applyAction(view, 'inline-code') },
           { key: 'Alt-Shift-5', run: (view) => applyAction(view, 'strike') },
           { key: 'Mod-\\', run: (view) => applyAction(view, 'clear-format') },
+          { key: 'Shift-Tab', run: autoIndentSelectedCode },
           indentWithTab, ...closeBracketsKeymap, ...editorDefaultKeymap, ...historyKeymap, ...searchKeymap,
         ]),
         compartmentRef.current.of(editorConfiguration(current)),
@@ -267,7 +273,7 @@ export function MarkdownEditor(props: MarkdownEditorProps): React.JSX.Element {
     if (isReturning) { readingSnapshotRef.current = null; readingReturnAnchorRef.current = null }
     modeScrollAnchorRef.current = null
     modeRef.current = props.mode
-  }, [props.documentId, props.mode, props.theme, props.fontSize, props.focusMode, props.typewriterMode, props.readOnly, props.lineNumbers, props.wrapLines, props.spellcheck, props.markdownOptions])
+  }, [props.documentId, props.mode, props.theme, props.locale, props.fontSize, props.focusMode, props.typewriterMode, props.readOnly, props.lineNumbers, props.wrapLines, props.spellcheck, props.markdownOptions])
 
   useEffect(() => {
     if (props.mode === 'reading' || !props.command || !viewRef.current) return
@@ -301,7 +307,7 @@ export function MarkdownEditor(props: MarkdownEditorProps): React.JSX.Element {
   }, [contextError])
 
   return <div className={`markdown-editor markdown-editor-${props.mode}${props.focusMode ? ' markdown-editor-focus' : ''}`} data-testid="markdown-editor">
-    {contextError ? <div className="editor-context-error" role="alert">{contextError}<button type="button" aria-label="关闭提示" onClick={() => setContextError('')}>×</button></div> : null}
+    {contextError ? <div className="editor-context-error" role="alert">{editorText(props.locale, contextError)}<button type="button" aria-label={editorText(props.locale, '关闭提示')} onClick={() => setContextError('')}>×</button></div> : null}
     <div className="editor-mount" ref={mountRef} hidden={props.mode === 'reading'} aria-hidden={props.mode === 'reading'} />
     {props.mode === 'reading' ? <ReadingView markdownOptions={props.markdownOptions} ref={readingRef} platform={props.platform} documentId={props.documentId} content={props.value} theme={props.theme} fontSize={props.fontSize} command={props.command} jumpToLine={props.jumpToLine} onLinkOpen={props.onLinkOpen} resolveResource={props.resolveResource} initialAnchor={readingSnapshotRef.current?.documentId === props.documentId ? readingSnapshotRef.current.anchor : null} /> : null}
     {resource ? <ResourceViewer resource={resource} onClose={closeResource} /> : null}

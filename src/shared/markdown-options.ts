@@ -19,6 +19,9 @@ export interface MarkdownOptions {
   codeWrapLines: boolean
   codeIndentSize: number
   defaultCodeLanguage: string
+  codeDefaultLanguageMode: 'both' | 'typed' | 'menu'
+  codeShiftTabAutoIndent: boolean
+  copyPlainMarkdown: boolean
 }
 
 export const DEFAULT_MARKDOWN_OPTIONS: MarkdownOptions = {
@@ -27,7 +30,8 @@ export const DEFAULT_MARKDOWN_OPTIONS: MarkdownOptions = {
   subscript: true, superscript: true, footnotes: true, emoji: true,
   inlineMath: true, mathNumbering: false, diagrams: true, smartPunctuation: false, softBreaks: false,
   autoPairBrackets: true, autoPairMarkdown: true, codeLineNumbers: false,
-  codeWrapLines: true, codeIndentSize: 2, defaultCodeLanguage: '',
+  codeWrapLines: true, codeIndentSize: 2, defaultCodeLanguage: '', codeDefaultLanguageMode: 'both',
+  codeShiftTabAutoIndent: false, copyPlainMarkdown: true,
 }
 
 /** Keep saved extension preferences intact while the CommonMark preset is active. */
@@ -48,6 +52,9 @@ export function normalizeMarkdownOptions(input: unknown): MarkdownOptions {
     if (name === 'codeIndentSize') {
       if (!Number.isInteger(value) || Number(value) < 1 || Number(value) > 8) throw new Error('代码缩进宽度必须为 1 到 8。')
       options.codeIndentSize = value as number
+    } else if (name === 'codeDefaultLanguageMode') {
+      if (value !== 'both' && value !== 'typed' && value !== 'menu') throw new Error('默认代码语言应用方式无效。')
+      options.codeDefaultLanguageMode = value
     } else if (name === 'defaultCodeLanguage') {
       if (typeof value !== 'string' || value.length > 40 || !/^[\w+#.-]*$/.test(value)) throw new Error('默认代码语言无效。')
       options.defaultCodeLanguage = value

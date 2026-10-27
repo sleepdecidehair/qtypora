@@ -13,28 +13,30 @@ import { LiveMediaWidget } from './live-media'
 import { resourceFitExtension } from './resource-fit'
 import { liveCodeBlocks, liveCodeExtension } from './live-code'
 import { focusedHeadingEditRange, headingInputPreview, liveSourceEditExtension } from './live-source-edit'
+import { editorText } from './editor-i18n'
+import type { AppLocale } from '../../shared/i18n'
 
 export type HybridOptions = LiveOptions
 
 class InlineTextWidget extends WidgetType {
-  constructor(readonly text: string, readonly href?: string) { super() }
-  eq(other: InlineTextWidget): boolean { return this.text === other.text && this.href === other.href }
+  constructor(readonly text: string, readonly href?: string, readonly locale?: AppLocale) { super() }
+  eq(other: InlineTextWidget): boolean { return this.text === other.text && this.href === other.href && this.locale === other.locale }
   toDOM(): HTMLElement {
     const span = document.createElement(this.href ? 'a' : 'span')
     span.textContent = this.text
-    if (this.href) { span.className = 'cm-live-footnote cm-live-link'; span.dataset.href = this.href; span.setAttribute('href', this.href); span.setAttribute('aria-label', `跳转到脚注 ${this.text}`) }
+    if (this.href) { span.className = 'cm-live-footnote cm-live-link'; span.dataset.href = this.href; span.setAttribute('href', this.href); span.setAttribute('aria-label', editorText(this.locale, '跳转到脚注 {label}', { label: this.text })) }
     return span
   }
   ignoreEvent(): boolean { return false }
 }
 
 class TaskWidget extends WidgetType {
-  constructor(readonly from: number, readonly checked: boolean, readonly readOnly: boolean) { super() }
-  eq(other: TaskWidget): boolean { return this.from === other.from && this.checked === other.checked && this.readOnly === other.readOnly }
+  constructor(readonly from: number, readonly checked: boolean, readonly readOnly: boolean, readonly locale?: AppLocale) { super() }
+  eq(other: TaskWidget): boolean { return this.from === other.from && this.checked === other.checked && this.readOnly === other.readOnly && this.locale === other.locale }
   toDOM(view: EditorView): HTMLElement {
     const input = document.createElement('input')
     input.type = 'checkbox'; input.checked = this.checked; input.disabled = this.readOnly
-    input.setAttribute('aria-label', this.checked ? '标为未完成' : '标为完成')
+    input.setAttribute('aria-label', editorText(this.locale, this.checked ? '标为未完成' : '标为完成'))
     input.addEventListener('mousedown', (event) => event.preventDefault())
     input.addEventListener('click', (event) => {
       event.preventDefault()
@@ -73,7 +75,7 @@ function decorations(state: EditorState, options: HybridOptions): DecorationSet 
   }
   for (const span of inlinePreviewSpans(state, [...excluded, ...mediaRanges, ...codeBlocks, ...(editing ? [editing] : [])])) {
     if (span.line) ranges.push(Decoration.line({ class: span.className }).range(span.from))
-    else if (span.replacement !== undefined) ranges.push(Decoration.replace({ widget: new InlineTextWidget(span.replacement, span.href) }).range(span.from, span.to))
+    else if (span.replacement !== undefined) ranges.push(Decoration.replace({ widget: new InlineTextWidget(span.replacement, span.href, options.locale) }).range(span.from, span.to))
     else if (span.hidden && span.to > span.from) ranges.push(Decoration.replace({}).range(span.from, span.to))
     else if (span.className && span.to > span.from) ranges.push(Decoration.mark({ class: span.className, ...(span.href && isSafeLink(span.href) ? { attributes: { 'data-href': span.href } } : {}) }).range(span.from, span.to))
   }
@@ -86,7 +88,7 @@ function decorations(state: EditorState, options: HybridOptions): DecorationSet 
       continue
     }
     const task = line.text.match(/^(\s*(?:>\s*)*(?:[-+*]|\d+[.)])\s+)\[([ xX])\]/)
-    if (task && !settings.strictMode) ranges.push(Decoration.replace({ widget: new TaskWidget(line.from + task[1].length, task[2] !== ' ', options.readOnly) }).range(line.from + task[1].length, line.from + task[1].length + 3))
+    if (task && !settings.strictMode) ranges.push(Decoration.replace({ widget: new TaskWidget(line.from + task[1].length, task[2] !== ' ', options.readOnly, options.locale) }).range(line.from + task[1].length, line.from + task[1].length + 3))
     if (settings.inlineMath) for (const match of line.text.matchAll(/(?<!\\)\$(?!\$)(\S(?:[^$\n]*?\S)?)\$(?!\$)/g)) {
       const from = line.from + match.index
       const to = from + match[0].length

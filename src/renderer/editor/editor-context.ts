@@ -16,6 +16,7 @@ import type { MarkdownOptions } from '../../shared/markdown-options'
 import { chooseImageSize, currentImageSize, imageSizeEdit } from './image-size'
 import { clipboardHtmlToMarkdown } from './clipboard-import'
 import { validSpellingWord } from '../../shared/spelling'
+import { richClipboardContent, richFragmentToRtf } from './rich-clipboard'
 
 interface ContextSnapshot {
   documentId: string
@@ -36,8 +37,7 @@ function resultValue<T>(result: Result<T>): T {
 function plainText(markdown: string, options: MarkdownOptions): string {
   const container = document.createElement('div')
   container.innerHTML = renderMarkdown(markdown, options)
-  for (const image of container.querySelectorAll('img')) image.replaceWith(document.createTextNode(image.alt))
-  return container.textContent || ''
+  return richFragmentToRtf(container).plain
 }
 
 async function apiSpelling(props: MarkdownEditorProps, word: string) {
@@ -46,7 +46,7 @@ async function apiSpelling(props: MarkdownEditorProps, word: string) {
 }
 
 export function contextMenuRequest(view: EditorView, target: ContextTarget, hasSelection: boolean, resourceReady = true): ContextMenuRequest {
-  const actions: ContextMenuAction[] = ['copy', 'copy-markdown', 'copy-html', 'copy-plain', 'select-all']
+  const actions: ContextMenuAction[] = ['copy', 'copy-markdown', 'copy-html', 'copy-plain', 'copy-without-theme', 'select-all']
   const readOnly = view.state.readOnly
   if (!readOnly) actions.push('undo', 'redo', 'cut', 'paste', 'paste-plain', ...formatActions, 'horizontal-rule', 'insert-image')
   if (target.kind === 'table') {
@@ -116,8 +116,9 @@ export function installEditorContext(view: EditorView, getProps: () => MarkdownE
       view.focus(); return
     }
     const select = (): void => { view.dispatch({ selection: EditorSelection.range(selection.from, selection.to) }) }
-    const clipboardSelection = (): ClipboardContent => props.mode === 'hybrid' ? { text: selection.text, html: renderMarkdown(selection.text, markdownOptions) } : { text: selection.text }
+    const clipboardSelection = (withTheme = true): ClipboardContent => props.mode === 'hybrid' ? richClipboardContent(selection.text, markdownOptions, view.contentDOM, withTheme, props.locale) : { text: selection.text }
     if (action === 'copy') { await write(snapshot, clipboardSelection()); return }
+    if (action === 'copy-without-theme') { await write(snapshot, clipboardSelection(false)); return }
     if (action === 'copy-markdown') { await write(snapshot, { text: selection.text }); return }
     if (action === 'copy-plain') { await write(snapshot, { text: plainText(selection.text, markdownOptions) }); return }
     if (action === 'copy-html') { const html = renderMarkdown(selection.text, markdownOptions); await write(snapshot, { text: html, html }); return }
@@ -173,7 +174,7 @@ export function installEditorContext(view: EditorView, getProps: () => MarkdownE
     if (action === 'indent-code' && target.body) { view.dispatch({ changes: indentRange(view.state, target.body.from, target.body.to), userEvent: 'input.indent' }); focus(); return }
     if (action === 'image-remove') { view.dispatch({ changes: { from: target.from, to: target.to, insert: '' }, userEvent: 'delete.image' }); view.focus(); return }
     if (action === 'image-resize') {
-      const size = await chooseImageSize(currentImageSize(target.source))
+      const size = await chooseImageSize(currentImageSize(target.source), props.locale)
       if (!size) return
       requireEditable(snapshot)
       const changes = imageSizeEdit(target, size, markdownOptions)

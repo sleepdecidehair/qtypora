@@ -1,12 +1,16 @@
 import { supportsPreview } from './preview-budget'
-import { EditorSelection, Prec, StateField, type EditorState, type Extension, type Range, type TransactionSpec } from '@codemirror/state'
-import { syntaxTree } from '@codemirror/language'
+import { EditorSelection, Prec, StateEffect, StateField, type EditorState, type Extension, type Range, type TransactionSpec } from '@codemirror/state'
+import { indentRange, syntaxTree } from '@codemirror/language'
 import { isolateHistory } from '@codemirror/commands'
 import { Decoration, EditorView, WidgetType, keymap, type DecorationSet } from '@codemirror/view'
 import { editLiveBlock, liveEditingBlock } from './live-blocks'
 import { attachCodeLanguageSuggestions } from './code-language-suggestions'
 import { markdownOptionsFacet } from './markdown-config'
 import { codeLanguageInputValue } from './code-languages'
+import { translate, type AppLocale } from '../../shared/i18n'
+
+import { editorLocale } from './editor-i18n'
+export { editorLocale } from './editor-i18n'
 
 export interface LiveCodeBlock {
   from: number
@@ -18,6 +22,46 @@ export interface LiveCodeBlock {
   opening: string
   language: string
 }
+
+export interface CodeBlockDisplay { lineNumbers?: boolean; wrapLines?: boolean }
+export const setCodeBlockDisplay = StateEffect.define<{ from: number; display: CodeBlockDisplay }>({
+  map: (value, changes) => ({ ...value, from: changes.mapPos(value.from, 1) }),
+})
+
+/** Presentation-only overrides live in each EditorState, never in Markdown. */
+export const codeBlockDisplay = StateField.define<ReadonlyMap<number, CodeBlockDisplay>>({
+  create: () => new Map(),
+  update: (previous, transaction) => {
+    let next = previous
+    if (transaction.docChanged && previous.size) {
+      const blocks = new Set(liveCodeBlocks(transaction.state).map(block => block.from))
+      const ranges: { from: number; to: number }[] = []
+      transaction.changes.iterChangedRanges((from, to) => { if (to > from) ranges.push({ from, to }) })
+      // Parsing the old document is only needed when a change touches an overridden
+      // opening fence; ordinary typing inside a body never needs a second parse.
+      const touchesOpening = [...previous.keys()].some(start => ranges.some(range => range.from <= start && range.to > start))
+      const oldBlocks = touchesOpening ? new Map(liveCodeBlocks(transaction.startState).map(block => [block.from, block])) : null
+      const mapped = new Map<number, CodeBlockDisplay>()
+      for (const [from, display] of previous) {
+        const oldBlock = oldBlocks?.get(from)
+        if (oldBlock && ranges.some(range => range.from <= from && range.to >= oldBlock.to)) continue
+        const after = transaction.changes.mapPos(from, 1)
+        const before = transaction.changes.mapPos(from, -1)
+        const position = blocks.has(after) ? after : before
+        if (blocks.has(position)) mapped.set(position, display)
+      }
+      next = mapped
+    }
+    for (const effect of transaction.effects) if (effect.is(setCodeBlockDisplay)) {
+      if (!liveCodeBlocks(transaction.state).some(block => block.from === effect.value.from)) continue
+      const changed = new Map(next)
+      if (effect.value.display.lineNumbers === undefined && effect.value.display.wrapLines === undefined) changed.delete(effect.value.from)
+      else changed.set(effect.value.from, effect.value.display)
+      next = changed
+    }
+    return next
+  },
+})
 
 export function liveCodeBlocks(state: EditorState): LiveCodeBlock[] {
   const blocks: LiveCodeBlock[] = []
@@ -47,7 +91,8 @@ export function fenceCreation(state: EditorState): TransactionSpec | null {
   let node = syntaxTree(state).resolveInner(selection.head, -1)
   while (node.parent && node.name !== 'FencedCode') node = node.parent
   if (node.name !== 'FencedCode' || node.parent?.name !== 'Document' || state.doc.lineAt(node.from).number !== line.number || node.getChildren('CodeMark').length > 1) return null
-  const language = match[3].trim() ? '' : state.facet(markdownOptionsFacet).defaultCodeLanguage
+  const settings = state.facet(markdownOptionsFacet)
+  const language = match[3].trim() || settings.codeDefaultLanguageMode === 'menu' ? '' : settings.defaultCodeLanguage
   const insert = `${language}\n\n${match[1]}${match[2]}`
   return {
     changes: { from: line.to, insert },
@@ -103,8 +148,8 @@ function unwrapCode(view: EditorView): boolean {
 const languageWidgetCleanup = new WeakMap<HTMLElement, () => void>()
 
 class CodeLanguageWidget extends WidgetType {
-  constructor(readonly block: LiveCodeBlock, readonly readOnly: boolean) { super() }
-  eq(other: CodeLanguageWidget): boolean { return this.block.from === other.block.from && this.block.to === other.block.to && this.block.language === other.block.language && this.readOnly === other.readOnly }
+  constructor(readonly block: LiveCodeBlock, readonly readOnly: boolean, readonly display: CodeBlockDisplay, readonly locale: AppLocale) { super() }
+  eq(other: CodeLanguageWidget): boolean { return this.block.from === other.block.from && this.block.to === other.block.to && this.block.opening === other.block.opening && this.block.language === other.block.language && this.readOnly === other.readOnly && this.locale === other.locale }
   toDOM(view: EditorView): HTMLElement {
     const footer = document.createElement('div')
     footer.className = 'cm-live-code-footer'
@@ -112,9 +157,10 @@ class CodeLanguageWidget extends WidgetType {
     footer.dataset.sourceLine = String(this.block.lastLine)
     footer.dataset.sourceEnd = String(this.block.lastLine)
     const input = document.createElement('input')
-    input.type = 'text'; input.value = this.block.language; input.placeholder = '选择语言'; input.readOnly = this.readOnly; input.spellcheck = false
-    input.setAttribute('aria-label', '代码块语言')
-    input.title = '输入语言名称（如 Python、JSON、HTML、Markdown），按 Enter 或离开输入框应用'
+    const t = (label: string) => translate(this.locale, label)
+    input.type = 'text'; input.value = this.block.language; input.placeholder = t('选择语言'); input.readOnly = this.readOnly; input.spellcheck = false
+    input.setAttribute('aria-label', t('代码块语言'))
+    input.title = t('输入语言名称（如 Python、JSON、HTML、Markdown），按 Enter 或离开输入框应用')
     input.autocomplete = 'off'
     const commit = (): void => {
       const block = liveCodeBlocks(view.state).find((candidate) => candidate.from === this.block.from && candidate.opening === this.block.opening)
@@ -129,8 +175,34 @@ class CodeLanguageWidget extends WidgetType {
       if (block) view.dispatch({ selection: { anchor: block.bodyFrom }, userEvent: 'select.code' })
       view.focus()
     }
-    footer.append(input)
-    languageWidgetCleanup.set(footer, attachCodeLanguageSuggestions(input, () => { commit(); finish() }))
+    const settings = document.createElement('details')
+    settings.className = 'cm-code-display-settings'
+    const summary = document.createElement('summary')
+    summary.textContent = t('代码块显示')
+    settings.append(summary)
+    settings.addEventListener('toggle', () => view.requestMeasure())
+    const select = (labelText: string, name: keyof CodeBlockDisplay, enabled: string, disabled: string) => {
+      const label = document.createElement('label')
+      label.textContent = t(labelText)
+      const control = document.createElement('select')
+      control.setAttribute('aria-label', t(labelText))
+      for (const [value, text] of [['default', '跟随全局'], ['on', enabled], ['off', disabled]]) {
+        const option = document.createElement('option'); option.value = value; option.textContent = t(text); control.append(option)
+      }
+      control.value = this.display[name] === undefined ? 'default' : this.display[name] ? 'on' : 'off'
+      control.addEventListener('change', () => {
+        const block = liveCodeBlocks(view.state).find(candidate => candidate.from === this.block.from)
+        if (!block) return
+        const display = { ...(view.state.field(codeBlockDisplay, false)?.get(block.from) ?? {}) }
+        display[name] = control.value === 'default' ? undefined : control.value === 'on'
+        view.dispatch({ effects: setCodeBlockDisplay.of({ from: block.from, display }) })
+      })
+      label.append(control); settings.append(label)
+    }
+    select('当前代码块行号', 'lineNumbers', '显示', '隐藏')
+    select('当前代码块折行', 'wrapLines', '折行', '不折行')
+    footer.append(settings, input)
+    languageWidgetCleanup.set(footer, attachCodeLanguageSuggestions(input, () => { commit(); finish() }, this.locale))
     input.addEventListener('blur', commit)
     input.addEventListener('keydown', (event) => {
       if (event.isComposing || !['Enter', 'Escape'].includes(event.key)) return
@@ -151,11 +223,14 @@ function codePreviews(state: EditorState): DecorationSet {
   for (const block of liveCodeBlocks(state)) {
     if (editing && block.from >= editing.from && block.to <= editing.to) continue
     ranges.push(Decoration.replace({ block: true, inclusiveStart: true, inclusiveEnd: false }).range(block.from, block.bodyFrom))
+    const display = state.field(codeBlockDisplay, false)?.get(block.from) ?? {}
+    const lineNumbers = display.lineNumbers ?? settings.codeLineNumbers
+    const wrapLines = display.wrapLines ?? settings.codeWrapLines
     for (let number = block.firstLine + 1; number < block.lastLine; number++) {
       const edge = `${number === block.firstLine + 1 ? ' cm-live-code-first' : ''}${number === block.lastLine - 1 ? ' cm-live-code-last' : ''}`
-      ranges.push(Decoration.line({ class: `cm-live-code-body${edge}${settings.codeLineNumbers ? ' cm-live-code-numbered' : ''}${settings.codeWrapLines ? '' : ' cm-live-code-nowrap'}`, attributes: { 'data-source-line': String(number), 'data-source-end': String(number), 'data-code-line': String(number - block.firstLine) } }).range(state.doc.line(number).from))
+      ranges.push(Decoration.line({ class: `cm-live-code-body${edge}${lineNumbers ? ' cm-live-code-numbered' : ''}${wrapLines ? '' : ' cm-live-code-nowrap'}`, attributes: { 'data-source-line': String(number), 'data-source-end': String(number), 'data-code-line': String(number - block.firstLine) } }).range(state.doc.line(number).from))
     }
-    ranges.push(Decoration.replace({ widget: new CodeLanguageWidget(block, state.readOnly), block: true }).range(state.doc.line(block.lastLine).from, block.to))
+    ranges.push(Decoration.replace({ widget: new CodeLanguageWidget(block, state.readOnly, display, state.facet(editorLocale)), block: true }).range(state.doc.line(block.lastLine).from, block.to))
   }
   return Decoration.set(ranges, true)
 }
@@ -166,7 +241,7 @@ const codeDecorations = StateField.define<DecorationSet>({
     const previousEditing = transaction.startState.field(liveEditingBlock, false)
     const nextEditing = transaction.state.field(liveEditingBlock, false)
     const editingChanged = previousEditing?.from !== nextEditing?.from || previousEditing?.to !== nextEditing?.to
-    return transaction.docChanged || transaction.reconfigured || editingChanged || transaction.effects.some(effect => effect.is(editLiveBlock)) ? codePreviews(transaction.state) : value
+    return transaction.docChanged || transaction.reconfigured || editingChanged || transaction.effects.some(effect => effect.is(editLiveBlock) || effect.is(setCodeBlockDisplay)) ? codePreviews(transaction.state) : value
   },
   provide: (field) => [EditorView.decorations.from(field), EditorView.atomicRanges.of((view) => view.state.field(field).update({ filter: (_from, _to, decoration) => decoration.spec.block === true }))],
 })
@@ -178,4 +253,14 @@ export function liveCodeExtension(): Extension {
     { key: 'Mod-Enter', run: leaveCode },
     { key: 'Backspace', run: unwrapCode },
   ]))]
+}
+
+export function autoIndentSelectedCode(view: EditorView): boolean {
+  if (view.composing || view.state.readOnly || !view.state.facet(markdownOptionsFacet).codeShiftTabAutoIndent || view.state.selection.ranges.length !== 1) return false
+  const { from, to } = view.state.selection.main
+  const block = liveCodeBlocks(view.state).find(candidate => from >= candidate.bodyFrom && to <= candidate.bodyTo)
+  if (!block) return false
+  const changes = indentRange(view.state, from, to)
+  if (!changes.empty) view.dispatch({ changes, userEvent: 'input.code-auto-indent', annotations: isolateHistory.of('full') })
+  return true
 }

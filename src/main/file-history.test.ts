@@ -6,6 +6,10 @@ import { FileMoveHistory, type FileMoveHooks } from './file-history'
 import { MAX_DOCUMENT_BYTES } from './files'
 import { DocumentSession } from './documents'
 import { LocalStore } from './preferences'
+import { ResourceRegistry } from './resources'
+import { relocateWorkspaceState } from './workspace-relocation'
+import { withWorkspaceStructure } from './workspace-lock'
+import { randomUUID } from 'node:crypto'
 
 let root: string
 beforeEach(async () => { root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'qtypora-moves-'))); await fs.mkdir(path.join(root, 'target')) })
@@ -18,6 +22,123 @@ const createHistory = () => {
 }
 
 describe('file move history', () => {
+  it.skipIf(process.platform !== 'darwin' && process.platform !== 'win32')('moves and undoes a directory while preserving open buffers, orphan drafts and resource tokens', async () => {
+    const source = path.join(root, 'source'), destination = path.join(root, 'target', 'source')
+    await fs.mkdir(path.join(source, 'nested'), { recursive: true })
+    const documentPath = path.join(source, 'nested', 'note.md')
+    await fs.writeFile(documentPath, '\ufeff# disk\r\n')
+    await fs.writeFile(path.join(source, 'nested', 'image.png'), Buffer.from([137, 80, 78, 71]))
+    let symlinkCreated = false
+    try { await fs.symlink('note.md', path.join(source, 'nested', 'alias.md')); symlinkCreated = true }
+    catch (error) { if (!(process.platform === 'win32' && error && typeof error === 'object' && 'code' in error && error.code === 'EPERM')) throw error }
+    const store = new LocalStore(path.join(root, 'user'))
+    await store.load()
+    const createSession = () => new DocumentSession(store, { chooseSave: async () => null, confirmClose: async () => 'cancel' }, () => undefined)
+    const first = createSession(), second = createSession(), sessions = [first, second]
+    const resources = new ResourceRegistry()
+    try {
+      const a = await first.open(documentPath, true), b = await second.open(documentPath, true)
+      await first.sync({ id: a.id, revision: 1, content: '# first dirty' })
+      await second.sync({ id: b.id, revision: 1, content: '# second dirty' })
+      const orphan = randomUUID()
+      await store.writeDraft({ id: orphan, name: 'orphan.md', path: path.join(source, 'nested', 'orphan.md'), content: 'recover me', revision: 1, updatedAt: new Date().toISOString() })
+      const token = await resources.resolve('image.png', documentPath, second, 12)
+      const history = new FileMoveHistory({
+        withDocumentLocks: (locked, operation) => withWorkspaceStructure(() => {
+          const lock = (index: number): ReturnType<typeof operation> => index === sessions.length ? operation() : sessions[index].withPathLocks(locked, () => lock(index + 1))
+          return lock(0)
+        }),
+        updatePaths: (from, to) => relocateWorkspaceState(from, to, sessions, store, resources),
+      })
+      await history.move(root, source, path.join(root, 'target'))
+      const movedDocument = path.join(destination, 'nested', 'note.md')
+      expect(first.get(a.id).record.path).toBe(movedDocument)
+      expect(second.get(b.id).record.path).toBe(movedDocument)
+      expect(first.get(a.id).currentContent).toBe('# first dirty')
+      expect(second.get(b.id).currentContent).toBe('# second dirty')
+      expect(store.drafts.get(a.id)?.path).toBe(movedDocument)
+      expect(store.drafts.get(b.id)?.path).toBe(movedDocument)
+      expect(store.drafts.get(orphan)?.path).toBe(path.join(destination, 'nested', 'orphan.md'))
+      expect(await second.authorize(path.join(destination, 'nested', 'image.png'))).toBe(path.join(destination, 'nested', 'image.png'))
+      expect(await resources.toDataUrl(token, 12)).toBe('data:image/png;base64,iVBORw==')
+      expect(await fs.readFile(movedDocument, 'utf8')).toBe('\ufeff# disk\r\n')
+      if (symlinkCreated) expect(await fs.readlink(path.join(destination, 'nested', 'alias.md'))).toBe('note.md')
+      const freshStore = new LocalStore(path.join(root, 'user'))
+      await freshStore.load()
+      expect(freshStore.drafts.get(orphan)).toMatchObject({ path: path.join(destination, 'nested', 'orphan.md'), content: 'recover me' })
+      await history.undo(root)
+      expect(first.get(a.id).record.path).toBe(documentPath)
+      expect(second.get(b.id).record.path).toBe(documentPath)
+      expect(store.drafts.get(orphan)?.path).toBe(path.join(source, 'nested', 'orphan.md'))
+      expect(await resources.toDataUrl(token, 12)).toBe('data:image/png;base64,iVBORw==')
+      expect(await fs.readFile(documentPath, 'utf8')).toBe('\ufeff# disk\r\n')
+    } finally { first.dispose(); second.dispose() }
+  })
+
+  it.skipIf(process.platform !== 'darwin' && process.platform !== 'win32')('rejects moving a folder into itself, collision and replacement before undo', async () => {
+    const { history } = createHistory()
+    const source = path.join(root, 'folder'), child = path.join(source, 'child'), target = path.join(root, 'target', 'folder')
+    await fs.mkdir(child, { recursive: true })
+    await fs.writeFile(path.join(source, 'keep.txt'), 'original')
+    await expect(history.move(root, source, child)).rejects.toMatchObject({ code: 'INVALID_INPUT' })
+    await fs.mkdir(target)
+    await fs.writeFile(path.join(target, 'keep.txt'), 'existing')
+    await expect(history.move(root, source, path.join(root, 'target'))).rejects.toMatchObject({ code: 'CONFLICT' })
+    expect(await fs.readFile(path.join(target, 'keep.txt'), 'utf8')).toBe('existing')
+    await fs.rm(target, { recursive: true })
+    await history.move(root, source, path.join(root, 'target'))
+    await fs.rename(target, path.join(root, 'elsewhere'))
+    await fs.mkdir(target)
+    await fs.writeFile(path.join(target, 'new.txt'), 'replacement')
+    await expect(history.undo(root)).rejects.toMatchObject({ code: 'CONFLICT' })
+    expect(await fs.readFile(path.join(target, 'new.txt'), 'utf8')).toBe('replacement')
+    expect(await fs.readFile(path.join(root, 'elsewhere', 'keep.txt'), 'utf8')).toBe('original')
+  })
+
+  it.skipIf(process.platform !== 'darwin' && process.platform !== 'win32')('updates every window and keeps undo available when a draft write fails after the move', async () => {
+    const source = path.join(root, 'source'), destination = path.join(root, 'target', 'source')
+    await fs.mkdir(source)
+    const documentPath = path.join(source, 'note.md')
+    await fs.writeFile(documentPath, 'disk')
+    const store = new LocalStore(path.join(root, 'user'))
+    await store.load()
+    const createSession = () => new DocumentSession(store, { chooseSave: async () => null, confirmClose: async () => 'cancel' }, () => undefined)
+    const first = createSession(), second = createSession(), sessions = [first, second]
+    try {
+      const a = await first.open(documentPath, true), b = await second.open(documentPath, true)
+      await first.sync({ id: a.id, revision: 1, content: 'first draft' })
+      await second.sync({ id: b.id, revision: 1, content: 'second draft' })
+      const history = new FileMoveHistory({
+        withDocumentLocks: (locked, operation) => withWorkspaceStructure(() => {
+          const lock = (index: number): ReturnType<typeof operation> => index === sessions.length ? operation() : sessions[index].withPathLocks(locked, () => lock(index + 1))
+          return lock(0)
+        }),
+        updatePaths: (from, to) => relocateWorkspaceState(from, to, sessions, store, new ResourceRegistry()),
+      })
+      const write = vi.spyOn(store, 'writeDraft').mockRejectedValueOnce(new Error('disk full'))
+      await expect(history.move(root, source, path.join(root, 'target'))).rejects.toMatchObject({ code: 'IO_ERROR', message: expect.stringContaining('文件位置已更新') })
+      expect(first.get(a.id)).toMatchObject({ record: { path: path.join(destination, 'note.md') }, currentContent: 'first draft' })
+      expect(second.get(b.id)).toMatchObject({ record: { path: path.join(destination, 'note.md') }, currentContent: 'second draft' })
+      expect(await fs.readFile(path.join(destination, 'note.md'), 'utf8')).toBe('disk')
+      write.mockRestore()
+      await history.undo(root)
+      expect(first.get(a.id).record.path).toBe(documentPath)
+      expect(second.get(b.id).record.path).toBe(documentPath)
+      expect(await fs.readFile(documentPath, 'utf8')).toBe('disk')
+    } finally { first.dispose(); second.dispose() }
+  })
+
+  it('only undoes a newly created directory while it is empty and has the same identity', async () => {
+    const { history } = createHistory()
+    const created = await history.createDirectory(root, root, 'new-folder')
+    await fs.writeFile(path.join(created.path, '.hidden'), 'do not remove')
+    await expect(history.undo(root)).rejects.toMatchObject({ code: 'CONFLICT' })
+    expect(await fs.readFile(path.join(created.path, '.hidden'), 'utf8')).toBe('do not remove')
+    await fs.unlink(path.join(created.path, '.hidden'))
+    await history.undo(root)
+    await expect(fs.lstat(created.path)).rejects.toMatchObject({ code: 'ENOENT' })
+  })
+
   it('removes only its partial new file after write/sync failure, preserving a concurrent replacement', async () => {
     const { history } = createHistory()
     const probe = await fs.open(path.join(root, 'probe'), 'wx')
@@ -69,7 +190,8 @@ describe('file move history', () => {
       expect(session.records().find(item => item.id === document.id)?.content).toBe('unsaved changes survive')
       expect(store.drafts.get(document.id)?.content).toBe('unsaved changes survive')
       await expect(fs.stat(created.path)).rejects.toMatchObject({ code: 'ENOENT' })
-      await expect(session.save({ id: document.id, revision: 1, content: 'unsaved changes survive' })).rejects.toMatchObject({ code: 'CONFLICT' })
+      expect(await session.save({ id: document.id, revision: 1, content: 'unsaved changes survive' })).toBeNull()
+      expect(store.drafts.get(document.id)?.content).toBe('unsaved changes survive')
     } finally { session.dispose() }
   })
   it('renames ordinary files exclusively and reverses the rename without changing bytes', async () => {
@@ -157,12 +279,12 @@ describe('file move history', () => {
     expect(await fs.readFile(source, 'utf8')).toBe('original')
   })
 
-  it('rejects outside paths, folders and symbolic links without changing their targets', async () => {
+  it('rejects outside paths, workspace root and symbolic links without changing their targets', async () => {
     const { history } = createHistory()
     const source = path.join(root, 'notes.md')
     await fs.writeFile(source, 'original')
     await expect(history.move(root, source, os.tmpdir())).rejects.toMatchObject({ code: 'PERMISSION_DENIED' })
-    await expect(history.move(root, path.join(root, 'target'), root)).rejects.toMatchObject({ code: 'UNSUPPORTED' })
+    await expect(history.move(root, root, path.join(root, 'target'))).rejects.toMatchObject({ code: 'PERMISSION_DENIED' })
     const link = path.join(root, 'alias.md')
     try { await fs.symlink(source, link) }
     catch (error) { if (process.platform === 'win32' && error && typeof error === 'object' && 'code' in error && error.code === 'EPERM') return; throw error }

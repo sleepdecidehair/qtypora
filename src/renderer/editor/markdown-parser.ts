@@ -10,6 +10,7 @@ import { DEFAULT_MARKDOWN_OPTIONS, effectiveMarkdownOptions, normalizeMarkdownOp
 import { installDocumentFeatures } from './markdown-features'
 import { installReferenceLocations } from './markdown-references'
 import { MAX_PREVIEW_TOKENS } from './preview-budget'
+import { editorText } from './editor-i18n'
 
 export function isSafeResource(source: string): boolean {
   const trimmed = source.trim()
@@ -119,7 +120,9 @@ export function createMarkdownParser(settings: MarkdownOptions = DEFAULT_MARKDOW
     const token = new state.Token('html_block', '', 0)
     token.block = true
     token.map = [0, state.src.split('\n').length]
-    token.content = `<section class="md-preview-limit"><p>文档结构超过预览上限，以下保留完整源码。请拆分文档或使用源码模式。</p><pre>${markdownParser.utils.escapeHtml(state.src)}</pre></section>`
+    const locale = state.env.locale === 'en-US' ? 'en-US' : 'zh-CN'
+    const message = editorText(locale, '文档结构超过预览上限，以下保留完整源码。请拆分文档或使用源码模式。')
+    token.content = `<section class="md-preview-limit"><p>${markdownParser.utils.escapeHtml(message)}</p><pre>${markdownParser.utils.escapeHtml(state.src)}</pre></section>`
     state.tokens = [token]
   })
   installReferenceLocations(markdownParser, settings)

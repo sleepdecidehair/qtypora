@@ -1,0 +1,23 @@
+/** Application-owned file browser labels, never user-provided paths or names. */
+export const englishFileTree: Record<string, string> = {
+  '刷新目录失败': 'Could not refresh directory', '刷新文件树失败': 'Could not refresh file tree', '读取文件夹失败': 'Could not read folder',
+  '无法显示文件': 'Could not show file', '移动文件失败': 'Could not move item', '撤销文件操作失败': 'Could not undo file operation',
+  '已打开': 'Open documents', '未保存文档': 'Unsaved document', '未保存': 'Unsaved', '视图': 'View', '文件视图': 'File view',
+  '文章列表': 'Article list', '排序': 'Sort', '文件排序': 'File sorting', '自然顺序': 'Natural order', '名称': 'Name',
+  '修改时间': 'Modified time', '创建时间': 'Created time', '倒序': 'Descending', '文件夹分组': 'Group by folder',
+  '隐藏文件': 'Hidden files', '所有文件': 'All files', '筛选文件名': 'Filter file names', '筛选文件名：*.md,!draft*': 'Filter file names: *.md,!draft*',
+  '最近与固定目录': 'Recent and pinned folders', '最近与固定目录…': 'Recent and pinned folders…', '固定目录': 'Pinned folders',
+  '最近目录': 'Recent folders', '取消固定': 'Unpin', '新建文件': 'New file', '在文件夹中新建文件': 'New file in folder',
+  '新建文件夹': 'New folder', '在文件夹中新建文件夹': 'New folder in folder', '重命名所选项': 'Rename selected item',
+  '移到回收站': 'Move to Trash', '所选项移到回收站': 'Move selected item to Trash', '移动所选文件夹': 'Move selected folder',
+  '移动所选文件': 'Move selected file', '刷新文件树': 'Refresh file tree', '文件夹目录': 'Folder tree', '空文件夹': 'Empty folder',
+  '正在检索文章…': 'Searching for articles…', '没有匹配的文件。': 'No matching files.',
+  '文章列表达到显示或检索上限，请缩小文件夹范围。': 'The article list reached its display or search limit. Choose a smaller folder.',
+  '非 Markdown 文件点击后在系统文件管理器中显示。': 'Non-Markdown files open in the system file manager.',
+  '文件夹为空。': 'The folder is empty.', '每层最多显示 500 项，当前视图最多 3000 项。': 'Up to 500 items per folder and 3,000 items in this view.',
+  '本次刷新最多校验 256 个已浏览目录。': 'A refresh checks up to 256 previously opened folders.',
+  '浏览文件夹里的 Markdown，': 'Browse Markdown files in a folder,', '随时继续写作。': 'and continue writing anytime.',
+  '移动文件夹': 'Move folder', '移动文件': 'Move file', '目标文件夹': 'Destination folder', '移动目标文件夹': 'Move destination folder',
+  '目标已有同名项时停止。移动后可通过文件侧栏“撤销文件操作”恢复。': 'The move stops if the destination already contains an item with the same name. Use “Undo file operation” in the file sidebar to restore it.',
+  '正在移动…': 'Moving…', '移动': 'Move',
+}

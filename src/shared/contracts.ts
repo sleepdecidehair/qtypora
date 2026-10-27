@@ -3,12 +3,14 @@ import { DEFAULT_EXPORT_OPTIONS, type ExportFormat, type ExportOptions } from '.
 import { DEFAULT_MARKDOWN_OPTIONS, type MarkdownOptions } from './markdown-options'
 import { DEFAULT_WORKSPACE_OPTIONS, type WorkspaceOptions } from './workspace-options'
 import { DEFAULT_IMAGE_OPTIONS, type ImageOptions, type ImageImportRequest, type ImageImportResult } from './image-options'
+import type { AppLocale } from './i18n'
 
 export type Theme = 'light' | 'dark' | 'system'
 export type SidebarMode = 'files' | 'outline' | 'search'
 export type LineEnding = 'LF' | 'CRLF'
 
 export interface Preferences {
+  locale: AppLocale
   theme: Theme
   sidebarMode: SidebarMode
   showSidebar: boolean
@@ -46,6 +48,7 @@ export interface Preferences {
 }
 
 export const DEFAULT_PREFERENCES: Preferences = {
+  locale: 'zh-CN',
   theme: 'light', sidebarMode: 'outline', showSidebar: true, showToolbar: true, floatingToolbar: true, shortcuts: {},
   sourceMode: false, readingMode: false, focusMode: false, typewriterMode: false,
   fontSize: 16, contentWidth: 800, contentWidthMode: 'auto', autoSave: false, autoSaveSeconds: 300,
@@ -92,6 +95,7 @@ export interface Workspace { path: string; name: string; entries: FileEntry[] }
 export interface SearchRequest {
   root: string
   query: string
+  excludeDirectories?: string
   caseSensitive?: boolean
   wholeWord?: boolean
   regex?: boolean
@@ -109,6 +113,7 @@ export interface FileAction {
 }
 export interface ExportRequest {
   preferencesVersion?: number
+  historyVersion?: number
   id: string
   kind: ExportFormat
   html?: string
@@ -129,7 +134,7 @@ export interface BootstrapData {
 }
 export type ContextMenuKind = 'editor' | 'table' | 'code' | 'math' | 'diagram' | 'image' | 'link' | 'file' | 'folder'
 export type ContextMenuAction = 'undo' | 'redo' | 'cut' | 'copy' | 'paste' | 'select-all' |
-  'copy-markdown' | 'copy-html' | 'copy-plain' | 'paste-plain' |
+  'copy-markdown' | 'copy-html' | 'copy-plain' | 'copy-without-theme' | 'paste-plain' |
   'bold' | 'italic' | 'strike' | 'inline-code' | 'clear-format' |
   `heading-${1 | 2 | 3 | 4 | 5 | 6}` | 'paragraph' | 'quote' | 'ordered-list' | 'bullet-list' | 'task-list' |
   'code' | 'math' | 'table' | 'horizontal-rule' | 'link' | 'insert-image' |
@@ -151,7 +156,7 @@ export interface ContextMenuRequest {
   canUndo?: boolean
   canRedo?: boolean
 }
-export interface ClipboardContent { text: string; html?: string }
+export interface ClipboardContent { text: string; html?: string; rtf?: string }
 export interface ClipboardPayload extends ClipboardContent { images?: import('./image-options').ImportedImage[] }
 export interface ImageOperationRequest extends DocumentSnapshot { source: string; action: 'copy' | 'move' | 'delete' | 'save-as' }
 export interface ImageOperationResult { source: string | null }
@@ -206,7 +211,7 @@ export interface DesktopApi {
   imageOperation(request: ImageOperationRequest): Promise<Result<ImageOperationResult | null>>
   saveResource(request: ResourceSaveRequest): Promise<Result<string | null>>
   searchFolder(request: SearchRequest): Promise<Result<SearchHit[]>>
-  getExportPlan(request: ExportRequest): Promise<Result<{ kind: ExportFormat; requiresHtml: boolean; options: ExportOptions; preferencesVersion: number }>>
+  getExportPlan(request: ExportRequest): Promise<Result<{ kind: ExportFormat; requiresHtml: boolean; options: ExportOptions; preferencesVersion: number; historyVersion: number }>>
   exportDocument(request: ExportRequest): Promise<Result<string | null>>
   importExportPresets(): Promise<Result<import('./export-preset-file').ImportedExportPresets | null>>
   exportExportPresets(presets: import('./export-options').SavedExportPreset[]): Promise<Result<string | null>>

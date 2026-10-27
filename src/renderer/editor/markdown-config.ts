@@ -6,6 +6,7 @@ export const markdownOptionsFacet = Facet.define<MarkdownOptions, MarkdownOption
 })
 
 import { getMarkdownParser } from './markdown-parser'
+import { editorLocale } from './editor-i18n'
 import type { MathExpression } from './markdown-features'
 
 interface ParsedDocument {
@@ -19,13 +20,14 @@ const documentCache = new WeakMap<Text, Map<string, ParsedDocument>>()
 
 export function markdownDocumentModel(state: EditorState): ParsedDocument {
   const options = state.facet(markdownOptionsFacet)
-  const key = JSON.stringify(options)
+  const locale = state.facet(editorLocale)
+  const key = JSON.stringify([options, locale])
   let configurations = documentCache.get(state.doc)
   const previous = configurations?.get(key)
   if (previous) return previous
   if (!configurations) { configurations = new Map(); documentCache.set(state.doc, configurations) }
   const parser = getMarkdownParser(options)
-  const environment: Record<string, unknown> = {}
+  const environment: Record<string, unknown> = { locale }
   const tokens = parser.parse(state.doc.toString(), environment)
   const mathExpressions = environment.mathExpressions as MathExpression[]
   const mathKey = JSON.stringify([options.mathNumbering, mathExpressions.map(({ source, display }) => [source, display])])

@@ -9,6 +9,7 @@ import { markdownOptionsFacet } from './markdown-config'
 import { liveBlocks } from './live-blocks'
 import { inlinePreviewSpans } from './live-inline'
 import { fenceCreation } from './live-code'
+import { editorLocale, editorText } from './editor-i18n'
 
 const options = { ...DEFAULT_MARKDOWN_OPTIONS, alerts: true }
 const parser = getMarkdownParser(options)
@@ -48,6 +49,24 @@ describe('document structure compatibility', () => {
     expect(parser.render('> [!CUSTOM]\n> test')).not.toContain('md-alert')
     expect(parser.render('```\n> [!NOTE]\n```')).not.toContain('md-alert')
     expect(liveBlocks(state('> [!NOTE]\n> body\n\ntext'))[0]).toMatchObject({ kind: 'alert', firstLine: 1, lastLine: 2 })
+  })
+  it('localizes generated Alert, front matter and TOC labels without translating source or leaking the cached locale', () => {
+    const source = '---\ntitle: 用户原文\nbroken: [x\n---\n\n[toc]\n\n# 用户原文\n\n> [!WARNING]\n> 用户原文\n\nend'
+    const en = parser.render(source, { locale: 'en-US' })
+    expect(en).toContain('YAML front matter')
+    expect(en).toContain('Invalid YAML syntax; the source has been preserved.')
+    expect(en).toContain('aria-label="Table of contents"')
+    expect(en).toContain('aria-label="Warning"')
+    expect(en).toContain('用户原文')
+    const zh = parser.render(source)
+    expect(zh).toContain('YAML 前置信息')
+    expect(zh).toContain('aria-label="警告"')
+    const editor = EditorState.create({ doc: source, selection: { anchor: source.length }, extensions: [markdown({ base: markdownLanguage }), markdownOptionsFacet.of(options), editorLocale.of('en-US')] })
+    const blocks = liveBlocks(editor)
+    expect(blocks.find(block => block.kind === 'alert')?.html).toContain('aria-label="Warning"')
+    expect(blocks.find(block => block.kind === 'front-matter')?.html).toContain('YAML front matter')
+    expect(editor.doc.toString()).toBe(source)
+    expect(editorText('en-US', '图片导出失败（{resource}）：{message}', { resource: '用户/$&.png', message: '原样错误' })).toBe('Image export failed (用户/$&.png): 原样错误')
   })
   it('allows independent parser configurations and safely disables extensions', () => {
     const disabled = getMarkdownParser({ ...options, frontMatter: false, toc: false, alerts: false, highlight: false, subscript: false, superscript: false, inlineMath: false, emoji: false, diagrams: false })

@@ -4,7 +4,7 @@ import * as fs from 'node:fs/promises'
 import path from 'node:path'
 import type { DocumentRecord, FileEntry, LineEnding, SearchHit, SearchRequest } from '../shared/contracts'
 import { DesktopError, invalid } from './errors'
-import { compareWorkspaceEntries, matchesFileFilter, normalizeWorkspaceOptions, type WorkspaceOptions } from '../shared/workspace-options'
+import { compareWorkspaceEntries, excludesSearchDirectory, matchesFileFilter, normalizeWorkspaceOptions, parseSearchExclusions, type WorkspaceOptions } from '../shared/workspace-options'
 import { createTextSearch } from '../shared/search'
 
 export const MAX_DOCUMENT_BYTES = 16 * 1024 * 1024
@@ -190,7 +190,8 @@ export async function searchMarkdown(request: SearchRequest): Promise<SearchHit[
   if (request.query.length > 256) invalid('搜索关键字最长 256 字符。')
   if (!request.query.trim()) return []
   let search: ReturnType<typeof createTextSearch>
-  try { search = createTextSearch(request.query, request) }
+  let excluded: string[]
+  try { search = createTextSearch(request.query, request); excluded = parseSearchExclusions(request.excludeDirectories ?? '') }
   catch (error) { throw new DesktopError('INVALID_INPUT', error instanceof Error ? error.message : '搜索条件无效。') }
   const hits: SearchHit[] = []
   let visited = 0
@@ -198,7 +199,10 @@ export async function searchMarkdown(request: SearchRequest): Promise<SearchHit[
     if (depth > 24 || visited >= 10000 || hits.length >= 1000) return
     for (const entry of await listDirectory(directory)) {
       if (++visited > 10000 || hits.length >= 1000) return
-      if (entry.kind === 'directory') { await walk(entry.path, depth + 1); continue }
+      if (entry.kind === 'directory') {
+        if (!excludesSearchDirectory(path.relative(request.root, entry.path), excluded)) await walk(entry.path, depth + 1)
+        continue
+      }
       if ((await fs.stat(entry.path)).size > MAX_DOCUMENT_BYTES) continue
       const lines = (await fs.readFile(entry.path, 'utf8')).split(/\r?\n/)
       for (let index = 0; index < lines.length && hits.length < 1000; index++) {

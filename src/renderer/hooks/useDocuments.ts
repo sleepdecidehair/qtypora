@@ -1,5 +1,6 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState, type RefObject } from 'react'
 import type { DesktopApi, DocumentRecord, DocumentSnapshot, Result } from '../../shared/contracts'
+import { translate, type AppLocale } from '../../shared/i18n'
 
 export interface EditorDocument extends DocumentRecord {
   revision: number
@@ -20,7 +21,7 @@ export function isDirty(document: EditorDocument): boolean {
   return document.content !== document.savedContent || document.externalChange === 'removed'
 }
 
-export function useDocuments(api: DesktopApi, reportError: (message: string) => void) {
+export function useDocuments(api: DesktopApi, reportError: (message: string) => void, localeRef: RefObject<AppLocale>) {
   const [documents, setDocuments] = useState<EditorDocument[]>([])
   const documentsRef = useRef<EditorDocument[]>([])
   const [activeId, setActiveId] = useState<string | null>(null)
@@ -68,14 +69,14 @@ export function useDocuments(api: DesktopApi, reportError: (message: string) => 
       try {
         acceptResult(await api.syncDocument(snapshot(document)))
       } catch (error) {
-        reportError(error instanceof Error ? error.message : '草稿同步失败')
+        reportError(error instanceof Error ? error.message : translate(localeRef.current, '草稿同步失败'))
       }
       })()
       syncTasks.current.add(task)
       void task.then(() => { syncTasks.current.delete(task) })
     }
     await Promise.all([...syncTasks.current])
-  }, [api, acceptResult, reportError])
+  }, [api, acceptResult, reportError, localeRef])
 
   const changeContent = useCallback((id: string, content: string) => {
     update(current => current.map(document => document.id === id && document.content !== content
@@ -146,7 +147,7 @@ export function useDocuments(api: DesktopApi, reportError: (message: string) => 
   const close = useCallback(async () => {
     const current = documentsRef.current.find(item => item.id === activeIdRef.current)
     if (!current) return
-    if (saveLocks.current.has(current.id)) { reportError('正在保存，请稍后再关闭文档。'); return }
+    if (saveLocks.current.has(current.id)) { reportError(translate(localeRef.current, '正在保存，请稍后再关闭文档。')); return }
     const accepted = acceptResult(await api.closeDocument(snapshot(current)))
     if (!accepted) return
     pendingSync.current.delete(current.id)
@@ -154,16 +155,16 @@ export function useDocuments(api: DesktopApi, reportError: (message: string) => 
     const remaining = documentsRef.current
     if (remaining.length) activate(remaining[remaining.length - 1].id)
     else { activeIdRef.current = null; setActiveId(null); await create() }
-  }, [api, acceptResult, activate, create, reportError, update])
+  }, [api, acceptResult, activate, create, reportError, update, localeRef])
 
   const requestClose = useCallback(async () => {
-    if (saveLocks.current.size > 0) { reportError('正在保存，请稍后再关闭窗口。'); return }
+    if (saveLocks.current.size > 0) { reportError(translate(localeRef.current, '正在保存，请稍后再关闭窗口。')); return }
     await flushSync()
     acceptResult(await api.requestWindowClose(documentsRef.current.map(snapshot)))
-  }, [api, acceptResult, flushSync, reportError])
+  }, [api, acceptResult, flushSync, reportError, localeRef])
 
   const reload = useCallback(async (id: string) => {
-    if (saveLocks.current.has(id)) { reportError('正在保存，请稍后再重新载入。'); return }
+    if (saveLocks.current.has(id)) { reportError(translate(localeRef.current, '正在保存，请稍后再重新载入。')); return }
     const current = documentsRef.current.find(item => item.id === id)
     if (!current) return
     update(all => all.map(item => item.id === id ? { ...item, readOnly: true } : item))
@@ -178,7 +179,7 @@ export function useDocuments(api: DesktopApi, reportError: (message: string) => 
     } finally {
       update(all => all.map(item => item.id === id ? { ...item, readOnly: current.readOnly } : item))
     }
-  }, [api, acceptResult, flushSync, reportError, update])
+  }, [api, acceptResult, flushSync, reportError, update, localeRef])
 
   const externalChange = useCallback((id: string, kind: 'changed' | 'removed') => {
     update(all => all.map(item => {

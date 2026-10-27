@@ -8,6 +8,8 @@ import type { MarkdownOptions } from '../../shared/markdown-options'
 import { getMarkdownParser } from './markdown-parser'
 import type { MathExpression } from './markdown-features'
 import { primaryShortcut } from '../platform-shortcuts'
+import { useLocale } from '../i18n/locale'
+import { editorText } from './editor-i18n'
 
 interface ReadingViewProps {
   markdownOptions?: MarkdownOptions
@@ -34,6 +36,7 @@ function selectArticle(article: HTMLElement): void {
 }
 
 export const ReadingView = forwardRef<ReadingViewHandle, ReadingViewProps>(function ReadingView(props, ref) {
+  const locale = useLocale()
   const articleRef = useRef<HTMLElement>(null)
   const rootRef = useRef<HTMLDivElement>(null)
   const callbackRef = useRef(props)
@@ -79,7 +82,7 @@ export const ReadingView = forwardRef<ReadingViewHandle, ReadingViewProps>(funct
     void (async () => {
       try {
         const staging = document.createElement('div')
-        staging.innerHTML = renderReadingMarkdown(props.content, props.markdownOptions)
+        staging.innerHTML = renderReadingMarkdown(props.content, props.markdownOptions, locale)
         const sources = new Map<HTMLElement, string>()
         for (const element of staging.querySelectorAll<HTMLElement>('[data-math], [data-mermaid]')) {
           sources.set(element, element.textContent || '')
@@ -89,6 +92,7 @@ export const ReadingView = forwardRef<ReadingViewHandle, ReadingViewProps>(funct
         const environment: Record<string, unknown> = {}
         getMarkdownParser(props.markdownOptions).parse(props.content, environment)
         await hydratePreview(article, {
+          locale,
           markdownOptions: props.markdownOptions,
           mathExpressions: environment.mathExpressions as MathExpression[],
           theme: props.theme,
@@ -105,7 +109,7 @@ export const ReadingView = forwardRef<ReadingViewHandle, ReadingViewProps>(funct
       }
     })()
     return () => { canceled = true }
-  }, [props.documentId, props.content, props.theme, props.markdownOptions])
+  }, [props.documentId, props.content, props.theme, props.markdownOptions, locale])
 
   useLayoutEffect(() => {
     if (status !== 'ready' || !articleRef.current || !rootRef.current) return
@@ -181,9 +185,9 @@ export const ReadingView = forwardRef<ReadingViewHandle, ReadingViewProps>(funct
       } else callbackRef.current.onLinkOpen(href)
     }}>
     <ReadingSearch ref={searchRef} articleRef={articleRef} ready={status === 'ready'} version={props.content} onClose={() => rootRef.current?.focus({ preventScroll: true })} />
-    {status === 'loading' ? <p className="reading-status" role="status">正在排版阅读视图…</p> : null}
-    {status === 'limit' ? <p className="reading-status" role="alert">当前阅读模式支持正文不超过 20 万个字符的文档（已验证的内嵌图片数据不计入）。请按 {primaryShortcut(props.platform, 'E')} 返回编辑模式查看此文档。</p> : null}
-    {status === 'error' ? <p className="reading-status" role="alert">阅读排版失败，请按 {primaryShortcut(props.platform, 'E')} 返回编辑模式检查文档。</p> : null}
-    <article ref={articleRef} className="md-preview-block reading-article" aria-label="Markdown 阅读内容" aria-hidden={status !== 'ready'} style={{ visibility: status === 'ready' ? 'visible' : 'hidden' }} />
+    {status === 'loading' ? <p className="reading-status" role="status">{editorText(locale, '正在排版阅读视图…')}</p> : null}
+    {status === 'limit' ? <p className="reading-status" role="alert">{editorText(locale, '当前阅读模式支持正文不超过 20 万个字符的文档（已验证的内嵌图片数据不计入）。请按 {shortcut} 返回编辑模式查看此文档。', { shortcut: primaryShortcut(props.platform, 'E') })}</p> : null}
+    {status === 'error' ? <p className="reading-status" role="alert">{editorText(locale, '阅读排版失败，请按 {shortcut} 返回编辑模式检查文档。', { shortcut: primaryShortcut(props.platform, 'E') })}</p> : null}
+    <article ref={articleRef} className="md-preview-block reading-article" aria-label={editorText(locale, 'Markdown 阅读内容')} aria-hidden={status !== 'ready'} style={{ visibility: status === 'ready' ? 'visible' : 'hidden' }} />
   </div>
 })

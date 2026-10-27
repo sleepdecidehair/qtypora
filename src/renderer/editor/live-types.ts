@@ -2,6 +2,7 @@ import type { MathExpression } from './markdown-features'
 import type { MarkdownOptions } from '../../shared/markdown-options'
 
 export interface LiveOptions {
+  locale?: import('../../shared/i18n').AppLocale
   markdownOptions?: MarkdownOptions
   mathExpressions?: MathExpression[]
   mathKey?: string

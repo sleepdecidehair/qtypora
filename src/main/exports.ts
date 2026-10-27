@@ -10,9 +10,17 @@ import { DesktopError } from './errors'
 import { atomicWrite, encodedDocument, canonicalPath, serialized } from './files'
 import { ResourceRegistry } from './resources'
 import { PANDOC_EXPORT_FORMATS, PANDOC_SOURCE_FORMATS, runPandoc } from './pandoc'
+import type { ExportHistory, PreviousExport } from './export-history'
 
 const EXPORT_POLICY = "default-src 'none'; script-src 'none'; img-src data: qtypora-media:; style-src 'unsafe-inline'; font-src data:; form-action 'none'; base-uri 'none'"
-const previousExports = new WeakMap<BrowserWindow, Map<string, { kind: ExportFormat; destination: string; options: ExportOptions }>>()
+const previousExports = new WeakMap<BrowserWindow, Map<string, PreviousExport>>()
+
+function previousExport(window: BrowserWindow, request: ExportRequest, options: ExportOptions, sourcePath: string | null, history?: ExportHistory): PreviousExport | undefined {
+  const current = previousExports.get(window)?.get(request.id)
+  if (!current) return history?.get(sourcePath, options)
+  // The selected custom preset must still exist in current user-approved settings.
+  return { ...current, options: { ...current.options, pandocPath: options.pandocPath, customPresets: options.customPresets } }
+}
 
 export function secureHtml(html: string): string {
   const policy = `<meta http-equiv="Content-Security-Policy" content="${EXPORT_POLICY}">`
@@ -59,8 +67,8 @@ async function withExportWindow<T>(html: string, resources: ResourceRegistry, wi
   }
 }
 
-export function getExportPlan(window: BrowserWindow, request: ExportRequest, options: ExportOptions): { kind: ExportFormat; requiresHtml: boolean; options: ExportOptions } {
-  const previous = previousExports.get(window)?.get(request.id)
+export function getExportPlan(window: BrowserWindow, request: ExportRequest, options: ExportOptions, sourcePath: string | null = null, persistent?: ExportHistory): { kind: ExportFormat; requiresHtml: boolean; options: ExportOptions } {
+  const previous = previousExport(window, request, options, sourcePath, persistent)
   if (request.reusePrevious && !previous) throw new DesktopError('NOT_FOUND', '此文档尚无成功的导出记录。')
   const kind = request.reusePrevious && previous ? previous.kind : request.kind
   const selected = request.reusePrevious && previous ? previous.options : options
@@ -69,12 +77,12 @@ export function getExportPlan(window: BrowserWindow, request: ExportRequest, opt
   return { kind, requiresHtml: kind !== 'markdown' && !PANDOC_SOURCE_FORMATS.has(kind) && !(kind === 'custom' && custom?.input === 'markdown'), options: selected }
 }
 
-export async function exportDocument(window: BrowserWindow, documents: DocumentSession, request: ExportRequest, resources: ResourceRegistry, options = DEFAULT_EXPORT_OPTIONS, sourcePaths: () => string[] = () => documents.records().flatMap(item => item.path ? [item.path] : [])): Promise<string | null> {
+export async function exportDocument(window: BrowserWindow, documents: DocumentSession, request: ExportRequest, resources: ResourceRegistry, options = DEFAULT_EXPORT_OPTIONS, sourcePaths: () => string[] = () => documents.records().flatMap(item => item.path ? [item.path] : []), persistent?: ExportHistory): Promise<string | null> {
   const state = documents.get(request.id)
   if (request.revision !== undefined && request.revision !== state.revision) throw new DesktopError('CONFLICT', '文档已更新，请重新导出。')
   const record = { ...state.record }
   const content = state.currentContent
-  const previous = previousExports.get(window)?.get(request.id)
+  const previous = previousExport(window, request, options, record.path, persistent)
   if (request.reusePrevious && !previous) throw new DesktopError('NOT_FOUND', '此文档尚无成功的导出记录。')
   const kind = request.reusePrevious && previous ? previous.kind : request.kind
   const selectedOptions = request.reusePrevious && previous ? previous.options : options
@@ -99,7 +107,7 @@ export async function exportDocument(window: BrowserWindow, documents: DocumentS
   const checkSource = async () => {
     let target = canonicalDestination
     try { target = await canonicalPath(canonicalDestination) } catch (error) { if (!(error && typeof error === 'object' && 'code' in error && error.code === 'ENOENT')) throw error }
-    if (sourcePaths().some(source => path.resolve(source).toLowerCase() === target.toLowerCase())) throw new DesktopError('CONFLICT', '导出目标不能覆盖任何已打开的源文档，请另选文件名。')
+    if ([...sourcePaths(), ...(record.path ? [record.path] : [])].some(source => path.resolve(source).toLowerCase() === target.toLowerCase())) throw new DesktopError('CONFLICT', '导出目标不能覆盖任何已打开的源文档，请另选文件名。')
   }
   await checkSource()
   const outputVersion = async (): Promise<string | null> => {
@@ -143,7 +151,13 @@ export async function exportDocument(window: BrowserWindow, documents: DocumentS
   }))
   let history = previousExports.get(window)
   if (!history) { history = new Map(); previousExports.set(window, history) }
+  persistent?.noteChange()
   history.set(request.id, { kind, destination, options: structuredClone(selectedOptions) })
+  // If the document moved or closed while exporting, do not write a stale source path.
+  if (persistent && record.path && documents.records().some(item => item.id === request.id && item.path === record.path)) {
+    try { await persistent.record(record.path, canonicalDestination, kind, selectedOptions) }
+    catch { throw new DesktopError('IO_ERROR', '文件已导出，但无法保存导出历史；请检查历史文件后重试。') }
+  }
   return destination
 }
 

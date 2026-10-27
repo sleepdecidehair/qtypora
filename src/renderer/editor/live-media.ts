@@ -3,10 +3,11 @@ import { editLiveBlock } from './live-blocks'
 import { hydratePreview, getMarkdownParser, sanitizeMarkdownHtml } from './markdown'
 import type { LiveOptions } from './live-types'
 import { fitEditorResources } from './resource-fit'
+import { editorText } from './editor-i18n'
 
 export class LiveMediaWidget extends WidgetType {
   constructor(readonly from: number, readonly to: number, readonly line: number, readonly source: string, readonly kind: 'math' | 'image', readonly options: LiveOptions) { super() }
-  eq(other: LiveMediaWidget): boolean { return this.from === other.from && this.source === other.source && this.options.mathKey === other.options.mathKey && this.options.theme === other.options.theme && this.options.readOnly === other.options.readOnly }
+  eq(other: LiveMediaWidget): boolean { return this.from === other.from && this.source === other.source && this.options.mathKey === other.options.mathKey && this.options.theme === other.options.theme && this.options.readOnly === other.options.readOnly && this.options.locale === other.options.locale }
   toDOM(view: EditorView): HTMLElement {
     const container = document.createElement('span')
     container.className = 'cm-live-media'
@@ -16,7 +17,7 @@ export class LiveMediaWidget extends WidgetType {
     container.dataset.sourceEnd = String(this.line)
     const content = document.createElement('span')
     const staging = document.createElement('span')
-    staging.innerHTML = sanitizeMarkdownHtml(getMarkdownParser(this.options.markdownOptions).renderInline(this.source))
+    staging.innerHTML = sanitizeMarkdownHtml(getMarkdownParser(this.options.markdownOptions).renderInline(this.source), this.options.locale)
     const sources = new Map<HTMLElement, string>()
     for (const node of staging.querySelectorAll<HTMLElement>('[data-math]')) {
       const source = node.textContent || ''
@@ -43,8 +44,8 @@ export class LiveMediaWidget extends WidgetType {
     if (!this.options.readOnly) {
       const edit = document.createElement('button')
       edit.type = 'button'; edit.dataset.action = 'edit-block'; edit.className = 'cm-live-media-edit'
-      edit.textContent = '编辑'
-      edit.setAttribute('aria-label', this.kind === 'math' ? '编辑行内公式' : '编辑图片')
+      edit.textContent = editorText(this.options.locale, '编辑')
+      edit.setAttribute('aria-label', editorText(this.options.locale, this.kind === 'math' ? '编辑行内公式' : '编辑图片'))
       edit.addEventListener('click', (event) => {
         event.preventDefault()
         if (view.state.readOnly) return

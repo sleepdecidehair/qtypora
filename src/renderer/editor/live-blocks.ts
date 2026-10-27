@@ -5,6 +5,7 @@ import { hydratePreview, getMarkdownParser, sanitizeMarkdownHtml } from './markd
 import type { LiveBlock, LiveOptions } from './live-types'
 import { markdownOptionsFacet, markdownDocumentModel } from './markdown-config'
 import { fitEditorResources } from './resource-fit'
+import { editorText } from './editor-i18n'
 import { markdownDefinitions, renderedFootnoteDefinition } from './markdown-references'
 
 export const editLiveBlock = StateEffect.define<{ from: number; to: number } | null>({ map: (value, changes) => value ? { from: changes.mapPos(value.from), to: changes.mapPos(value.to, 1) } : null })
@@ -83,7 +84,7 @@ export function liveBlocks(state: EditorState): LiveBlock[] {
 
 export class LiveBlockWidget extends WidgetType {
   constructor(readonly block: LiveBlock, readonly options: LiveOptions) { super() }
-  eq(other: LiveBlockWidget): boolean { return this.block.from === other.block.from && this.block.source === other.block.source && this.block.html === other.block.html && this.options.mathKey === other.options.mathKey && this.options.theme === other.options.theme && this.options.readOnly === other.options.readOnly }
+  eq(other: LiveBlockWidget): boolean { return this.block.from === other.block.from && this.block.source === other.block.source && this.block.html === other.block.html && this.options.mathKey === other.options.mathKey && this.options.theme === other.options.theme && this.options.readOnly === other.options.readOnly && this.options.locale === other.options.locale }
   toDOM(view: EditorView): HTMLElement {
     const container = document.createElement('div')
     container.className = 'md-preview-block cm-live-block'
@@ -92,7 +93,7 @@ export class LiveBlockWidget extends WidgetType {
     container.dataset.sourceLine = String(this.block.firstLine)
     container.dataset.sourceEnd = String(this.block.lastLine)
     const staging = document.createElement('div')
-    staging.innerHTML = sanitizeMarkdownHtml(this.block.html)
+    staging.innerHTML = sanitizeMarkdownHtml(this.block.html, this.options.locale)
     const sources = new Map<HTMLElement, string>()
     for (const node of staging.querySelectorAll<HTMLElement>('[data-math],[data-mermaid]')) {
       sources.set(node, node.textContent || '')
@@ -112,8 +113,8 @@ export class LiveBlockWidget extends WidgetType {
     if (!this.options.readOnly && this.block.kind !== 'rule') {
       const edit = document.createElement('button')
       edit.type = 'button'; edit.dataset.action = 'edit-block'; edit.className = 'cm-live-block-edit'
-      edit.textContent = '编辑'
-      edit.setAttribute('aria-label', this.block.kind === 'math' ? '编辑公式' : this.block.kind === 'mermaid' ? '编辑流程图' : '编辑此块')
+      edit.textContent = editorText(this.options.locale, '编辑')
+      edit.setAttribute('aria-label', editorText(this.options.locale, this.block.kind === 'math' ? '编辑公式' : this.block.kind === 'mermaid' ? '编辑流程图' : '编辑此块'))
       edit.addEventListener('click', (event) => {
         event.preventDefault()
         if (view.state.readOnly) return

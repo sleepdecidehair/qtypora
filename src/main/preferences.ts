@@ -11,6 +11,8 @@ import { normalizeImageOptions } from '../shared/image-options'
 
 export function validatePreferences(input: unknown): Preferences {
   const value = object(input)
+  const locale = value.locale === undefined ? DEFAULT_PREFERENCES.locale : value.locale
+  if (locale !== 'zh-CN' && locale !== 'en-US') invalid('界面语言无效。')
   if (!['light', 'dark', 'system'].includes(typeof value.theme === 'string' ? value.theme : '')) invalid('主题无效。')
   if (!['files', 'outline', 'search'].includes(typeof value.sidebarMode === 'string' ? value.sidebarMode : '')) invalid('侧栏模式无效。')
   if (!['LF', 'CRLF'].includes(typeof value.lineEnding === 'string' ? value.lineEnding : '')) invalid('换行格式无效。')
@@ -48,7 +50,7 @@ export function validatePreferences(input: unknown): Preferences {
   try { extensions = { shortcuts: normalizeShortcutOverrides(value.shortcuts, process.platform), markdown: normalizeMarkdownOptions(value.markdown), workspace: normalizeWorkspaceOptions(value.workspace), image: normalizeImageOptions(value.image), export: normalizeExportOptions(value.export) } }
   catch (error) { invalid(error instanceof Error ? error.message : '扩展设置无效。') }
   return {
-    ...extensions,
+    ...extensions, locale,
     theme: value.theme as Preferences['theme'], sidebarMode: value.sidebarMode as Preferences['sidebarMode'],
     lineEnding: value.lineEnding as Preferences['lineEnding'], fontSize: number('fontSize', 12, 32),
     contentWidth, contentWidthMode, autoSaveSeconds: number('autoSaveSeconds', 5, 3600),

@@ -4,6 +4,7 @@ import type { PendingFileAction } from '../components/FileActionDialog'
 import type { EditorDocument } from './useDocuments'
 import { fileContextActions, isFileContextTargetCurrent, parentDirectory, type FileContextTarget } from './fileContext'
 import { filePathKey } from './workspaceFiles'
+import { useTranslation } from '../i18n/locale'
 
 interface FileContextMenuOptions {
   api: DesktopApi
@@ -19,6 +20,9 @@ interface FileContextMenuOptions {
 }
 
 export function useFileContextMenu(options: FileContextMenuOptions) {
+  const t = useTranslation()
+  const translation = useRef(t)
+  translation.current = t
   const latest = useRef(options)
   latest.current = options
   const mounted = useRef(true)
@@ -57,7 +61,7 @@ export function useFileContextMenu(options: FileContextMenuOptions) {
           if (!inScope()) return
           if (!response.ok) latest.current.onError(response.error.message)
           else if (response.data) latest.current.onRefresh()
-          else latest.current.onError('当前窗口没有可以撤销的文件操作。')
+          else latest.current.onError(translation.current('当前窗口没有可以撤销的文件操作。'))
           return
         }
         case 'file-open':
@@ -99,7 +103,7 @@ export function useFileContextMenu(options: FileContextMenuOptions) {
         }
       }
     } catch (error) {
-      if (inScope()) latest.current.onError(error instanceof Error ? error.message : '文件菜单操作失败')
+      if (inScope()) latest.current.onError(error instanceof Error ? error.message : translation.current('文件菜单操作失败'))
     }
   }
 }

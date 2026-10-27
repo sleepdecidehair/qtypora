@@ -26,4 +26,15 @@ describe('workspace file list and search', () => {
     expect(last.text.length).toBeLessThan(2002)
     await expect(searchMarkdown({ root, query: '(', regex: true })).rejects.toMatchObject({ code: 'INVALID_INPUT' })
   })
+  it('prunes excluded directory names and relative wildcard paths before searching', async () => {
+    const files = ['visible.md', 'cache/hidden.md', 'projects/one/generated/hidden.md', 'projects/one/source/visible.md', 'other/cache/hidden.md']
+    for (const name of files) {
+      const target = path.join(root, name)
+      await fs.mkdir(path.dirname(target), { recursive: true })
+      await fs.writeFile(target, 'needle\n')
+    }
+    const result = await searchMarkdown({ root, query: 'needle', excludeDirectories: 'cache,projects/*/generated' })
+    expect(result.map(hit => path.relative(root, hit.path)).sort()).toEqual(['projects/one/source/visible.md', 'visible.md'])
+    await expect(searchMarkdown({ root, query: 'needle', excludeDirectories: '../outside' })).rejects.toMatchObject({ code: 'INVALID_INPUT' })
+  })
 })

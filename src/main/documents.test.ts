@@ -27,6 +27,15 @@ function makeSession(dialogs: Partial<DocumentDialogs> = {}, events: DesktopEven
 }
 
 describe('Document sessions and independent drafts', () => {
+  it('uses the current interface language for new names without renaming existing documents', () => {
+    const session = makeSession()
+    const original = session.create()
+    expect(original.name).toBe('未命名1.md')
+    store.preferences = { ...store.preferences, locale: 'en-US' }
+    expect(session.create().name).toBe('Untitled2.md')
+    expect(session.get(original.id).record.name).toBe('未命名1.md')
+  })
+
   it('persists an edited draft and recovers it in a fresh session', async () => {
     const session = makeSession()
     const document = session.create()
@@ -162,6 +171,21 @@ describe('Document sessions and independent drafts', () => {
     expect(await session.close({ id: document.id, content: document.content, revision: 0 })).toBe(false)
     expect(session.records()).toHaveLength(1)
     expect(store.drafts.has(document.id)).toBe(true)
+  })
+
+  it('requires a save dialog for a removed document even if a replacement has identical bytes', async () => {
+    const target = path.join(directory, 'replaced.md')
+    await fs.writeFile(target, 'same bytes')
+    let prompts = 0
+    const session = makeSession({ chooseSave: async () => { prompts++; return null } })
+    const document = await session.open(target, true)
+    await fs.unlink(target)
+    await session.updatePaths(target, null)
+    await fs.writeFile(target, 'same bytes')
+    expect(await session.save({ id: document.id, content: 'edited copy', revision: 1 })).toBeNull()
+    expect(prompts).toBe(1)
+    expect(await fs.readFile(target, 'utf8')).toBe('same bytes')
+    expect(store.drafts.get(document.id)?.content).toBe('edited copy')
   })
 
   it('keeps a new welcome document clean until the user changes it', async () => {

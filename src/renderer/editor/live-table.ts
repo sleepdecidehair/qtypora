@@ -7,6 +7,7 @@ import type { LiveBlock, LiveOptions } from './live-types'
 import { fitEditorResources } from './resource-fit'
 import { tableRangeSelection } from './table-range-selection'
 import { clearTableRange, copyTableRange, MAX_TABLE_COLUMNS, MAX_TABLE_ROWS, moveTableColumn, moveTableRow, pasteTableCells, resizeTable, tableOperation, tableRangeContains, type SourcePatch, type TableRange } from './table-operations'
+import { editorText } from './editor-i18n'
 
 interface TableContext {
   block: LiveBlock
@@ -93,7 +94,7 @@ function applyCellAttributes(container: HTMLElement, context: TableContext): voi
     const source = cellSource(context, element)
     element.contentEditable = String(Boolean(source) && !context.options.readOnly)
     element.spellcheck = false
-    element.setAttribute('aria-label', `表格第 ${rowIndex + 1} 行第 ${column + 1} 列`)
+    element.setAttribute('aria-label', editorText(context.options.locale, '表格第 {row} 行第 {column} 列', { row: rowIndex + 1, column: column + 1 }))
     element.classList.toggle('cm-table-cell-selected', Boolean(context.range && tableRangeContains(context.range, rowIndex, column)))
     if (context.range) element.setAttribute('aria-selected', String(tableRangeContains(context.range, rowIndex, column)))
     else element.removeAttribute('aria-selected')
@@ -141,15 +142,15 @@ function tableControls(view: EditorView, container: HTMLElement, context: TableC
   controls.className = 'cm-table-controls'
   controls.contentEditable = 'false'
   controls.setAttribute('role', 'group')
-  controls.setAttribute('aria-label', '表格工具')
+  controls.setAttribute('aria-label', editorText(context.options.locale, '表格工具'))
   const status = document.createElement('span')
   status.setAttribute('role', 'status')
   const sizeInput = (name: string, value: number, min: number, max: number) => {
     const label = document.createElement('label')
-    label.textContent = name
+    label.textContent = editorText(context.options.locale, name)
     const input = document.createElement('input')
     input.type = 'number'; input.min = String(min); input.max = String(max); input.value = String(value)
-    input.setAttribute('aria-label', name)
+    input.setAttribute('aria-label', editorText(context.options.locale, name))
     input.addEventListener('keydown', event => { event.stopPropagation() })
     label.append(input); controls.append(label)
     return input
@@ -158,16 +159,16 @@ function tableControls(view: EditorView, container: HTMLElement, context: TableC
   const columns = sizeInput('列数', context.model.columns, 1, MAX_TABLE_COLUMNS)
   const button = (label: string, action: () => void) => {
     const element = document.createElement('button')
-    element.type = 'button'; element.textContent = label; element.setAttribute('aria-label', label)
+    element.type = 'button'; element.textContent = editorText(context.options.locale, label); element.setAttribute('aria-label', editorText(context.options.locale, label))
     element.addEventListener('click', event => { event.preventDefault(); event.stopPropagation(); action() })
     controls.append(element)
     return element
   }
   button('调整尺寸', () => {
     const countRows = Number(rows.value), countColumns = Number(columns.value)
-    if (!Number.isInteger(countRows) || !Number.isInteger(countColumns) || countRows < 2 || countRows > MAX_TABLE_ROWS || countColumns < 1 || countColumns > MAX_TABLE_COLUMNS) { status.textContent = `表格需为 2–${MAX_TABLE_ROWS} 行、1–${MAX_TABLE_COLUMNS} 列。`; return }
+    if (!Number.isInteger(countRows) || !Number.isInteger(countColumns) || countRows < 2 || countRows > MAX_TABLE_ROWS || countColumns < 1 || countColumns > MAX_TABLE_COLUMNS) { status.textContent = editorText(context.options.locale, '表格需为 2–{rows} 行、1–{columns} 列。', { rows: MAX_TABLE_ROWS, columns: MAX_TABLE_COLUMNS }); return }
     applyStructure(view, container, context, () => resizeTable(context.block.source, context.block.from, countRows, countColumns))
-  }).title = '缩小尺寸会删除超出范围的单元格，可撤销'
+  }).title = editorText(context.options.locale, '缩小尺寸会删除超出范围的单元格，可撤销')
   button('上移行', () => applyStructure(view, container, context, () => moveTableRow(context.block.source, context.block.from, context.cursor.row, context.cursor.row - 1), { ...context.cursor, row: context.cursor.row - 1 }))
   button('下移行', () => applyStructure(view, container, context, () => moveTableRow(context.block.source, context.block.from, context.cursor.row, context.cursor.row + 1), { ...context.cursor, row: context.cursor.row + 1 }))
   button('左移列', () => applyStructure(view, container, context, () => moveTableColumn(context.block.source, context.block.from, context.cursor.column, context.cursor.column - 1), { ...context.cursor, column: context.cursor.column - 1 }))
@@ -176,7 +177,7 @@ function tableControls(view: EditorView, container: HTMLElement, context: TableC
     if (context.range) applyStructure(view, container, context, () => context.range && clearTableRange(context.block.source, context.block.from, context.range))
   })
   const hint = document.createElement('small')
-  hint.textContent = 'Alt+拖动或 Shift+点击选择多格；拖动行/列序号排序'
+  hint.textContent = editorText(context.options.locale, 'Alt+拖动或 Shift+点击选择多格；拖动行/列序号排序')
   controls.append(hint, status)
   return controls
 }
@@ -188,12 +189,12 @@ function tableDragHandles(view: EditorView, container: HTMLElement, context: Tab
   for (const kind of ['row', 'column'] as const) {
     const group = document.createElement('div')
     group.className = 'cm-table-handle-group'
-    const title = document.createElement('span'); title.textContent = kind === 'row' ? '行' : '列'; group.append(title)
+    const title = document.createElement('span'); title.textContent = editorText(context.options.locale, kind === 'row' ? '行' : '列'); group.append(title)
     const count = kind === 'row' ? context.model.rows : context.model.columns
     for (let index = kind === 'row' ? 1 : 0; index < count; index++) {
       const handle = document.createElement('button')
       handle.type = 'button'; handle.draggable = true; handle.textContent = String(index + 1)
-      handle.setAttribute('aria-label', `移动第 ${index + 1} ${kind === 'row' ? '行' : '列'}`)
+      handle.setAttribute('aria-label', editorText(context.options.locale, kind === 'row' ? '移动第 {index} 行' : '移动第 {index} 列', { index: index + 1 }))
       handle.addEventListener('dragstart', event => {
         drag = { kind, index }; event.stopPropagation()
         event.dataTransfer?.setData('text/plain', '')
@@ -249,14 +250,14 @@ export class LiveTableWidget extends WidgetType {
   constructor(readonly block: LiveBlock, readonly options: LiveOptions) { super() }
 
   eq(other: LiveTableWidget): boolean {
-    return this.block.from === other.block.from && this.block.source === other.block.source && this.options.theme === other.options.theme && this.options.readOnly === other.options.readOnly && this.options.mathKey === other.options.mathKey
+    return this.block.from === other.block.from && this.block.source === other.block.source && this.options.theme === other.options.theme && this.options.readOnly === other.options.readOnly && this.options.mathKey === other.options.mathKey && this.options.locale === other.options.locale
   }
 
   toDOM(view: EditorView): HTMLElement {
     const container = document.createElement('div')
     container.className = 'md-preview-block cm-live-table'
     container.dataset.testid = 'live-table'
-    container.innerHTML = sanitizeMarkdownHtml(this.block.html)
+    container.innerHTML = sanitizeMarkdownHtml(this.block.html, this.options.locale)
     for (const cell of container.querySelectorAll<HTMLElement>('th,td')) cell.dataset.lastMarkup = cell.innerHTML
     const sources = takeMathSources(container)
     const context: TableContext = { block: this.block, options: this.options, model: parseTableSource(this.block.source, this.block.from, this.block.firstLine), activeCell: null, composing: false, nativeEditing: false, cursor: { row: 1, column: 0 }, range: null, stopRangeSelection: () => undefined, skipMouseupSelection: false }
@@ -267,7 +268,7 @@ export class LiveTableWidget extends WidgetType {
       tools.className = 'cm-table-tools'
       tools.contentEditable = 'false'
       const summary = document.createElement('summary')
-      summary.textContent = '表格工具'
+      summary.textContent = editorText(context.options.locale, '表格工具')
       tools.append(summary, tableControls(view, container, context), tableDragHandles(view, container, context))
       tools.addEventListener('toggle', () => { view.requestMeasure() })
       container.append(tools)
@@ -387,7 +388,7 @@ export class LiveTableWidget extends WidgetType {
 
   private refreshCells(container: HTMLElement, context: TableContext, view: EditorView): void {
     const staging = document.createElement('div')
-    staging.innerHTML = sanitizeMarkdownHtml(context.block.html)
+    staging.innerHTML = sanitizeMarkdownHtml(context.block.html, context.options.locale)
     const freshCells = Array.from(staging.querySelectorAll<HTMLElement>('th,td'))
     const cells = Array.from(container.querySelectorAll<HTMLElement>('th,td'))
     cells.forEach((cell, index) => {
@@ -413,7 +414,7 @@ export class LiveTableWidget extends WidgetType {
   updateDOM(container: HTMLElement, view: EditorView): boolean {
     const context = contexts.get(container)
     if (!context) return false
-    if (context.options.readOnly !== this.options.readOnly || context.options.mathKey !== this.options.mathKey) return false
+    if (context.options.readOnly !== this.options.readOnly || context.options.mathKey !== this.options.mathKey || context.options.locale !== this.options.locale) return false
     const model = parseTableSource(this.block.source, this.block.from, this.block.firstLine)
     if (model.rows !== context.model.rows || model.columns !== context.model.columns) return false
     context.block = this.block; context.options = this.options; context.model = model

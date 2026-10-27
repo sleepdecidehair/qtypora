@@ -1,3 +1,5 @@
+import type { AppLocale } from '../shared/i18n'
+
 export interface DiagnosticInformation {
   applicationVersion: string
   platform: string
@@ -10,8 +12,21 @@ export interface DiagnosticInformation {
   spellcheckLanguages: readonly string[]
 }
 
-export function helpText(platform: string): string {
+export function helpText(platform: string, locale: AppLocale = 'zh-CN'): string {
   const primary = platform === 'darwin' ? '⌘' : 'Ctrl'
+  if (locale === 'en-US') return [
+    'Writing and saving',
+    `${primary}+N creates a document; ${primary}+O opens one; ${primary}+S saves; ${primary}+Shift+S opens Save As. The File menu provides Save All, import, export, and print.`,
+    '', 'Markdown editing',
+    `${primary}+/ switches source and live preview; ${primary}+B applies bold; ${primary}+I applies italic. The context menu contains formatting, table, and resource actions.`,
+    `${primary}+F finds text; ${primary}+H replaces it. Select text to use the floating toolbar.`,
+    '', 'Files and navigation',
+    'Use the sidebar for the outline, file tree, article list, and folder search. The file view supports sorting, filters, pinned folders, and moving files within a workspace. File undo is limited to operations in the current window and may refuse a changed file.',
+    'Folder search supports case sensitivity, whole words, and RE2 regular expressions. Backreferences and lookaround are not supported. Open the status-bar word count for detailed statistics.',
+    '', 'Preferences and recovery',
+    `${primary}+, opens preferences for Markdown, images, themes, reading speed, spelling, and startup. Use Recover Drafts in the File menu to inspect unsaved content.`,
+    'Check the message if a move, export, or save conflicts or is cancelled. External conversion requires Pandoc to be installed; spelling dictionaries may require an initial download.',
+  ].join('\n')
   return [
     '写作与保存',
     `${primary}+N 新建；${primary}+O 打开；${primary}+S 保存；${primary}+Shift+S 另存为。文件菜单提供保存全部、导入、导出和打印。`,
@@ -28,7 +43,17 @@ export function helpText(platform: string): string {
 }
 
 /** Diagnostics deliberately exclude document contents, names, paths and environment variables. */
-export function diagnosticsText(input: DiagnosticInformation): string {
+export function diagnosticsText(input: DiagnosticInformation, locale: AppLocale = 'zh-CN'): string {
+  if (locale === 'en-US') return [
+    `QTypora ${input.applicationVersion}`,
+    `Platform: ${input.platform} ${input.architecture}`,
+    `Distribution: ${input.packaged ? 'packaged' : 'development'}`,
+    `Electron: ${input.electronVersion}`,
+    `Chromium: ${input.chromiumVersion}`,
+    `Node.js: ${input.nodeVersion}`,
+    `Spellcheck: ${input.spellcheckEnabled ? 'on' : 'off'}`,
+    `Spelling languages: ${input.platform === 'darwin' ? 'automatically selected by macOS' : input.spellcheckLanguages.join(', ') || 'not configured'}`,
+  ].join('\n')
   return [
     `QTypora ${input.applicationVersion}`,
     `平台：${input.platform} ${input.architecture}`,

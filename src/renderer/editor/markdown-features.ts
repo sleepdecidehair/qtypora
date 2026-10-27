@@ -2,6 +2,7 @@ import type MarkdownIt from 'markdown-it'
 import type Token from 'markdown-it/lib/token.mjs'
 import { parseDocument } from 'yaml'
 import type { MarkdownOptions } from '../../shared/markdown-options'
+import { editorText } from './editor-i18n'
 
 export interface IndexedHeading { level: number; text: string; line: number; slug: string }
 export interface MathExpression { source: string; display: boolean; line: number }
@@ -81,10 +82,12 @@ export function installDocumentFeatures(parser: MarkdownIt, options: MarkdownOpt
       state.line = matter.endLine
       return true
     })
-    parser.renderer.rules.front_matter = (tokens, index) => {
+    parser.renderer.rules.front_matter = (tokens, index, _options, env) => {
       const matter = tokens[index].meta as FrontMatter
       const escape = parser.utils.escapeHtml
-      return `<section class="md-front-matter" aria-label="YAML 前置信息"><div class="md-front-matter-label">YAML 前置信息</div><pre>${escape(matter.source)}</pre>${matter.error ? `<p class="md-front-matter-error">${escape(matter.error)}</p>` : ''}</section>\n`
+      const locale = env.locale === 'en-US' ? 'en-US' : 'zh-CN'
+      const label = escape(editorText(locale, 'YAML 前置信息'))
+      return `<section class="md-front-matter" aria-label="${label}"><div class="md-front-matter-label">${label}</div><pre>${escape(matter.source)}</pre>${matter.error ? `<p class="md-front-matter-error">${escape(editorText(locale, matter.error))}</p>` : ''}</section>\n`
     }
   }
   if (options.toc) {
@@ -103,6 +106,7 @@ export function installDocumentFeatures(parser: MarkdownIt, options: MarkdownOpt
   }
 
   parser.core.ruler.after('inline', 'document_features', state => {
+    const locale = state.env.locale === 'en-US' ? 'en-US' : 'zh-CN'
     const headings = indexHeadingTokens(state.tokens)
     state.env.headings = headings
     let remainingTocEntries = 5000
@@ -113,7 +117,7 @@ export function installDocumentFeatures(parser: MarkdownIt, options: MarkdownOpt
       let html = tocCache.get(count)
       if (html === undefined) {
         const escape = parser.utils.escapeHtml
-        html = `<nav class="md-toc" aria-label="文章目录"><ol>${headings.slice(0, count).map(heading => `<li class="md-toc-level-${heading.level}"><a href="#${escape(heading.slug)}">${escape(heading.text || '无标题')}</a></li>`).join('')}</ol>${count < headings.length ? '<p>目录条目超过当前文档的预览上限，请使用侧栏大纲查看全部标题。</p>' : ''}</nav>\n`
+        html = `<nav class="md-toc" aria-label="${escape(editorText(locale, '文章目录'))}"><ol>${headings.slice(0, count).map(heading => `<li class="md-toc-level-${heading.level}"><a href="#${escape(heading.slug)}">${escape(heading.text || editorText(locale, '无标题'))}</a></li>`).join('')}</ol>${count < headings.length ? `<p>${escape(editorText(locale, '目录条目超过当前文档的预览上限，请使用侧栏大纲查看全部标题。'))}</p>` : ''}</nav>\n`
         tocCache.set(count, html)
       }
       remainingTocEntries -= count
@@ -128,12 +132,13 @@ export function installDocumentFeatures(parser: MarkdownIt, options: MarkdownOpt
       const match = /^\[!(NOTE|TIP|IMPORTANT|WARNING|CAUTION)\](?:\s*\n|\s*$)/.exec(inline.content)
       if (!match) continue
       quote.attrJoin('class', `md-alert md-alert-${match[1].toLowerCase()}`)
-      quote.attrSet('aria-label', ALERTS[match[1]])
+      const alertLabel = editorText(locale, ALERTS[match[1]])
+      quote.attrSet('aria-label', alertLabel)
       quote.meta = { alert: match[1] }
       inline.content = inline.content.slice(match[0].length)
       if (inline.map) inline.map = [inline.map[0] + (match[0].match(/\n/g)?.length ?? 0), inline.map[1]]
       const title = new state.Token('html_inline', '', 0)
-      title.content = `<strong class="md-alert-title">${ALERTS[match[1]]}</strong><br>`
+      title.content = `<strong class="md-alert-title">${parser.utils.escapeHtml(alertLabel)}</strong><br>`
       const parsed = [...(inline.children ?? [])]
       if (parsed[0]?.type === 'text') parsed.shift()
       if (parsed[0]?.type === 'softbreak' || parsed[0]?.type === 'hardbreak') parsed.shift()

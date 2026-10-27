@@ -3,10 +3,14 @@ import { createPortal } from 'react-dom'
 import DOMPurify from 'dompurify'
 import { fitResourceViewport, MAX_RESOURCE_SCALE, panResourceViewport, resizeResourceViewport, resourceMinScale, zoomResourceViewport, type ResourcePoint, type ResourceViewport } from './resource-viewport'
 import type { ViewedResource } from './context-resource'
+import { useLocale } from '../i18n/locale'
+import { editorText } from './editor-i18n'
 
 interface PointerDrag extends ResourcePoint { id: number }
 
 export function ResourceViewer({ resource, onClose }: { resource: ViewedResource; onClose: () => void }): React.JSX.Element {
+  const locale = useLocale()
+  const t = (source: string) => editorText(locale, source)
   const dialogRef = useRef<HTMLElement>(null)
   const closeRef = useRef<HTMLButtonElement>(null)
   const stageRef = useRef<HTMLDivElement>(null)
@@ -114,15 +118,15 @@ export function ResourceViewer({ resource, onClose }: { resource: ViewedResource
   function stopDrag(): void { dragRef.current = null; setIsDragging(false) }
   const transform = viewport ? `translate(${viewport.x}px, ${viewport.y}px) scale(${viewport.scale})` : undefined
   return createPortal(<div className="editor-resource-backdrop" onMouseDown={event => { if (event.target === event.currentTarget) onClose() }}>
-    <section ref={dialogRef} className="editor-resource-viewer" role="dialog" aria-modal="true" aria-label="查看资源" aria-describedby="resource-viewer-help" data-testid="resource-viewer">
+    <section ref={dialogRef} className="editor-resource-viewer" role="dialog" aria-modal="true" aria-label={t('查看资源')} aria-describedby="resource-viewer-help" data-testid="resource-viewer">
       <div className="editor-resource-toolbar">
-        <span className="editor-resource-title">{resource.kind === 'diagram' ? '图表' : resource.kind === 'math' ? '公式' : '图片'}</span>
-        <button type="button" aria-label="缩小" title="缩小（−）" disabled={!viewport || viewport.scale <= resourceMinScale(viewport)} onClick={() => { if (viewport) zoom(viewport.scale / 1.25) }}>−</button>
-        <output aria-label="缩放比例">{viewport ? `${Math.round(viewport.scale * 1000) / 10}%` : '—'}</output>
-        <button type="button" aria-label="放大" title="放大（+）" disabled={!viewport || viewport.scale >= MAX_RESOURCE_SCALE} onClick={() => { if (viewport) zoom(viewport.scale * 1.25) }}>+</button>
-        <button type="button" disabled={!viewport} title="恢复完整展示（0）" onClick={reset}>适应窗口</button>
-        <button type="button" disabled={!viewport} title="100% 原始尺寸（1）" onClick={() => zoom(1)}>原始大小</button>
-        <button ref={closeRef} className="editor-resource-close" type="button" aria-label="关闭资源查看" onClick={onClose}>关闭</button>
+        <span className="editor-resource-title">{t(resource.kind === 'diagram' ? '图表' : resource.kind === 'math' ? '公式' : '图片')}</span>
+        <button type="button" aria-label={t('缩小')} title={t('缩小（−）')} disabled={!viewport || viewport.scale <= resourceMinScale(viewport)} onClick={() => { if (viewport) zoom(viewport.scale / 1.25) }}>−</button>
+        <output aria-label={t('缩放比例')}>{viewport ? `${Math.round(viewport.scale * 1000) / 10}%` : '—'}</output>
+        <button type="button" aria-label={t('放大')} title={t('放大（+）')} disabled={!viewport || viewport.scale >= MAX_RESOURCE_SCALE} onClick={() => { if (viewport) zoom(viewport.scale * 1.25) }}>+</button>
+        <button type="button" disabled={!viewport} title={t('恢复完整展示（0）')} onClick={reset}>{t('适应窗口')}</button>
+        <button type="button" disabled={!viewport} title={t('100% 原始尺寸（1）')} onClick={() => zoom(1)}>{t('原始大小')}</button>
+        <button ref={closeRef} className="editor-resource-close" type="button" aria-label={t('关闭资源查看')} onClick={onClose}>{t('关闭')}</button>
       </div>
       <div ref={stageRef} className={`editor-resource-stage${isDragging ? ' is-dragging' : ''}`} data-testid="resource-stage"
         onPointerDown={event => {
@@ -142,10 +146,10 @@ export function ResourceViewer({ resource, onClose }: { resource: ViewedResource
         onPointerCancel={stopDrag} onLostPointerCapture={stopDrag}>
         {resource.kind === 'math'
           ? <div ref={mathRef} className="editor-resource-content editor-resource-math" style={{ transform, visibility: viewport ? 'visible' : 'hidden' }} dangerouslySetInnerHTML={{ __html: math }} />
-          : <img ref={imageRef} key={uri} className="editor-resource-content" src={uri} draggable={false} alt={resource.kind === 'diagram' ? '完整图表' : '原图片'} style={{ transform, width: viewport?.natural.width, height: viewport?.natural.height, visibility: viewport ? 'visible' : 'hidden' }} />}
-        {!viewport ? <p className="editor-resource-message" role="status">{hasError ? '资源加载失败，请关闭后检查图片路径。' : '正在加载资源…'}</p> : null}
+          : <img ref={imageRef} key={uri} className="editor-resource-content" src={uri} draggable={false} alt={t(resource.kind === 'diagram' ? '完整图表' : '原图片')} style={{ transform, width: viewport?.natural.width, height: viewport?.natural.height, visibility: viewport ? 'visible' : 'hidden' }} />}
+        {!viewport ? <p className="editor-resource-message" role="status">{t(hasError ? '资源加载失败，请关闭后检查图片路径。' : '正在加载资源…')}</p> : null}
       </div>
-      <p className="editor-resource-help" id="resource-viewer-help">滚轮放大鼠标所在位置 · 拖动查看细节 · + / − 缩放 · 0 恢复全图 · Esc 关闭</p>
+      <p className="editor-resource-help" id="resource-viewer-help">{t('滚轮放大鼠标所在位置 · 拖动查看细节 · + / − 缩放 · 0 恢复全图 · Esc 关闭')}</p>
     </section>
   </div>, document.body)
 }

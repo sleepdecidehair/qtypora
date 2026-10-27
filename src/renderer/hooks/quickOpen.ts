@@ -7,14 +7,14 @@ export interface QuickOpenItem {
   scope: 'open' | 'recent' | 'workspace'; isDirty: boolean
 }
 
-export function quickOpenItems(documents: QuickOpenDocument[], recentFiles: string[], files: FileEntry[]): QuickOpenItem[] {
+export function quickOpenItems(documents: QuickOpenDocument[], recentFiles: string[], files: FileEntry[], unsavedLabel = '未保存文档'): QuickOpenItem[] {
   const seen = new Set<string>()
   const items: QuickOpenItem[] = []
   for (const document of documents) {
     const key = document.path ? filePathKey(document.path) : `untitled:${document.id}`
     if (seen.has(key)) continue
     seen.add(key)
-    items.push({ key: document.id, name: document.name, path: document.path ?? '未保存文档', id: document.id, scope: 'open', isDirty: document.isDirty })
+    items.push({ key: document.id, name: document.name, path: document.path ?? unsavedLabel, id: document.id, scope: 'open', isDirty: document.isDirty })
   }
   for (const path of recentFiles) {
     const key = filePathKey(path)

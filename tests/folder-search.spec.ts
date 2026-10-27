@@ -34,6 +34,33 @@ const renderedMatches = (active = false) => session.page.evaluate(selected => {
 
 const source = () => session.page.locator('.cm-content').evaluate(element => Reflect.get(element, 'cmTile').root.view.state.doc.toString())
 
+test('搜索可排除目录名与相对路径，设置持久化且不修改文件', async () => {
+  const folder = path.join(session.root, 'filtered-search')
+  const included = path.join(folder, 'notes.md')
+  const excluded = path.join(folder, 'private', 'secret.md')
+  const nested = path.join(folder, 'projects', 'one', 'generated', 'build.md')
+  for (const file of [included, excluded, nested]) { await mkdir(path.dirname(file), { recursive: true }); await writeFile(file, '# needle\n') }
+  await openDocument(excluded, '# needle\n')
+  await searchFolder(folder, 'needle')
+  const results = session.page.locator('.search-result')
+  await expect(results).toHaveCount(3)
+  await expect.poll(() => renderedMatches()).toEqual(['needle'])
+  const filter = session.page.getByLabel('搜索排除目录')
+  await filter.fill('private, projects/*/generated')
+  await expect(results).toHaveCount(1)
+  await expect(results.first()).toContainText('notes.md')
+  await expect.poll(() => renderedMatches()).toEqual([])
+  await expect.poll(async () => {
+    const result = await session.page.evaluate(() => window.desktop.bootstrap())
+    return result.ok ? result.data.preferences.workspace.searchExclude : null
+  }).toBe('private, projects/*/generated')
+  await filter.fill('../outside')
+  await expect(session.page.getByRole('alert')).toContainText('工作区相对路径')
+  await filter.fill('')
+  await expect(results).toHaveCount(3)
+  for (const file of [included, excluded, nested]) expect(await readFile(file, 'utf8')).toBe('# needle\n')
+})
+
 test('目录搜索高亮摘要、标题和表格，跳转后保持高亮且清空搜索会移除', async () => {
   const folder = path.join(session.root, 'notes')
   await mkdir(folder)

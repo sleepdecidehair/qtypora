@@ -53,9 +53,11 @@ describe('bound file context menu targets', () => {
   it('offers file duplication while excluding folder duplication and moving the workspace root', () => {
     expect(fileContextActions(target)).toContain('file-duplicate')
     expect(fileContextActions({ ...target, entry: folder })).not.toContain('file-duplicate')
+    expect(fileContextActions({ ...target, entry: folder })).toContain('file-move')
     const root: FileContextTarget = { ...target, entry: { ...folder, path: workspace.path, name: workspace.name } }
     expect(isFileContextTargetCurrent(root, workspace, {}, [])).toBe(true)
     expect(fileContextActions(root)).not.toContain('file-rename')
+    expect(fileContextActions(root)).not.toContain('file-move')
     expect(fileContextActions(root)).not.toContain('file-trash')
     expect(fileContextActions(root)).toContain('file-new-file')
   })

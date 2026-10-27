@@ -5,6 +5,7 @@ import type { DesktopEvent, DocumentRecord, DocumentSnapshot, SaveRequest } from
 import { DesktopError, invalid, object, string } from './errors'
 import { canonicalInside, canonicalPath, MAX_DOCUMENT_BYTES, normalizeContent, readMarkdown, saveMarkdown, serialized } from './files'
 import { LocalStore } from './preferences'
+import { isPathWithin, relocatedPath, withWorkspaceStructure } from './workspace-lock'
 
 interface DocumentState {
   record: DocumentRecord
@@ -51,7 +52,7 @@ export class DocumentSession {
 
   create(content = ''): DocumentRecord {
     const record: DocumentRecord = {
-      id: randomUUID(), path: null, name: `未命名${++this.untitledCount}.md`, content,
+      id: randomUUID(), path: null, name: `${this.store.preferences.locale === 'en-US' ? 'Untitled' : '未命名'}${++this.untitledCount}.md`, content,
       version: null, encoding: 'utf8', lineEnding: this.store.preferences.lineEnding, readOnly: false,
     }
     this.documents.set(record.id, { record, currentContent: content, revision: 0, savedContent: content, savedRevision: 0, fileMissing: false, notifiedVersion: null })
@@ -78,10 +79,15 @@ export class DocumentSession {
   }
 
   async open(filePath: string, chosenByUser = false): Promise<DocumentRecord> {
+    return withWorkspaceStructure(() => this.openAlreadyLocked(filePath, chosenByUser))
+  }
+
+  /** Caller must hold the workspace structure lock; used for atomic link creation/open. */
+  async openAlreadyLocked(filePath: string, chosenByUser = false): Promise<DocumentRecord> {
     const resolved = path.resolve(filePath)
     const recent = this.store.recentFiles.some((item) => item.toLowerCase() === resolved.toLowerCase())
     const canonical = chosenByUser || recent ? await canonicalPath(resolved) : await this.authorize(resolved)
-    const existing = [...this.documents.values()].find((state) => state.record.path?.toLowerCase() === canonical.toLowerCase())
+    const existing = [...this.documents.values()].find((state) => state.record.path === canonical)
     if (existing) return { ...existing.record, content: existing.currentContent }
     const record = await readMarkdown(canonical)
     this.allowedRoots.add(path.dirname(canonical))
@@ -114,20 +120,31 @@ export class DocumentSession {
   async save(request: SaveRequest): Promise<DocumentRecord | null> {
     // A revision may advance while the native dialog is open. Persist the requested snapshot,
     // and retain the newer draft separately instead of changing its saved state.
-    const state = this.get(request.id)
-    if (request.revision < state.revision) throw new DesktopError('CONFLICT', '该保存请求已过期，请保存当前内容。')
-    if (request.revision === state.revision && request.content !== state.currentContent) invalid('相同版本不能包含不同文档内容。')
-    state.currentContent = request.content
-    state.revision = request.revision
-    await this.persistDraft(state)
-    const needsDestination = request.saveAs || !state.record.path || state.record.readOnly
+    const pathAtRequest = this.get(request.id).record.path
+    const state = await serialized('session:' + request.id, async () => {
+      const state = this.get(request.id)
+      if (request.revision < state.revision) throw new DesktopError('CONFLICT', '该保存请求已过期，请保存当前内容。')
+      if (request.revision === state.revision && request.content !== state.currentContent) invalid('相同版本不能包含不同文档内容。')
+      state.currentContent = request.content
+      state.revision = request.revision
+      await this.persistDraft(state)
+      if (state.record.path !== pathAtRequest) throw new DesktopError('CONFLICT', '文件路径已经改变，请重新保存当前文档。')
+      return state
+    })
+    // Once the original was removed, its pathname can later refer to a different file
+    // with identical bytes. Ask for an explicit destination instead of guessing identity.
+    const needsDestination = request.saveAs || !state.record.path || state.record.readOnly || state.fileMissing
+    const pathBeforeDialog = state.record.path
     const destination = needsDestination ? await this.dialogs.chooseSave({ ...state.record, content: request.content }) : state.record.path
     if (!destination) return null
-    const canonicalDestination = path.join(await canonicalPath(path.dirname(path.resolve(destination))), path.basename(destination))
-    if (needsDestination) this.allowedRoots.add(path.dirname(canonicalDestination))
-    return serialized('save-document:' + request.id, async () => {
+    return withWorkspaceStructure(async () => {
+      if (this.get(request.id).record.path !== pathBeforeDialog) throw new DesktopError('CONFLICT', '文件路径已经改变，请重新保存当前文档。')
+      const canonicalDestination = path.join(await canonicalPath(path.dirname(path.resolve(destination))), path.basename(destination))
+      if (needsDestination) this.allowedRoots.add(path.dirname(canonicalDestination))
+      return serialized('save-document:' + request.id, async () => {
       const current = this.get(request.id)
       if (request.revision < current.savedRevision) throw new DesktopError('CONFLICT', '较新的内容已经保存，此保存请求已过期。')
+      if (current.fileMissing && !needsDestination) throw new DesktopError('CONFLICT', '文件已移除，请重新保存并选择位置。')
       if (!needsDestination && current.record.path !== canonicalDestination) throw new DesktopError('CONFLICT', '文件路径已经改变，请重新保存当前文档。')
       const saved = { ...await saveMarkdown(current.record, canonicalDestination, request.content,
         !needsDestination || (current.record.path?.toLowerCase() === canonicalDestination.toLowerCase())), unsaved: false }
@@ -140,10 +157,15 @@ export class DocumentSession {
       await this.persistDraft(current)
       await this.store.addRecent(canonicalDestination)
       return saved
+      })
     })
   }
 
   async reload(id: string): Promise<DocumentRecord> {
+    return withWorkspaceStructure(() => this.reloadAlreadyLocked(id))
+  }
+
+  private async reloadAlreadyLocked(id: string): Promise<DocumentRecord> {
     const state = this.get(id)
     if (!state.record.path) throw new DesktopError('INVALID_INPUT', '新文档还没有磁盘文件。')
     const record = await readMarkdown(state.record.path, id)
@@ -159,6 +181,11 @@ export class DocumentSession {
   }
 
   async recover(id: string): Promise<DocumentRecord> {
+    return withWorkspaceStructure(() => this.recoverAlreadyLocked(id))
+  }
+
+  /** Caller must hold the workspace structure lock when checking cross-window ownership. */
+  async recoverAlreadyLocked(id: string): Promise<DocumentRecord> {
     const draft = this.store.drafts.get(id)
     if (!draft) throw new DesktopError('NOT_FOUND', '该草稿已恢复或删除。')
     if (this.documents.has(id)) return { ...this.get(id).record, content: this.get(id).currentContent }
@@ -236,30 +263,49 @@ export class DocumentSession {
   }
 
   async withPathLocks<T>(source: string, operation: () => Promise<T>): Promise<T> {
-    const prefix = source.toLowerCase()
     const ids = [...this.documents.values()].filter(state => {
-      const current = state.record.path?.toLowerCase()
-      return current === prefix || current?.startsWith(prefix + path.sep)
+      const current = state.record.path
+      return current && isPathWithin(current, source)
     }).map(state => state.record.id).sort()
-    const lock = (index: number): Promise<T> => index === ids.length ? operation() : serialized('save-document:' + ids[index], () => lock(index + 1))
+    const lock = (index: number): Promise<T> => index === ids.length ? operation() : serialized('save-document:' + ids[index], () => serialized('session:' + ids[index], () => lock(index + 1)))
     return lock(0)
   }
 
   async updatePaths(source: string, destination: string | null): Promise<void> {
+    await this.preparePathUpdates(source, destination)()
+  }
+
+  /** Update in-memory paths/watchers synchronously; return draft persistence for the caller. */
+  preparePathUpdates(source: string, destination: string | null): () => Promise<void> {
+    if (destination) {
+      for (const root of [...this.allowedRoots]) {
+        if (!isPathWithin(root, source)) continue
+        this.allowedRoots.delete(root)
+        this.allowedRoots.add(relocatedPath(source, destination, root))
+      }
+    }
+    const changed: DocumentState[] = []
     for (const state of this.documents.values()) {
       const currentPath = state.record.path
-      if (!currentPath || (currentPath.toLowerCase() !== source.toLowerCase() && !currentPath.toLowerCase().startsWith(source.toLowerCase() + path.sep))) continue
+      if (!currentPath || !isPathWithin(currentPath, source)) continue
       if (destination) {
-        const next = path.join(destination, path.relative(source, currentPath))
+        const next = relocatedPath(source, destination, currentPath)
         state.record = { ...state.record, path: next, name: path.basename(next) }
         this.send({ type: 'document-renamed', id: state.record.id, path: next, name: path.basename(next) })
         this.startWatch(state.record.id)
-        await this.persistDraft(state)
+        changed.push(state)
       } else {
         state.fileMissing = true
-        await this.persistDraft(state)
         this.send({ type: 'document-changed', id: state.record.id, kind: 'removed', document: null })
+        changed.push(state)
       }
+    }
+    return async () => {
+      const failures: unknown[] = []
+      for (const state of changed) {
+        try { await this.persistDraft(state) } catch (error) { failures.push(error) }
+      }
+      if (failures.length) throw new DesktopError('IO_ERROR', '目录位置已更新，但部分草稿写入失败；请保留窗口并另存文档。')
     }
   }
 
@@ -281,12 +327,15 @@ export class DocumentSession {
   private async notifyFileChange(id: string): Promise<void> {
     const state = this.documents.get(id)
     if (!state?.record.path) return
+    const observedPath = state.record.path
     try {
-      const document = await readMarkdown(state.record.path, id)
+      const document = await readMarkdown(observedPath, id)
+      if (state.record.path !== observedPath) return
       if ((!state.fileMissing && document.version === state.record.version) || document.version === state.notifiedVersion) return
       state.notifiedVersion = document.version
       this.send({ type: 'document-changed', id, kind: 'changed', document })
     } catch (error) {
+      if (state.record.path !== observedPath) return
       if (error && typeof error === 'object' && 'code' in error && error.code === 'ENOENT') {
         state.fileMissing = true
         state.notifiedVersion = null

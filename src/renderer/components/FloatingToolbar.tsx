@@ -1,3 +1,4 @@
+import { useTranslation } from '../i18n/locale'
 import { useEffect, useRef, useState, type KeyboardEvent } from 'react'
 import { EditorView } from '@codemirror/view'
 import { Bold, Italic, Strikethrough, Code, Link, Eraser } from 'lucide-react'
@@ -18,6 +19,7 @@ const actions = [
 
 /** Place as a direct child of the editor area; the marker scopes all DOM lookups. */
 export function FloatingToolbar({ enabled, documentId, selection, readOnly, onAction }: FloatingToolbarProps) {
+  const t = useTranslation()
   const marker = useRef<HTMLSpanElement>(null)
   const toolbar = useRef<HTMLDivElement>(null)
   const [position, setPosition] = useState<{ left: number; top: number } | null>(null)
@@ -76,7 +78,7 @@ export function FloatingToolbar({ enabled, documentId, selection, readOnly, onAc
     const index = event.key === 'Home' ? 0 : event.key === 'End' ? buttons.length - 1 : (current + (event.key === 'ArrowLeft' ? -1 : 1) + buttons.length) % buttons.length
     buttons[index]?.focus(); event.preventDefault()
   }
-  return <><span hidden ref={marker} />{position ? <div ref={toolbar} className="floating-format-toolbar" role="toolbar" aria-label="选区格式工具栏" data-testid="floating-toolbar" style={position} onPointerDown={event => { if (event.button === 0) event.preventDefault() }} onKeyDown={keyboard}>
-    {actions.map(([action, label, Icon]) => <button type="button" className="icon-button" key={action} aria-label={label} title={label} onClick={() => onAction(action)}><Icon size={16} /></button>)}
+  return <><span hidden ref={marker} />{position ? <div ref={toolbar} className="floating-format-toolbar" role="toolbar" aria-label={t('选区格式工具栏')} data-testid="floating-toolbar" style={position} onPointerDown={event => { if (event.button === 0) event.preventDefault() }} onKeyDown={keyboard}>
+    {actions.map(([action, label, Icon]) => <button type="button" className="icon-button" key={action} aria-label={t(label)} title={t(label)} onClick={() => onAction(action)}><Icon size={16} /></button>)}
   </div> : null}</>
 }

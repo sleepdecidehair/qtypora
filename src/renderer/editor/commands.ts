@@ -84,7 +84,8 @@ export function createTextEdit(action: EditorAction, text: string, from: number,
       const selected = text.slice(start, end)
       const maxFence = Math.max(2, ...Array.from(selected.matchAll(/`+/g), (match) => match[0].length))
       const fence = '`'.repeat(maxFence + 1)
-      return insertBlock(text, start, end, `${fence}\n${selected || '代码'}\n${fence}`, fence.length + 1)
+      const language = value && /^[\w+#.-]{1,40}$/.test(value) ? value : ''
+      return insertBlock(text, start, end, `${fence}${language}\n${selected || '代码'}\n${fence}`, fence.length + language.length + 1)
     }
     case 'math': return insertBlock(text, start, end, `$$\n${text.slice(start, end) || 'E = mc^2'}\n$$`, 3)
     case 'table': return insertBlock(text, start, end, '| 标题 | 标题 |\n| --- | --- |\n| 内容 | 内容 |')

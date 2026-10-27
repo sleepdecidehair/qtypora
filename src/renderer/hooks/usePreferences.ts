@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { DEFAULT_PREFERENCES, type DesktopApi, type Preferences } from '../../shared/contracts'
 import { mergePreferencePatch, preferenceDifference, type PreferencesPatch } from '../../shared/preference-patch'
+import { translate } from '../../shared/i18n'
 
 export function usePreferences(api: DesktopApi, reportError: (message: string) => void) {
   const [preferences, setPreferences] = useState<Preferences>(DEFAULT_PREFERENCES)
@@ -37,7 +38,7 @@ export function usePreferences(api: DesktopApi, reportError: (message: string) =
         const result = await api.patchPreferences(preferenceDifference(before, after))
         if (!result.ok) reportError(result.error.message)
         else { loadPreferences(result.data.preferences, result.data.version); succeeded = true }
-      } catch (error) { reportError(error instanceof Error ? error.message : '偏好保存失败') }
+      } catch (error) { reportError(error instanceof Error ? error.message : translate(confirmed.current.locale, '偏好保存失败')) }
       finally { queued.current = queued.current.filter(item => item !== batch); runningBatches.current--; publish() }
       return previousSucceeded && succeeded
     })

@@ -75,7 +75,7 @@ function configuration(props: MarkdownEditorProps, callbacks: Pick<MarkdownEdito
       '.cm-scroller': { fontFamily: 'inherit' },
       '.cm-gutters': { color: 'var(--color-text-muted)', backgroundColor: 'var(--color-surface)', borderRight: '1px solid var(--color-border)' },
       '.cm-activeLine, .cm-activeLineGutter': { backgroundColor: props.mode === 'source' ? 'var(--color-surface-muted)' : 'transparent' },
-      '.cm-selectionBackground, ::selection': { backgroundColor: 'var(--color-selection) !important' },
+      '.cm-selectionBackground, ::selection': { backgroundColor: 'var(--color-editor-selection) !important' },
       '.cm-cursor': { borderLeftColor: 'var(--color-text)' },
     }, { dark: props.theme === 'dark' }),
   ]

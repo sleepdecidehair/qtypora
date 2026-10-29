@@ -96,11 +96,14 @@
 .cm-live-block { position: relative; padding: var(--editor-space-sm) 0; }
 .cm-live-block-edit { position: absolute; top: var(--editor-space-xs); right: var(--editor-space-xs); border: var(--editor-border-width) solid var(--color-border); border-radius: var(--editor-radius); padding: var(--editor-space-xs) var(--editor-space-sm); color: var(--color-text-muted); background: var(--color-surface-muted); font: 12px/1.4 "Segoe UI", sans-serif; cursor: pointer; }
 .cm-live-block-edit:focus-visible { outline: var(--editor-border-width) solid var(--color-primary); }
-.cm-live-edit-block { font-family: Consolas, "Cascadia Code", monospace; background: var(--color-code); }
-.markdown-editor .cm-line.cm-live-edit-line { font-family: var(--font-mono); font-size: inherit; line-height: 1.85; background: var(--color-code); }
-/* CodeMirror draws selection behind line backgrounds by default. */
-.markdown-editor .cm-selectionLayer { z-index: 1 !important; opacity: .7; pointer-events: none; }
-.markdown-editor .cm-line.cm-live-code-body { font-family: Consolas, "Cascadia Code", monospace; background: var(--color-code); padding: 0 var(--editor-space-md); }
+.cm-live-edit-block { font-family: Consolas, "Cascadia Code", monospace; }
+.markdown-editor .cm-line.cm-live-edit-line { font-family: var(--font-mono); font-size: inherit; line-height: 1.85; }
+/* Keep code backgrounds behind the selection layer, and text above both. */
+.markdown-editor .cm-line.cm-live-code-body, .markdown-editor .cm-line.cm-live-edit-line, .markdown-editor .cm-line.cm-live-edit-block { position: relative; }
+.markdown-editor .cm-line.cm-live-code-body::after, .markdown-editor .cm-line.cm-live-edit-line::after, .markdown-editor .cm-line.cm-live-edit-block::after { content: ''; position: absolute; inset: 0; z-index: -3; background: var(--color-code); pointer-events: none; }
+.markdown-editor .cm-line.cm-live-code-first::after { border-radius: var(--editor-radius) var(--editor-radius) 0 0; }
+.markdown-editor .cm-selectionLayer { z-index: -1 !important; pointer-events: none; }
+.markdown-editor .cm-line.cm-live-code-body { font-family: Consolas, "Cascadia Code", monospace; padding: 0 var(--editor-space-md); }
 .markdown-editor .cm-line.cm-live-code-first { padding-top: var(--editor-space-md); border-radius: var(--editor-radius) var(--editor-radius) 0 0; }
 .cm-live-code-footer { display: flex; justify-content: flex-end; padding: var(--editor-space-xs) var(--editor-space-sm) var(--editor-space-sm); background: var(--color-code); border-radius: 0 0 var(--editor-radius) var(--editor-radius); }
 .cm-live-code-footer input { width: 140px; max-width: 100%; border: var(--editor-border-width) solid transparent; border-radius: var(--editor-radius); padding: var(--editor-space-xs); color: var(--color-text-muted); background: transparent; text-align: right; font: 12px/1.4 "Segoe UI", sans-serif; }

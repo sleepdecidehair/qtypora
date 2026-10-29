@@ -9,6 +9,7 @@
   --color-primary: #426d96;
   --color-primary-contrast: #ffffff;
   --color-selection: #e8eff6;
+  --color-editor-selection: #b8d4f0;
   --color-search-match: #fff0a6;
   --color-search-active: #ffd176;
   --color-search-text: #4b3808;
@@ -60,6 +61,7 @@
   --color-primary: #9abde1;
   --color-primary-contrast: #1c2530;
   --color-selection: #343f4d;
+  --color-editor-selection: #455d78;
   --color-search-match: #635529;
   --color-search-active: #806127;
   --color-search-text: #fff1b8;

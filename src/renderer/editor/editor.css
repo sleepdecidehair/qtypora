@@ -34,6 +34,7 @@
 .markdown-editor .cm-editor.cm-focused { outline: none; }
 .markdown-editor .cm-scroller { overflow: auto; }
 .markdown-editor .cm-content { box-sizing: border-box; max-width: var(--content-width, 100%); margin: 0 auto; width: 100%; padding: var(--editor-space-xl) var(--editor-space-xl) 120px; }
+.markdown-editor:not(.markdown-editor-source) .cm-content { width: calc(100% - 2 * var(--editor-space-xl)); max-width: calc(var(--content-width, 100%) - 2 * var(--editor-space-xl)); padding-left: 0; padding-right: 0; }
 .markdown-editor .cm-line { padding: 0; }
 ::highlight(qtypora-folder-search) { background-color: var(--color-search-match); color: var(--color-search-text); }
 ::highlight(qtypora-folder-search-active) { background-color: var(--color-search-active); color: var(--color-search-text); }

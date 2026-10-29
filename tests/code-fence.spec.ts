@@ -190,6 +190,14 @@ test('单独代码块全选及向外拖选只包含代码正文', async () => {
   await session.page.mouse.click(first.x + 25, first.y + first.height / 2)
   await session.page.keyboard.press('ControlOrMeta+a')
   await expect.poll(async () => (await editorState()).selected).toBe(body)
+  await expect.poll(async () => editor.evaluate(element => {
+    const code = element.querySelector('.cm-live-code-body')!.getBoundingClientRect()
+    const markers = [...element.closest('.cm-scroller')!.querySelectorAll('.cm-selectionBackground')]
+    return markers.length > 0 && markers.every(marker => {
+      const rect = marker.getBoundingClientRect()
+      return rect.left >= code.left - 1 && rect.right <= code.right + 1
+    })
+  })).toBe(true)
   await session.page.mouse.move(first.x + 25, first.y + first.height / 2)
   await session.page.mouse.down()
   await session.page.mouse.move(last.x + last.width - 5, last.y + last.height + 100, { steps: 10 })

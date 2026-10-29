@@ -2,7 +2,7 @@ import { watch, type FSWatcher } from 'node:fs'
 import * as fs from 'node:fs/promises'
 import path from 'node:path'
 import { pathToFileURL } from 'node:url'
-import { app, BrowserWindow, clipboard, ClipboardItem, dialog, ipcMain, Menu, nativeImage, protocol, session, shell, type IpcMainInvokeEvent } from 'electron'
+import { app, BrowserWindow, clipboard, ClipboardItem, dialog, ipcMain, Menu, nativeImage, nativeTheme, protocol, session, shell, type IpcMainInvokeEvent } from 'electron'
 import type { AppCommand, DesktopEvent, ExportRequest, FileAction, FileEntry, Preferences, SaveRequest, SearchRequest, Workspace } from '../shared/contracts'
 import { DocumentSession, validateSnapshot } from './documents'
 import { boolean, DesktopError, failure, invalid, object, string } from './errors'
@@ -165,6 +165,7 @@ async function openSystemFileActive(filePath: string): Promise<void> {
 async function createWindow(openPath?: string): Promise<void> {
   const window = new BrowserWindow({ width: 1220, height: 860, minWidth: 760, minHeight: 560, show: false,
     title: 'QTypora', icon: appIconPath, backgroundColor: '#ffffff', autoHideMenuBar: false,
+    ...(process.platform === 'darwin' ? { titleBarStyle: 'hiddenInset' as const } : {}),
     webPreferences: { preload: path.join(__dirname, '../preload/index.js'), sandbox: true, contextIsolation: true,
       nodeIntegration: false, webSecurity: true, spellcheck: store.preferences.spellcheck, allowRunningInsecureContent: false },
   })
@@ -418,6 +419,7 @@ function registerIpc(): void {
       if (!(await fs.stat(authorized)).isDirectory()) invalid('固定位置必须是已打开文件夹内的目录。')
     }
     const preferences = await store.updatePreferences(validated)
+    if (process.platform === 'darwin') nativeTheme.themeSource = preferences.theme
     const version = ++preferencesVersion
     applySpellingPreferences()
     for (const target of windows.values()) {
@@ -615,6 +617,7 @@ function registerIpc(): void {
 app.whenReady().then(async () => {
   store = new LocalStore(app.getPath('userData'))
   await store.load()
+  if (process.platform === 'darwin') nativeTheme.themeSource = store.preferences.theme
   exportHistory = new ExportHistory(app.getPath('userData'))
   await exportHistory.load()
   applySpellingPreferences()

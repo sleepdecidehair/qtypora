@@ -17,6 +17,29 @@ const source = () => session.page.locator('.cm-content').evaluate(element => {
   return view.state.doc.toString()
 })
 
+test('macOS 标题区域融入页面且工具栏与底部操作可用', async () => {
+  test.skip(process.platform !== 'darwin', 'macOS 窗口布局')
+  await openFixture(session, 'seamless.md', '# 可编辑\n')
+  const titlebar = session.page.getByTestId('mac-titlebar')
+  await expect(titlebar).toHaveText('seamless.md')
+  const geometry = await session.page.evaluate(() => {
+    const title = document.querySelector('.mac-titlebar')!.getBoundingClientRect()
+    const toolbar = document.querySelector('.toolbar')!.getBoundingClientRect()
+    const footer = document.querySelector('.statusbar')!
+    return { titleBottom: title.bottom, toolbarTop: toolbar.top, footerBorder: getComputedStyle(footer).borderTopWidth }
+  })
+  expect(geometry.titleBottom).toBe(geometry.toolbarTop)
+  expect(geometry.footerBorder).toBe('0px')
+  const initialMode = await session.page.getByTestId('source-toggle').getAttribute('aria-pressed')
+  await session.page.getByTestId('editor-mode').click()
+  await expect(session.page.getByTestId('source-toggle')).toHaveAttribute('aria-pressed', initialMode === 'true' ? 'false' : 'true')
+  await session.page.locator('.cm-content').click()
+  await session.page.keyboard.press('End')
+  await session.page.keyboard.type(' edit')
+  await session.page.keyboard.press('ControlOrMeta+z')
+  expect(await source()).toBe('# 可编辑\n')
+})
+
 test('正文默认适应宽窄窗口，仍可选择并保存固定宽度', async () => {
   await openFixture(session, 'layout.md', '# 宽屏正文\n\n这段正文随窗口加宽。\n')
   await session.page.keyboard.press('ControlOrMeta+/')

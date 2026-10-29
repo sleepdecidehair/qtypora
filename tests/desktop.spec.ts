@@ -14,6 +14,15 @@ test.afterEach(async () => {
   }
 })
 
+test('macOS 原生标题栏跟随应用主题', async () => {
+  test.skip(process.platform !== 'darwin', 'macOS 原生标题栏')
+  for (const theme of ['light', 'dark', 'system'] as const) {
+    const result = await session.page.evaluate(value => window.desktop.patchPreferences({ theme: value }), theme)
+    expect(result.ok).toBe(true)
+    expect(await session.app.evaluate(({ nativeTheme }) => nativeTheme.themeSource)).toBe(theme)
+  }
+})
+
 test('真实窗口隔离权限并拒绝不安全链接及无授权路径', async () => {
   const sandboxed = await session.app.evaluate(({ BrowserWindow, app }) => {
     const pid = BrowserWindow.getAllWindows()[0].webContents.getOSProcessId()

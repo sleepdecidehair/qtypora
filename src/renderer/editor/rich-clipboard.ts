@@ -1,6 +1,8 @@
 import type { ClipboardContent } from '../../shared/contracts'
 import type { MarkdownOptions } from '../../shared/markdown-options'
 import { renderMarkdown } from './markdown'
+import { syntaxTree } from '@codemirror/language'
+import type { EditorState } from '@codemirror/state'
 
 // Keep parsing and RTF generation bounded even for the 16 MB source-only mode.
 export const MAX_RICH_COPY_CHARACTERS = 200000
@@ -66,6 +68,34 @@ export function richFragmentToRtf(root: Node, fontSize = 24, theme?: RtfTheme): 
   return { rtf: output.join(''), plain: plain.join('').replace(/\n+$/, '') }
 }
 
+// A partial fence is not a standalone Markdown fragment. Complete the selected
+// code body using its original delimiters before rendering the clipboard content.
+export function richSelectionMarkdown(state: EditorState, from: number, to: number): string {
+  const fragments: string[] = []
+  let cursor = from
+  syntaxTree(state).iterate({ from, to, enter(node) {
+    if (node.name !== 'FencedCode') return
+    const marks = node.node.getChildren('CodeMark')
+    if (marks.length !== 2) return false
+    const first = state.doc.lineAt(marks[0].from)
+    const last = state.doc.lineAt(marks[1].from)
+    const start = first.from, end = last.to, bodyFrom = first.to + 1, bodyTo = Math.max(bodyFrom, last.from - 1)
+    if (from >= start && to <= end && from >= bodyFrom && to <= bodyTo) return false
+    if (from <= start && to >= end) return false
+    const selectedFrom = Math.max(from, start), selectedTo = Math.min(to, end)
+    if (selectedFrom >= selectedTo) return false
+    fragments.push(state.doc.sliceString(cursor, selectedFrom))
+    const bodyStart = Math.max(selectedFrom, bodyFrom), bodyEnd = Math.min(selectedTo, bodyTo)
+    if (bodyStart < bodyEnd) {
+      fragments.push(first.text + '\n' + state.doc.sliceString(bodyStart, bodyEnd) + '\n' + last.text)
+    }
+    cursor = selectedTo
+    return false
+  } })
+  fragments.push(state.doc.sliceString(cursor, to))
+  return fragments.join('')
+}
+
 export function richClipboardContent(markdown: string, options: MarkdownOptions, source: HTMLElement, withTheme: boolean, locale?: import('../../shared/i18n').AppLocale): ClipboardContent {
   if (markdown.length > MAX_RICH_COPY_CHARACTERS) return { text: markdown }
   const wrapper = document.createElement('div')
@@ -121,7 +151,7 @@ export function richClipboardExtension(getContext: () => RichCopyContext) {
     copy(event, view) {
       const context = getContext()
       if (event.defaultPrevented || context.mode !== 'hybrid' || !isEditor(event.target, view)) return false
-      const text = selection(view)
+      const text = view.state.selection.ranges.map(range => richSelectionMarkdown(view.state, range.from, range.to)).join('\n')
       if (!text) return false
       let content: ClipboardContent
       try { content = richClipboardContent(text, view.state.facet(markdownOptionsFacet), view.contentDOM, true, view.state.facet(editorLocale)) }

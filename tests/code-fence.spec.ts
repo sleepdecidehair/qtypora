@@ -384,3 +384,32 @@ test('源码模式 Enter 保留普通编辑，空代码块可退回段落并撤�
   await expect(editor.locator('.cm-live-code-body')).toHaveCount(1)
   expect((await editorState()).text).toBe('```\n\n```')
 })
+
+test('跨代码块复制粘贴时后续段落保持普通正文', async () => {
+  const source = '```typescript\nconst message = 1\n```\n\n文档保存在你的电脑上；草稿会独立恢复。\n\n结束'
+  const destination = await openFixture(session, 'copy-cross-code.md', source)
+  await session.page.keyboard.press('ControlOrMeta+/')
+  const editor = session.page.locator('.cm-content')
+  const paragraph = editor.locator('.cm-line').filter({ hasText: '文档保存在你的电脑上' })
+  const code = editor.locator('.cm-live-code-body').first()
+  const p = (await paragraph.boundingBox())!, c = (await code.boundingBox())!
+  await session.page.mouse.move(p.x + 180, p.y + p.height / 2)
+  await session.page.mouse.down()
+  await session.page.mouse.move(c.x + 45, c.y + c.height / 2, { steps: 10 })
+  await session.page.mouse.up()
+  const selected = (await editorState()).selected
+  expect(selected).toContain('```\n\n文档')
+  await session.page.keyboard.press('ControlOrMeta+c')
+  await expect.poll(() => session.app.evaluate(async ({ clipboard }) => (await clipboard.read()).some(item => item.types.includes('text/html')))).toBe(true)
+  await editor.locator('.cm-line').filter({ hasText: '结束' }).click()
+  await session.page.keyboard.press('End')
+  await session.page.keyboard.press('Enter')
+  await session.page.keyboard.press('Enter')
+  await session.page.keyboard.press('ControlOrMeta+v')
+  await expect.poll(async () => (await editorState()).text).toContain('文档保存在你的')
+  await expect.poll(async () => editor.locator('.cm-line').filter({ hasText: '文档保存在你的' }).count()).toBe(2)
+  const pasted = editor.locator('.cm-line').filter({ hasText: '文档保存在你的' }).last()
+  await expect(pasted).not.toHaveClass(/cm-live-code-body/)
+  await session.page.keyboard.press('ControlOrMeta+s')
+  await expect.poll(() => readFile(destination, 'utf8')).toBe((await editorState()).text)
+})

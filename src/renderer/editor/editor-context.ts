@@ -16,7 +16,7 @@ import type { MarkdownOptions } from '../../shared/markdown-options'
 import { chooseImageSize, currentImageSize, imageSizeEdit } from './image-size'
 import { clipboardHtmlToMarkdown } from './clipboard-import'
 import { validSpellingWord } from '../../shared/spelling'
-import { richClipboardContent, richFragmentToRtf } from './rich-clipboard'
+import { richClipboardContent, richFragmentToRtf, richSelectionMarkdown } from './rich-clipboard'
 
 interface ContextSnapshot {
   documentId: string
@@ -116,7 +116,7 @@ export function installEditorContext(view: EditorView, getProps: () => MarkdownE
       view.focus(); return
     }
     const select = (): void => { view.dispatch({ selection: EditorSelection.range(selection.from, selection.to) }) }
-    const clipboardSelection = (withTheme = true): ClipboardContent => props.mode === 'hybrid' ? richClipboardContent(selection.text, markdownOptions, view.contentDOM, withTheme, props.locale) : { text: selection.text }
+    const clipboardSelection = (withTheme = true): ClipboardContent => props.mode === 'hybrid' ? richClipboardContent(richSelectionMarkdown(view.state, selection.from, selection.to), markdownOptions, view.contentDOM, withTheme, props.locale) : { text: selection.text }
     if (action === 'copy') { await write(snapshot, clipboardSelection()); return }
     if (action === 'copy-without-theme') { await write(snapshot, clipboardSelection(false)); return }
     if (action === 'copy-markdown') { await write(snapshot, { text: selection.text }); return }

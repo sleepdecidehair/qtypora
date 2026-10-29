@@ -1,7 +1,9 @@
+import { EditorState } from '@codemirror/state'
+import { markdown, markdownLanguage } from '@codemirror/lang-markdown'
 import { DOMParser } from '@xmldom/xmldom'
 import { describe, expect, it } from 'vitest'
 import { validClipboardRtf } from '../../main/clipboard'
-import { escapeRtfText, richFragmentToRtf } from './rich-clipboard'
+import { escapeRtfText, richFragmentToRtf, richSelectionMarkdown } from './rich-clipboard'
 
 function fragment(markup: string): Node {
   return new DOMParser().parseFromString(`<div>${markup}</div>`, 'text/xml').documentElement as unknown as Node
@@ -34,5 +36,19 @@ describe('rich clipboard serialization', () => {
   it('rejects pathological nesting before producing a partial result', () => {
     const source = '<span>'.repeat(70) + 'text' + '</span>'.repeat(70)
     expect(() => richFragmentToRtf(fragment(source))).toThrow('嵌套过深')
+  })
+})
+
+
+describe('rich selection across code fences', () => {
+  const doc = '前文\n\n```ts\nconst value = 1\n```\n\n后文'
+  const state = EditorState.create({ doc, extensions: [markdown({ base: markdownLanguage })] })
+  it('balances a partially selected code block at either boundary', () => {
+    expect(richSelectionMarkdown(state, doc.indexOf('value'), doc.length)).toBe('```ts\nvalue = 1\n```\n\n后文')
+    expect(richSelectionMarkdown(state, 0, doc.indexOf('value') + 5)).toBe('前文\n\n```ts\nconst value\n```')
+  })
+  it('preserves complete blocks and code-only selections', () => {
+    expect(richSelectionMarkdown(state, 0, doc.length)).toBe(doc)
+    expect(richSelectionMarkdown(state, doc.indexOf('value'), doc.indexOf('value') + 5)).toBe('value')
   })
 })

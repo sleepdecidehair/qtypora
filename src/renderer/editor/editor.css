@@ -97,6 +97,8 @@
 .cm-live-block-edit:focus-visible { outline: var(--editor-border-width) solid var(--color-primary); }
 .cm-live-edit-block { font-family: Consolas, "Cascadia Code", monospace; background: var(--color-code); }
 .markdown-editor .cm-line.cm-live-edit-line { font-family: var(--font-mono); font-size: inherit; line-height: 1.85; background: var(--color-code); }
+/* CodeMirror draws selection behind line backgrounds by default. */
+.markdown-editor .cm-selectionLayer { z-index: 1 !important; opacity: .7; pointer-events: none; }
 .markdown-editor .cm-line.cm-live-code-body { font-family: Consolas, "Cascadia Code", monospace; background: var(--color-code); padding: 0 var(--editor-space-md); }
 .markdown-editor .cm-line.cm-live-code-first { padding-top: var(--editor-space-md); border-radius: var(--editor-radius) var(--editor-radius) 0 0; }
 .cm-live-code-footer { display: flex; justify-content: flex-end; padding: var(--editor-space-xs) var(--editor-space-sm) var(--editor-space-sm); background: var(--color-code); border-radius: 0 0 var(--editor-radius) var(--editor-radius); }

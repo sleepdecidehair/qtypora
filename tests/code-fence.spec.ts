@@ -166,6 +166,15 @@ test('代码块正文支持鼠标拖选和双击选词，不会展开围栏源�
   await session.page.mouse.move(end.x, end.y, { steps: 8 })
   await session.page.mouse.up()
   await expect.poll(async () => (await editorState()).selected).toBe('method')
+  const selectionStyle = await session.page.locator('.cm-selectionLayer').evaluate(element => ({
+    zIndex: getComputedStyle(element).zIndex,
+    opacity: Number(getComputedStyle(element).opacity),
+    pointerEvents: getComputedStyle(element).pointerEvents,
+  }))
+  expect(Number(selectionStyle.zIndex)).toBeGreaterThan(0)
+  expect(selectionStyle.opacity).toBeGreaterThan(0)
+  expect(selectionStyle.opacity).toBeLessThan(1)
+  expect(selectionStyle.pointerEvents).toBe('none')
 })
 
 test('三个反引号加 Enter 创建可编辑代码块，撤销和源码切换保留原文光标', async () => {

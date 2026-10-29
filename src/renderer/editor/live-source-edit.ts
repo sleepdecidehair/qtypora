@@ -33,6 +33,7 @@ export function sourceEditRange(state: EditorState, position: number): { from: n
 }
 
 export function focusedHeadingEditRange(state: EditorState): { from: number; to: number } | null {
+  if (!state.selection.main.empty) return null
   const position = state.selection.main.head
   if (state.field(headingInputPreview, false) === state.doc.lineAt(position).from) return null
   for (const side of [1, -1] as const) {

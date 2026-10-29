@@ -123,6 +123,19 @@ describe('opaque live blocks require explicit edit focus', () => {
     expect(current.doc.toString()).toBe(doc)
     expect(inlinePreviewSpans(current)).toContainEqual({ from: 0, to: 3, hidden: true })
   })
+  it('keeps heading and inline formatting rendered when selecting text', () => {
+    const doc = '## **标题**\n\n正文 **粗体**'
+    const current = EditorState.create({ doc, selection: { anchor: doc.length, head: 0 }, extensions: [markdown({ base: markdownLanguage }), hybridExtension(options)] })
+    const classes: string[] = []
+    for (const decorations of current.facet(EditorView.decorations)) {
+      if (typeof decorations === 'function') continue
+      decorations.between(0, doc.length, (_from, _to, value) => { if (value.spec.class) classes.push(value.spec.class) })
+    }
+    expect(classes).toContain('cm-live-heading cm-live-heading-2')
+    expect(classes).not.toContain('cm-live-edit-line')
+    expect(inlinePreviewSpans(current)).toContainEqual({ from: 3, to: 5, hidden: true })
+    expect(current.doc.toString()).toBe(doc)
+  })
   it('reveals both lines of a setext heading and the whole code fence', () => {
     expect(sourceEditRange(state('标题\n---\n\n正文', 1), 1)).toEqual({ from: 0, to: 6 })
     const doc = '前文\n\n```js\nconst answer = 42\n```\n\n结束'

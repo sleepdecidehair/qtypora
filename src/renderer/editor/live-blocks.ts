@@ -14,7 +14,7 @@ export const liveEditingBlock = StateField.define<{ from: number; to: number } |
   update: (value, transaction) => {
     if (value && transaction.docChanged) value = { from: transaction.changes.mapPos(value.from), to: transaction.changes.mapPos(value.to, 1) }
     for (const effect of transaction.effects) if (effect.is(editLiveBlock)) return effect.value
-    if (value && transaction.selection && (transaction.state.selection.main.head < value.from || transaction.state.selection.main.head > value.to)) return null
+    if (value && transaction.selection && (!transaction.state.selection.main.empty || transaction.state.selection.main.head < value.from || transaction.state.selection.main.head > value.to)) return null
     return value
   },
 })

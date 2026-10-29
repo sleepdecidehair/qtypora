@@ -18,7 +18,7 @@ export function inlinePreviewSpans(state: EditorState, excluded: readonly { from
     if (settings.strictMode && node.name === 'Strikethrough') return false
     const className = INLINE_CLASSES[node.name]
     if (className) {
-      const active = selection.empty ? selection.head > node.from && selection.head < node.to : selection.from < node.to && selection.to > node.from
+      const active = selection.empty && selection.head > node.from && selection.head < node.to
       const url = node.name === 'Link' ? node.node.getChild('URL') : null
       const referenceHref = node.name === 'Link' && !url ? model.parser.parseInline(state.doc.sliceString(node.from, node.to), { references: model.environment.references })[0]?.children?.find(token => token.type === 'link_open')?.attrGet('href') : null
       spans.push({ from: node.from, to: node.to, className, ...(url ? { href: state.doc.sliceString(url.from, url.to).replace(/^<|>$/g, '') } : referenceHref ? { href: referenceHref } : {}) })
@@ -56,7 +56,7 @@ export function inlinePreviewSpans(state: EditorState, excluded: readonly { from
     }
     return false
   }
-  const active = (from: number, to: number): boolean => selection.empty ? selection.head > from && selection.head < to : selection.from < to && selection.to > from
+  const active = (from: number, to: number): boolean => selection.empty && selection.head > from && selection.head < to
   const patterns: { enabled: boolean; expression: RegExp; marker: number; className: string }[] = [
     { enabled: settings.highlight, expression: /==(?=\S)([^=\n]+?)==/g, marker: 2, className: 'cm-live-highlight' },
     { enabled: settings.subscript, expression: /(?<!~)~([^~\s]+)~(?!~)/g, marker: 1, className: 'cm-live-subscript' },

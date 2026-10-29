@@ -177,6 +177,72 @@ test('代码块正文支持鼠标拖选和双击选词，不会展开围栏源�
   expect(selectionStyle.pointerEvents).toBe('none')
 })
 
+test('单独代码块全选及向外拖选只包含代码正文', async () => {
+  const body = 'const message = "hello"\nconsole.log(message)'
+  const source = '```typescript\n' + body + '\n```\n\n'
+  await openFixture(session, 'code-selection-boundary.md', source)
+  await session.page.keyboard.press('ControlOrMeta+/')
+  const editor = session.page.locator('.cm-content')
+  const code = editor.locator('.cm-live-code-body')
+  const first = await code.first().boundingBox()
+  const last = await code.last().boundingBox()
+  if (!first || !last) throw new Error('Missing code coordinates')
+  await session.page.mouse.click(first.x + 25, first.y + first.height / 2)
+  await session.page.keyboard.press('ControlOrMeta+a')
+  await expect.poll(async () => (await editorState()).selected).toBe(body)
+  await session.page.mouse.move(first.x + 25, first.y + first.height / 2)
+  await session.page.mouse.down()
+  await session.page.mouse.move(last.x + last.width - 5, last.y + last.height + 100, { steps: 10 })
+  await session.page.mouse.up()
+  const selected = await editorState()
+  expect(selected.selected.length).toBeGreaterThan(0)
+  expect(body).toContain(selected.selected)
+  await session.page.mouse.move(last.x + 35, last.y + last.height / 2)
+  await session.page.mouse.down()
+  await session.page.mouse.move(first.x + 5, first.y - 100, { steps: 10 })
+  await session.page.mouse.up()
+  const reverse = await editorState()
+  expect(reverse.selected.length).toBeGreaterThan(0)
+  expect(body).toContain(reverse.selected)
+  await session.page.mouse.click(last.x + 10, last.y + last.height + 120)
+  await session.page.keyboard.press('ControlOrMeta+a')
+  await expect.poll(async () => (await editorState()).selected).toBe(body)
+  expect((await editorState()).text).toBe(source)
+})
+
+test('代码块外有正文时依次全选代码正文和整个文档', async () => {
+  const source = '前文\n\n```js\nconst value = 1\n```\n\n后文'
+  await openFixture(session, 'code-selection-mixed.md', source)
+  await session.page.keyboard.press('ControlOrMeta+/')
+  await session.page.locator('.cm-line').filter({ hasText: '前文' }).click()
+  await session.page.keyboard.press('ControlOrMeta+a')
+  await expect.poll(async () => (await editorState()).selected).toBe('const value = 1')
+  await session.page.keyboard.press('ControlOrMeta+a')
+  await expect.poll(async () => (await editorState()).selected).toBe(source)
+})
+
+test('多个代码块优先全选离光标最近的代码块', async () => {
+  const source = '```js\nfirst\n```\n\n中间正文\n\n```js\nsecond\n```\n\n结尾正文'
+  await openFixture(session, 'code-selection-nearest.md', source)
+  await session.page.keyboard.press('ControlOrMeta+/')
+  await session.page.locator('.cm-line').filter({ hasText: '结尾正文' }).click()
+  await session.page.keyboard.press('ControlOrMeta+a')
+  await expect.poll(async () => (await editorState()).selected).toBe('second')
+  await session.page.keyboard.press('ControlOrMeta+a')
+  await expect.poll(async () => (await editorState()).selected).toBe(source)
+})
+
+test('空代码块之后的第二次全选选中整个文档', async () => {
+  const source = '前文\n\n```js\n\n```\n\n后文'
+  await openFixture(session, 'code-selection-empty.md', source)
+  await session.page.keyboard.press('ControlOrMeta+/')
+  await session.page.locator('.cm-line').filter({ hasText: '前文' }).click()
+  await session.page.keyboard.press('ControlOrMeta+a')
+  expect((await editorState()).selected).toBe('')
+  await session.page.keyboard.press('ControlOrMeta+a')
+  await expect.poll(async () => (await editorState()).selected).toBe(source)
+})
+
 test('三个反引号加 Enter 创建可编辑代码块，撤销和源码切换保留原文光标', async () => {
   const destination = await openFixture(session, 'code-fence.md', '')
   await session.page.keyboard.press('ControlOrMeta+/')

@@ -413,3 +413,19 @@ test('跨代码块复制粘贴时后续段落保持普通正文', async () => {
   await session.page.keyboard.press('ControlOrMeta+s')
   await expect.poll(() => readFile(destination, 'utf8')).toBe((await editorState()).text)
 })
+
+test('点击代码块底部右侧不会将光标放在围栏旁', async () => {
+  const source = '```typescript\nconst message = 1\n```\n\n后续正文'
+  const destination = await openFixture(session, 'code-footer-caret.md', source)
+  await session.page.keyboard.press('ControlOrMeta+/')
+  const editor = session.page.locator('.cm-content')
+  const footer = editor.locator('.cm-live-code-footer')
+  const box = (await footer.boundingBox())!
+  await session.page.mouse.click(box.x + box.width + 2, box.y + box.height / 2)
+  await session.page.keyboard.insertText('X')
+  await expect.poll(async () => (await editorState()).text).toBe('```typescript\nconst message = 1X\n```\n\n后续正文')
+  await session.page.keyboard.press('ControlOrMeta+z')
+  expect((await editorState()).text).toBe(source)
+  await session.page.keyboard.press('ControlOrMeta+s')
+  await expect.poll(() => readFile(destination, 'utf8')).toBe(source)
+})

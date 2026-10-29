@@ -2,7 +2,7 @@ import { supportsPreview } from './preview-budget'
 import { EditorSelection, EditorState, Prec, StateEffect, StateField, type Extension, type Range, type TransactionSpec } from '@codemirror/state'
 import { indentRange, syntaxTree } from '@codemirror/language'
 import { isolateHistory } from '@codemirror/commands'
-import { Decoration, EditorView, WidgetType, keymap, type DecorationSet } from '@codemirror/view'
+import { Decoration, EditorView, ViewPlugin, WidgetType, keymap, type DecorationSet } from '@codemirror/view'
 import { editLiveBlock, liveEditingBlock } from './live-blocks'
 import { attachCodeLanguageSuggestions } from './code-language-suggestions'
 import { markdownOptionsFacet } from './markdown-config'
@@ -270,8 +270,27 @@ const constrainCodePointerSelection = EditorState.transactionFilter.of(transacti
   return [transaction, { selection: EditorSelection.range(selection.anchor, head) }]
 })
 
+const codeFooterPointer = ViewPlugin.fromClass(class {
+  private readonly onMouseDown = (event: MouseEvent): void => {
+    if (event.button !== 0 || event.shiftKey || event.metaKey || event.ctrlKey || event.altKey || !(event.target instanceof Element) || event.target.closest('input,button,select,summary,details')) return
+    for (const footer of this.view.contentDOM.querySelectorAll<HTMLElement>('.cm-live-code-footer')) {
+      const rect = footer.getBoundingClientRect()
+      if (event.clientY < rect.top || event.clientY >= rect.bottom || event.clientX < rect.right || event.clientX > rect.right + 24) continue
+      const block = liveCodeBlocks(this.view.state).find(candidate => candidate.lastLine === Number(footer.dataset.sourceLine))
+      if (!block) continue
+      event.preventDefault()
+      event.stopPropagation()
+      this.view.dispatch({ selection: { anchor: block.bodyTo }, userEvent: 'select.pointer' })
+      this.view.focus()
+      return
+    }
+  }
+  constructor(readonly view: EditorView) { view.scrollDOM.addEventListener('mousedown', this.onMouseDown, true) }
+  destroy(): void { this.view.scrollDOM.removeEventListener('mousedown', this.onMouseDown, true) }
+})
+
 export function liveCodeExtension(): Extension {
-  return [codeDecorations, codeSelectAllPending, constrainCodePointerSelection, Prec.high(keymap.of([
+  return [codeDecorations, codeSelectAllPending, constrainCodePointerSelection, codeFooterPointer, Prec.high(keymap.of([
     { key: 'Enter', run: confirmCodeFence },
     { key: 'Mod-a', run: selectLiveCode },
     { key: 'Mod-Enter', run: leaveCode },

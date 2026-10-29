@@ -56,7 +56,7 @@ test('打包后的应用显示新图标，离线读写、折叠、渲染及导�
     const file = await openFixture(session, 'installed-smoke.md', original)
     const editor = page.locator('.cm-content')
     if (await editor.getAttribute('data-mode') === 'source') await page.keyboard.press('ControlOrMeta+/')
-    const disclosure = editor.locator('details')
+    const disclosure = editor.locator('details').filter({ has: editor.getByText('ONB 内测分组', { exact: true }) })
     await expect(disclosure.getByText('折叠正文', { exact: true })).toBeHidden()
     await disclosure.locator('summary').click()
     await expect(disclosure.getByText('折叠正文', { exact: true })).toBeVisible()

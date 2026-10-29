@@ -27,8 +27,7 @@ export function FloatingToolbar({ enabled, documentId, selection, readOnly, onAc
   const selectionKey = `${documentId}:${selection.from}:${selection.to}:${selection.text}`
   useEffect(() => {
     const area = marker.current?.parentElement
-    setPosition(null)
-    if (!area || !enabled || readOnly || selection.from === selection.to || !selection.text) return
+    if (!area || !enabled || readOnly || selection.from === selection.to || !selection.text) { setPosition(null); return }
     let frame: number | null = null
     const measure = () => {
       frame = null
@@ -37,7 +36,8 @@ export function FloatingToolbar({ enabled, documentId, selection, readOnly, onAc
       const view = editor && EditorView.findFromDOM(editor)
       if (!view || (!view.hasFocus && !toolbar.current?.contains(document.activeElement))) { setPosition(null); return }
       const range = view.state.selection.main
-      if (range.from !== selection.from || range.to !== selection.to || view.state.doc.sliceString(range.from, range.to) !== selection.text || view.state.readOnly) { setPosition(null); return }
+      if (view.state.readOnly) { setPosition(null); return }
+      if (range.from !== selection.from || range.to !== selection.to || view.state.doc.sliceString(range.from, range.to) !== selection.text) return
       const start = view.coordsAtPos(range.from), end = view.coordsAtPos(range.to)
       const viewport = view.scrollDOM.getBoundingClientRect()
       if (!start || !end || end.bottom < viewport.top || start.top > viewport.bottom || start.left > viewport.right || end.right < viewport.left) { setPosition(null); return }

@@ -34,6 +34,17 @@ import type { EditorAction, MarkdownEditorProps } from './types'
 import './editor.css'
 
 const editorHighlightStyle = HighlightStyle.define(defaultHighlightStyle.specs.map(spec => spec.tag === tags.heading ? { ...spec, textDecoration: 'none' } : spec))
+const darkHighlightColors: Record<string, string> = {
+  '#404740': '#e4e7ed', '#708': '#efc9ff', '#219': '#c5ddff', '#164': '#d1f2c5',
+  '#a11': '#ffd1bd', '#e40': '#ffe2a8', '#00f': '#c5ddff', '#30a': '#efc9ff',
+  '#085': '#a8ede1', '#167': '#a8ede1', '#256': '#a8ede1', '#00c': '#c5ddff',
+  '#940': '#ffe2a8', '#f00': '#ffd1bd',
+}
+const darkEditorHighlightStyle = HighlightStyle.define(defaultHighlightStyle.specs.map(spec => ({
+  ...spec,
+  ...(spec.tag === tags.heading ? { textDecoration: 'none' } : {}),
+  ...(spec.color && darkHighlightColors[spec.color] ? { color: darkHighlightColors[spec.color] } : {}),
+})))
 const EXTERNAL_UPDATE = Annotation.define<boolean>()
 
 function applyAction(view: EditorView, action: EditorAction, value?: string): boolean {
@@ -67,6 +78,7 @@ function configuration(props: MarkdownEditorProps, callbacks: Pick<MarkdownEdito
   const extensions: Extension[] = [
     markdownOptionsFacet.of(props.markdownOptions), editorLocale.of(props.locale ?? 'zh-CN'), markdownCompletionExtension, markdownInputExtension, indentUnit.of(' '.repeat(props.markdownOptions.codeIndentSize)),
     EditorState.readOnly.of(props.readOnly), EditorView.editable.of(!props.readOnly),
+    syntaxHighlighting(props.theme === 'dark' ? darkEditorHighlightStyle : editorHighlightStyle),
     EditorView.contentAttributes.of({ 'aria-label': editorText(props.locale, 'Markdown 编辑器'), spellcheck: String(props.spellcheck), 'data-mode': props.mode }),
     EditorView.theme({
       '&': { fontSize: `${props.fontSize}px`, color: 'var(--color-text)', backgroundColor: 'var(--color-surface)' },
@@ -135,7 +147,7 @@ export function MarkdownEditor(props: MarkdownEditorProps): React.JSX.Element {
         history(), drawSelection(), indentOnInput(), bracketMatching(), codeBlockDisplay,
         clipboardImportExtension(() => ({ snapshot: { id: propsRef.current.documentId, content: viewRef.current?.state.doc.toString() ?? propsRef.current.value, revision: propsRef.current.revision }, mode: propsRef.current.mode, readOnly: propsRef.current.readOnly, imageOptions: propsRef.current.imageOptions, readClipboardText: () => propsRef.current.desktopApi.readClipboardText(), importImages: request => propsRef.current.desktopApi.importImages(request), onError: setContextError })),
         richClipboardExtension(() => ({ mode: propsRef.current.mode, api: propsRef.current.desktopApi, onError: setContextError })),
-        markdown({ codeLanguages: codeLanguageForInfo, base: markdownLanguage }), syntaxHighlighting(editorHighlightStyle),
+        markdown({ codeLanguages: codeLanguageForInfo, base: markdownLanguage }),
         highlightActiveLine(), search({ top: true }), folderSearchHighlight,
         keymap.of([
           { key: 'Mod-b', run: (view) => applyAction(view, 'bold') },

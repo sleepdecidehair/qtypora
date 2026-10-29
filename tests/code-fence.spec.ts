@@ -53,6 +53,50 @@ for (const { language, body } of [
   })
 }
 
+test('深色代码语法在普通背景和选中背景上均清晰，主题切换立即生效', async () => {
+  const body = 'const message = "开始写作"\nconsole.log(message)'
+  await openFixture(session, 'dark-code-colors.md', '```typescript\n' + body + '\n```')
+  await session.page.keyboard.press('ControlOrMeta+/')
+  const editor = session.page.locator('.cm-content')
+  const code = editor.locator('.cm-live-code-body').first()
+  await expect.poll(highlightedCodeTokens).toBeGreaterThan(0)
+  const colors = () => code.evaluate(element => [...element.querySelectorAll('span[class]')].map(token => getComputedStyle(token).color))
+  const lightColors = await colors()
+  await session.page.getByTestId('preferences-button').click()
+  await session.page.getByTestId('theme-select').selectOption('dark')
+  await session.page.getByRole('button', { name: '完成', exact: true }).click()
+  await expect(session.page.locator('html')).toHaveAttribute('data-theme', 'dark')
+  await expect.poll(colors).not.toEqual(lightColors)
+  await captureDesktop(session, '.debug/dark-code-unselected.png')
+  await code.click({ position: { x: 40, y: 20 } })
+  await session.page.keyboard.press('ControlOrMeta+a')
+  await expect.poll(async () => (await editorState()).selected).toBe(body)
+  await expect(session.page.locator('.cm-selectionBackground').first()).toBeAttached()
+  const contrast = await editor.evaluate(element => {
+    const luminance = (value: string): number => {
+      const components = value.match(/\d+/g)!.slice(0, 3).map(Number).map(channel => {
+        const normalized = channel / 255
+        return normalized <= 0.04045 ? normalized / 12.92 : ((normalized + 0.055) / 1.055) ** 2.4
+      })
+      return components[0] * 0.2126 + components[1] * 0.7152 + components[2] * 0.0722
+    }
+    const line = element.querySelector('.cm-live-code-body')!
+    const backgrounds = [getComputedStyle(line, '::after').backgroundColor, getComputedStyle(element.closest('.cm-scroller')!.querySelector('.cm-selectionBackground')!).backgroundColor]
+    const tokenColors = [...line.querySelectorAll('span[class]')].map(token => getComputedStyle(token).color)
+    return tokenColors.flatMap(color => backgrounds.map(background => {
+      const values = [luminance(color), luminance(background)].sort((a, b) => a - b)
+      return (values[1] + 0.05) / (values[0] + 0.05)
+    }))
+  })
+  expect(contrast.length).toBeGreaterThan(0)
+  expect(Math.min(...contrast)).toBeGreaterThanOrEqual(4.5)
+  await captureDesktop(session, '.debug/dark-code-selection.png')
+  await session.page.getByTestId('preferences-button').click()
+  await session.page.getByTestId('theme-select').selectOption('light')
+  await session.page.getByRole('button', { name: '完成', exact: true }).click()
+  await expect.poll(colors).toEqual(lightColors)
+})
+
 test('切换语言只重绘代码高亮，清空或未知语言恢复纯文本', async () => {
   const body = 'def greet(name):\n    return "Hello, " + name'
   await openFixture(session, 'code-highlight-switch.md', '```Python\n' + body + '\n```')

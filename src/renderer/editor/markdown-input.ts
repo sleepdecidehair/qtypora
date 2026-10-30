@@ -1,5 +1,5 @@
 import { Prec, StateEffect, StateField, type EditorState, type TransactionSpec } from '@codemirror/state'
-import { syntaxTree } from '@codemirror/language'
+import { ensureSyntaxTree } from '@codemirror/language'
 import { EditorView, keymap } from '@codemirror/view'
 import { markdownOptionsFacet } from './markdown-config'
 import { readFrontMatter } from './markdown-features'
@@ -48,7 +48,9 @@ export function markdownInputTransaction(state: EditorState, from: number, to: n
     return { changes: { from, to: from + 1, insert: ' ' }, selection: { anchor: from + 1 }, effects: changePair.of({ remove: pair }), userEvent: 'input.type' }
   }
   if (!enabled(state, text)) return null
-  let node = syntaxTree(state).resolveInner(from, -1)
+  const tree = ensureSyntaxTree(state, Math.min(state.doc.length, Math.max(from, to) + 1), 50)
+  if (!tree) return null
+  let node = tree.resolveInner(from, -1)
   for (;;) {
     if (['FencedCode', 'CodeBlock', 'InlineCode', 'URL', 'Autolink', 'HTMLTag', 'HTMLBlock'].includes(node.name)) return null
     if (!node.parent) break

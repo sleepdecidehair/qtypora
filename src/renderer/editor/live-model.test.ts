@@ -4,7 +4,7 @@ import { history, undo } from '@codemirror/commands'
 import { EditorView } from '@codemirror/view'
 import { describe, expect, it } from 'vitest'
 import { inlinePreviewSpans, styleScope } from './live-inline'
-import { parseTableSource, tableCellEdit } from './table-model'
+import { missingTableCellSource, parseTableSource, tableCellEdit } from './table-model'
 import { hybridExtension } from './hybrid'
 import { editLiveBlock, LiveBlockWidget, liveBlocks } from './live-blocks'
 import { sourceEditRange } from './live-source-edit'
@@ -40,12 +40,22 @@ describe('live Markdown native text decorations', () => {
   })
   it('selects the content of the nearest style scope', () => {
     const current = state('before **中文** after', 10)
-    const scope = styleScope(current)
+    const scope = styleScope(current)!
     expect(current.doc.sliceString(scope.from, scope.to)).toBe('中文')
   })
 })
 
 describe('rendered table cell transactions', () => {
+  it.each([
+    ['| only |', '| only | | x\\|y |'],
+    ['only', 'only | | x\\|y |'],
+  ])('adds a missing cell only on edit and preserves %s', (line, expected) => {
+    const source = `| A | B | C |\n| --- | --- | --- |\n${line}`
+    const cell = missingTableCellSource(source, parseTableSource(source), 1, 2)!
+    expect(tableCellEdit(cell, '')).toBeNull()
+    const edit = tableCellEdit(cell, 'x|y')!
+    expect(source.slice(0, edit.from) + edit.insert + source.slice(edit.to)).toBe(source.replace(line, expected))
+  })
   it('updates one cell while preserving delimiters, spacing, alignment and unrelated source', () => {
     const source = '| Name  | Value |\n| :--- | ---: |\n| old   | untouched |'
     const table = parseTableSource(source)
@@ -140,5 +150,15 @@ describe('opaque live blocks require explicit edit focus', () => {
     expect(sourceEditRange(state('标题\n---\n\n正文', 1), 1)).toEqual({ from: 0, to: 6 })
     const doc = '前文\n\n```js\nconst answer = 42\n```\n\n结束'
     expect(sourceEditRange(state(doc, 15), 15)).toEqual({ from: 4, to: doc.indexOf('\n\n结束') })
+  })
+})
+
+describe('escaped characters in live preview', () => {
+  it('hides only the escape marker outside code and reveals it when editing', () => {
+    const source = '\\--- and `\\*`'
+    const ordinary = state(source, source.length)
+    expect(inlinePreviewSpans(ordinary)).toContainEqual({ from: 0, to: 1, hidden: true })
+    expect(inlinePreviewSpans(ordinary)).not.toContainEqual({ from: source.indexOf('\\*'), to: source.indexOf('\\*') + 1, hidden: true })
+    expect(inlinePreviewSpans(state(source, 1))).not.toContainEqual({ from: 0, to: 1, hidden: true })
   })
 })

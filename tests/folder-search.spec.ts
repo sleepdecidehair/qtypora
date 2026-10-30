@@ -1,5 +1,5 @@
 import { test, expect } from '@playwright/test'
-import { chmod, mkdir, readFile, writeFile } from 'node:fs/promises'
+import { chmod, mkdir, open, readFile, writeFile } from 'node:fs/promises'
 import path from 'node:path'
 import { captureDesktop, launchDesktop, setOpenDialog, stopDesktop, type DesktopSession } from './desktop-helpers'
 
@@ -33,6 +33,40 @@ const renderedMatches = (active = false) => session.page.evaluate(selected => {
 }, active)
 
 const source = () => session.page.locator('.cm-content').evaluate(element => Reflect.get(element, 'cmTile').root.view.state.doc.toString())
+
+test('目录搜索明确提示跳过的大文件和结果上限，切换查询后清除旧提示', async () => {
+  const folder = path.join(session.root, 'search-limits')
+  await mkdir(folder)
+  const large = await open(path.join(folder, 'large.md'), 'w')
+  try { await large.truncate(16 * 1024 * 1024 + 1) } finally { await large.close() }
+  await writeFile(path.join(folder, 'matches.md'), 'needle\n'.repeat(1001))
+  await searchFolder(folder, 'needle')
+  const warning = session.page.getByTestId('search-limitations')
+  await expect(warning).toContainText('达到 1000 条结果上限')
+  await expect(warning).toContainText('跳过 1 个超过 16 MB 的文件')
+  await session.page.getByTestId('folder-search-input').fill('')
+  await expect(warning).toHaveCount(0)
+  expect(await readFile(path.join(folder, 'matches.md'), 'utf8')).toBe('needle\n'.repeat(1001))
+})
+
+test('目录搜索可以发现超过 24 层的文件，且仍遵守排除目录', async () => {
+  const folder = path.join(session.root, 'deep-search')
+  let deep = folder
+  for (let i = 0; i < 26; i++) deep = path.join(deep, `d${i}`)
+  await mkdir(deep, { recursive: true })
+  const file = path.join(deep, 'target.md')
+  const original = '# deep needle\n'
+  await writeFile(file, original)
+  await searchFolder(folder, 'needle')
+  const result = session.page.locator('.search-result')
+  await expect(result).toHaveCount(1)
+  await result.click()
+  await expect(session.page.getByTestId('document-name')).toHaveText('target.md')
+  await expect.poll(source).toBe(original)
+  await session.page.getByLabel('搜索排除目录').fill('d0')
+  await expect(result).toHaveCount(0)
+  expect(await readFile(file, 'utf8')).toBe(original)
+})
 
 test('搜索可排除目录名与相对路径，设置持久化且不修改文件', async () => {
   const folder = path.join(session.root, 'filtered-search')

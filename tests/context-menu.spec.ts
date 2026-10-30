@@ -1,7 +1,7 @@
 import { test, expect } from '@playwright/test'
 import { mkdir, readFile, readdir, realpath, writeFile } from 'node:fs/promises'
 import path from 'node:path'
-import { appendText, contextMenuActions, launchDesktop, openFixture, readCreatedBytes, readCreatedText, releaseContextMenu, setContextMenuChoice, setMessageResponse, setOpenDialog, setSaveDialog, stopDesktop, type DesktopSession } from './desktop-helpers'
+import { appendText, clickNativeMenu, contextMenuActions, launchDesktop, openFixture, readCreatedBytes, readCreatedText, releaseContextMenu, setContextMenuChoice, setMessageResponse, setOpenDialog, setSaveDialog, stopDesktop, type DesktopSession } from './desktop-helpers'
 
 let session: DesktopSession
 test.beforeEach(async () => { session = await launchDesktop() })
@@ -25,6 +25,33 @@ async function editorState() {
     return { content: view.state.doc.toString(), selection: view.state.selection.toJSON(), focused: view.hasFocus }
   })
 }
+
+test('引用式链接右键复制和打开定义地址，缺失定义保持普通正文且原文不变', async () => {
+  const content = '[引用][目标]\n\n[无定义][缺失]\n\n[目标]: target.md\n'
+  await writeFile(path.join(session.root, 'target.md'), '# 引用目标\n')
+  const file = await openFixture(session, 'reference-link.md', content)
+  const reference = session.page.locator('.cm-line').filter({ hasText: '[引用][目标]' })
+  await setContextMenuChoice(session, 'copy-link')
+  await reference.click({ button: 'right', position: { x: 10, y: 8 } })
+  await expect.poll(() => session.app.evaluate(async ({ clipboard }) => clipboard.readText())).toBe('target.md')
+  expect((await editorState()).content).toBe(content)
+
+  await setContextMenuChoice(session, null)
+  await session.page.locator('.cm-line').filter({ hasText: '[无定义][缺失]' }).click({ button: 'right', position: { x: 10, y: 8 } })
+  await expect.poll(() => contextMenuActions(session)).not.toContain('copy-link')
+  expect(await contextMenuActions(session)).not.toContain('open-link')
+  expect((await editorState()).content).toBe(content)
+
+  await setContextMenuChoice(session, 'open-link')
+  await reference.click({ button: 'right', position: { x: 10, y: 8 } })
+  await expect(session.page).toHaveTitle(/target\.md/)
+  expect((await editorState()).content).toBe('# 引用目标\n')
+  await session.page.getByTestId('files-tab').click()
+  await session.page.locator('.open-document-row').filter({ hasText: 'reference-link.md' }).click()
+  expect((await editorState()).content).toBe(content)
+  await session.page.keyboard.press('ControlOrMeta+s')
+  await expect.poll(() => readFile(file, 'utf8')).toBe(content)
+})
 
 test('文件原生右键取消保持活动文档、未保存内容、选区和焦点', async () => {
   const original = '# 当前文章\n\n尚未保存。\n'
@@ -145,6 +172,69 @@ test('高宽超大图片与 Mermaid 都完整适应正文宽高，缩小窗口�
   await image.scrollIntoViewIfNeeded()
   await expect.poll(fits).toBe(true)
   expect(await readFile(path.join(session.root, 'fit-resources.md'), 'utf8')).toContain('![全尺寸图片](large.svg)')
+})
+
+test('表格内右键第二个引用链接复制正确目标，映射不一致时回退表格菜单', async () => {
+  const content = '| 表头 |\n| --- |\n| 前置文字 [第一个][one] 和 [第二个][two] |\n\n[one]: first.md\n[two]: second.md\n\n结束正文\n'
+  const file = await openFixture(session, 'table-reference-links.md', content)
+  await session.page.keyboard.press('ControlOrMeta+/')
+  const cell = session.page.getByTestId('live-table').locator('td').first()
+  const first = cell.getByRole('link', { name: '第一个' })
+  const second = cell.getByRole('link', { name: '第二个' })
+  await expect(second).toBeVisible()
+  await session.app.evaluate(async ({ clipboard }) => clipboard.writeText('qtypora-test-clipboard'))
+  await setContextMenuChoice(session, 'copy-link')
+  await second.click({ button: 'right' })
+  await expect.poll(() => session.app.evaluate(async ({ clipboard }) => clipboard.readText())).toBe('second.md')
+  expect((await editorState()).content).toBe(content)
+
+  // Simulate stale rendered metadata: never guess which source link was clicked.
+  await session.page.locator('.cm-line').filter({ hasText: '结束正文' }).click()
+  await first.evaluate(element => element.removeAttribute('href'))
+  await setContextMenuChoice(session, null)
+  await second.click({ button: 'right' })
+  await expect.poll(() => contextMenuActions(session)).toContain('table-delete')
+  expect(await contextMenuActions(session)).not.toContain('copy-link')
+  expect(await contextMenuActions(session)).not.toContain('open-link')
+  expect((await editorState()).content).toBe(content)
+  await session.page.keyboard.press('ControlOrMeta+s')
+  await expect.poll(() => readFile(file, 'utf8')).toBe(content)
+})
+
+test('表格已聚焦源码中的链接可连续右键及使用键盘菜单', async () => {
+  const content = '| 表头 |\n| --- |\n| 前置 [第一](one.md) 和 [第二][two] |\n\n[two]: two.md\n'
+  await openFixture(session, 'table-focused-link.md', content)
+  await session.page.keyboard.press('ControlOrMeta+/')
+  const cell = session.page.getByTestId('live-table').locator('td').first()
+  await session.app.evaluate(async ({ clipboard }) => clipboard.writeText('qtypora-test-clipboard'))
+  await setContextMenuChoice(session, 'copy-link')
+  await cell.getByRole('link', { name: '第二' }).click({ button: 'right' })
+  await expect.poll(() => session.app.evaluate(async ({ clipboard }) => clipboard.readText())).toBe('two.md')
+  await session.app.evaluate(async ({ clipboard }) => clipboard.writeText('qtypora-test-clipboard'))
+  const point = await cell.evaluate(element => {
+    const node = element.firstChild!
+    const start = node.textContent!.indexOf('第二')
+    const range = document.createRange()
+    range.setStart(node, start); range.setEnd(node, start + 2)
+    const rect = range.getBoundingClientRect()
+    return { x: rect.x + rect.width / 2, y: rect.y + rect.height / 2 }
+  })
+  await session.page.mouse.click(point.x, point.y)
+  await session.page.keyboard.press('Shift+F10')
+  await expect.poll(() => session.app.evaluate(async ({ clipboard }) => clipboard.readText())).toBe('two.md')
+  await session.app.evaluate(async ({ clipboard }) => clipboard.writeText('qtypora-test-clipboard'))
+  await session.page.mouse.click(point.x, point.y, { button: 'right' })
+  await expect.poll(() => session.app.evaluate(async ({ clipboard }) => clipboard.readText())).toBe('two.md')
+  const firstPoint = await cell.evaluate(element => {
+    const node = element.firstChild!, start = node.textContent!.indexOf('第一')
+    const range = document.createRange()
+    range.setStart(node, start); range.setEnd(node, start + 2)
+    const rect = range.getBoundingClientRect()
+    return { x: rect.x + rect.width / 2, y: rect.y + rect.height / 2 }
+  })
+  await session.page.mouse.click(firstPoint.x, firstPoint.y, { button: 'right' })
+  await expect.poll(() => session.app.evaluate(async ({ clipboard }) => clipboard.readText())).toBe('one.md')
+  expect((await editorState()).content).toBe(content)
 })
 
 test('表格原生菜单精确插列与对齐且可撤销，最小行列不能误删整表', async () => {
@@ -354,4 +444,101 @@ test('移除图片引用保留原文件，明确删除图片才移除原文件�
   expect((await readdir(session.root)).includes('delete-test.svg')).toBe(false)
   await session.page.keyboard.press('ControlOrMeta+s')
   await expect.poll(() => readFile(article, 'utf8')).toBe(content.replace('![删除图片](delete-test.svg)', ''))
+})
+
+test('右键复制跨代码块的纯文本与 HTML 保持正文独立', async () => {
+  const content = '```js\nconst answer = 42\n```\n\n后续普通段落\n'
+  await openFixture(session, 'context-cross-code.md', content)
+  await session.page.keyboard.press('ControlOrMeta+/')
+  const editor = session.page.locator('.cm-content')
+  const code = editor.locator('.cm-live-code-body').first()
+  const paragraph = editor.locator('.cm-line').filter({ hasText: '后续普通段落' })
+  const a = (await paragraph.boundingBox())!, b = (await code.boundingBox())!
+  const selectAcross = async () => {
+    await session.page.mouse.move(a.x + 150, a.y + a.height / 2)
+    await session.page.mouse.down()
+    await session.page.mouse.move(b.x + 50, b.y + b.height / 2, { steps: 10 })
+    await session.page.mouse.up()
+  }
+  await selectAcross()
+  await setContextMenuChoice(session, 'copy-plain')
+  await paragraph.click({ button: 'right', position: { x: 25, y: a.height / 2 } })
+  await expect.poll(() => session.app.evaluate(async ({ clipboard }) => clipboard.readText())).toContain('后续普通段落')
+  const plain = await session.app.evaluate(async ({ clipboard }) => clipboard.readText())
+  expect(plain).toMatch(/answer = 42\n+后续普通段落/)
+  expect(plain).not.toContain('```')
+  await selectAcross()
+  await setContextMenuChoice(session, 'copy-html')
+  await paragraph.click({ button: 'right', position: { x: 25, y: a.height / 2 } })
+  await expect.poll(() => session.app.evaluate(async ({ clipboard }) => clipboard.readText())).toContain('<p>后续普通段落</p>')
+  const html = await session.app.evaluate(async ({ clipboard }) => clipboard.readText())
+  expect(html).toMatch(/<pre><code[^>]*>[^]*answer = 42[^]*<\/code><\/pre>/)
+  expect(html.indexOf('</pre>')).toBeLessThan(html.indexOf('<p>后续普通段落</p>'))
+  expect((await editorState()).content).toBe(content)
+})
+
+
+test('键盘、右键和主菜单复制在异步写入时按操作顺序完成', async () => {
+  const content = 'first word\n\nsecond word\n\nthird word'
+  await openFixture(session, 'copy-entry-order.md', content)
+  await session.page.keyboard.press('ControlOrMeta+/')
+  const editor = session.page.locator('.cm-content')
+  await session.app.evaluate(({ clipboard }) => {
+    const original = clipboard.write.bind(clipboard)
+    Reflect.set(globalThis, 'copyOrderOriginalWrite', clipboard.write)
+    let release!: () => void
+    const held = new Promise<void>(resolve => { release = resolve })
+    Reflect.set(globalThis, 'copyOrderRelease', release)
+    Reflect.set(globalThis, 'copyOrderCalls', 0)
+    clipboard.write = async (...args) => {
+      const calls = Number(Reflect.get(globalThis, 'copyOrderCalls')) + 1
+      Reflect.set(globalThis, 'copyOrderCalls', calls)
+      if (calls === 1) await held
+      return original(...args)
+    }
+  })
+  try {
+    const select = async (from: number, to: number) => editor.evaluate((element, range) => {
+      const view = Reflect.get(element, 'cmTile').root.view as import('@codemirror/view').EditorView
+      view.dispatch({ selection: { anchor: range.from, head: range.to } })
+      view.focus()
+    }, { from, to })
+    await select(0, 5)
+    await session.page.keyboard.press('ControlOrMeta+c')
+    await expect.poll(() => session.app.evaluate(() => Reflect.get(globalThis, 'copyOrderCalls'))).toBe(1)
+    await select(content.indexOf('second'), content.indexOf('second') + 6)
+    await setContextMenuChoice(session, 'copy-markdown')
+    await editor.locator('.cm-line').filter({ hasText: 'second word' }).click({ button: 'right', position: { x: 12, y: 8 } })
+    await select(content.indexOf('third'), content.indexOf('third') + 5)
+    await clickNativeMenu(session, '复制为 Markdown')
+    await session.app.evaluate(() => (Reflect.get(globalThis, 'copyOrderRelease') as () => void)())
+    await expect.poll(() => session.app.evaluate(() => Reflect.get(globalThis, 'copyOrderCalls'))).toBe(3)
+    await expect.poll(() => session.app.evaluate(async ({ clipboard }) => clipboard.readText())).toBe('third')
+    expect((await editorState()).content).toBe(content)
+  } finally {
+    await session.app.evaluate(({ clipboard }) => {
+      const release = Reflect.get(globalThis, 'copyOrderRelease') as (() => void) | undefined
+      release?.()
+      clipboard.write = Reflect.get(globalThis, 'copyOrderOriginalWrite')
+    })
+  }
+})
+
+test('源码模式右键大选区限制格式化复制但允许原文复制', async () => {
+  const content = 'a'.repeat(200001)
+  await openFixture(session, 'large-copy.md', content)
+  const editor = session.page.locator('.cm-content')
+  await editor.click({ position: { x: 10, y: 10 } })
+  await session.page.keyboard.press('ControlOrMeta+a')
+  await session.app.evaluate(async ({ clipboard }) => clipboard.writeText('original clipboard'))
+  for (const action of ['copy-plain', 'copy-html']) {
+    await setContextMenuChoice(session, action)
+    await editor.locator('.cm-line').first().click({ button: 'right', position: { x: 10, y: 10 } })
+    await expect(session.page.locator('.editor-context-error')).toContainText('选区过大')
+    expect(await session.app.evaluate(async ({ clipboard }) => clipboard.readText())).toBe('original clipboard')
+  }
+  await setContextMenuChoice(session, 'copy-markdown')
+  await editor.locator('.cm-line').first().click({ button: 'right', position: { x: 10, y: 10 } })
+  await expect.poll(() => session.app.evaluate(async ({ clipboard }) => (await clipboard.readText()).length)).toBe(content.length)
+  expect((await editorState()).content).toBe(content)
 })

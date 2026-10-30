@@ -14,7 +14,7 @@ export const liveEditingBlock = StateField.define<{ from: number; to: number } |
   update: (value, transaction) => {
     if (value && transaction.docChanged) value = { from: transaction.changes.mapPos(value.from), to: transaction.changes.mapPos(value.to, 1) }
     for (const effect of transaction.effects) if (effect.is(editLiveBlock)) return effect.value
-    if (value && transaction.selection && (!transaction.state.selection.main.empty || transaction.state.selection.main.head < value.from || transaction.state.selection.main.head > value.to)) return null
+    if (value && transaction.selection && (transaction.state.selection.main.from < value.from || transaction.state.selection.main.to > value.to)) return null
     return value
   },
 })
@@ -83,11 +83,20 @@ export function liveBlocks(state: EditorState): LiveBlock[] {
 }
 
 export class LiveBlockWidget extends WidgetType {
-  constructor(readonly block: LiveBlock, readonly options: LiveOptions) { super() }
-  eq(other: LiveBlockWidget): boolean { return this.block.from === other.block.from && this.block.source === other.block.source && this.block.html === other.block.html && this.options.mathKey === other.options.mathKey && this.options.theme === other.options.theme && this.options.readOnly === other.options.readOnly && this.options.locale === other.options.locale }
+  constructor(readonly block: LiveBlock, readonly options: LiveOptions, readonly muted = false) { super() }
+  private sameContent(other: LiveBlockWidget): boolean { return this.block.from === other.block.from && this.block.source === other.block.source && this.block.html === other.block.html && this.options.mathKey === other.options.mathKey && this.options.theme === other.options.theme && this.options.readOnly === other.options.readOnly && this.options.locale === other.options.locale }
+  eq(other: LiveBlockWidget): boolean { return this.sameContent(other) && this.muted === other.muted }
+  updateDOM(dom: HTMLElement, _view: EditorView, previous: this): boolean {
+    if (!this.sameContent(previous)) return false
+    dom.classList.toggle('cm-focus-muted', this.muted && this.block.kind === 'math')
+    dom.classList.toggle('cm-focus-image-muted', this.muted && this.block.kind === 'image')
+    return true
+  }
   toDOM(view: EditorView): HTMLElement {
     const container = document.createElement('div')
     container.className = 'md-preview-block cm-live-block'
+    container.classList.toggle('cm-focus-muted', this.muted && this.block.kind === 'math')
+    container.classList.toggle('cm-focus-image-muted', this.muted && this.block.kind === 'image')
     container.contentEditable = 'false'
     container.dataset.sourceFrom = String(this.block.from)
     container.dataset.sourceLine = String(this.block.firstLine)

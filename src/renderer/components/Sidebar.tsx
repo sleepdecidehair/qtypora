@@ -1,7 +1,7 @@
 import { useDeferredValue, useEffect, useMemo, useState } from 'react'
 import { Files, ListTree, Search, RefreshCw } from 'lucide-react'
 import appLogo from '../../../build/icon.svg?no-inline'
-import type { DesktopApi, SearchHit, SidebarMode, Workspace } from '../../shared/contracts'
+import type { DesktopApi, SearchResults, SidebarMode, Workspace } from '../../shared/contracts'
 import type { EditorDocument } from '../hooks/useDocuments'
 import type { PendingFileAction } from './FileActionDialog'
 import { extractHeadings } from '../hooks/outline'
@@ -25,6 +25,8 @@ interface SidebarProps {
   onWorkspaceOptionsChange?: (options: WorkspaceOptions) => void
   markdownOptions?: MarkdownOptions
   currentLine?: number
+  outlineFlat: boolean
+  onOutlineFlatChange: (flat: boolean) => void
   recentFolders?: string[]
 }
 
@@ -38,7 +40,7 @@ export function Sidebar(props: SidebarProps) {
       <button role="tab" aria-selected={props.mode === 'outline'} aria-label={t('大纲')} data-testid="outline-tab" className={props.mode === 'outline' ? 'is-active' : ''} onClick={() => props.onMode('outline')}><ListTree size={16} />{t('大纲')}</button>
       <button role="tab" aria-selected={props.mode === 'search'} aria-label={t('搜索')} data-testid="search-tab" className={props.mode === 'search' ? 'is-active' : ''} onClick={() => props.onMode('search')}><Search size={16} />{t('搜索')}</button>
     </div>
-    {props.mode === 'outline' ? <OutlinePanel headings={outline} name={props.current?.name ?? '文档大纲'} documentId={props.current?.id} currentLine={props.currentLine} onJump={props.onJump} /> : null}
+    {props.mode === 'outline' ? <OutlinePanel headings={outline} name={props.current?.name ?? '文档大纲'} documentId={props.current?.id} currentLine={props.currentLine} flat={props.outlineFlat} onFlatChange={props.onOutlineFlatChange} onJump={props.onJump} /> : null}
     {props.mode === 'files' ? <FileTree {...props} /> : null}
     {props.mode === 'search' ? <FolderSearch {...props} /> : null}
     <div className="sidebar-bottom"><span className="product-wordmark"><img data-testid="app-logo" src={appLogo} alt="" aria-hidden="true" />QTypora</span><span>{t('本地 Markdown')}</span></div>
@@ -55,14 +57,16 @@ function FolderSearch(props: SidebarProps) {
   const [regex, setRegex] = useState(false)
   const [visibleLimit, setVisibleLimit] = useState(100)
   const [searchError, setSearchError] = useState('')
-  const [resultSet, setResultSet] = useState<{ root: string; query: string; caseSensitive: boolean; wholeWord: boolean; regex: boolean; excludeDirectories: string; hits: SearchHit[] } | null>(null)
+  const [resultSet, setResultSet] = useState<{ root: string; query: string; caseSensitive: boolean; wholeWord: boolean; regex: boolean; excludeDirectories: string; result: SearchResults } | null>(null)
   const [selected, setSelected] = useState<{ path: string; line: number } | null>(null)
   const [isSearching, setIsSearching] = useState(false)
   const [searchVersion, setSearchVersion] = useState(0)
   const root = props.workspace?.path
   const workspaceOptions = props.workspaceOptions ?? DEFAULT_WORKSPACE_OPTIONS
   const excludeDirectories = workspaceOptions.searchExclude
-  const results = resultSet && resultSet.root === root && resultSet.query === query && resultSet.caseSensitive === caseSensitive && resultSet.wholeWord === wholeWord && resultSet.regex === regex && resultSet.excludeDirectories === excludeDirectories ? resultSet.hits : []
+  const currentResult = resultSet && resultSet.root === root && resultSet.query === query && resultSet.caseSensitive === caseSensitive && resultSet.wholeWord === wholeWord && resultSet.regex === regex && resultSet.excludeDirectories === excludeDirectories ? resultSet.result : null
+  const results = currentResult?.hits ?? []
+  const limits = currentResult?.limitations
   useEffect(() => {
     let valid = false
     try { createTextSearch(query, { caseSensitive, wholeWord, regex }); valid = Boolean(root && isSearchDocumentInScope(root, props.current?.path ?? null, excludeDirectories)) } catch { /* The request effect reports invalid syntax. */ }
@@ -80,7 +84,7 @@ function FolderSearch(props: SidebarProps) {
     const timer = setTimeout(() => {
       void props.api.searchFolder({ root, query, caseSensitive, wholeWord, regex, excludeDirectories }).then(result => {
         if (!current) return
-        if (result.ok) setResultSet({ root, query, caseSensitive, wholeWord, regex, excludeDirectories, hits: result.data })
+        if (result.ok) setResultSet({ root, query, caseSensitive, wholeWord, regex, excludeDirectories, result: result.data })
         else { setResultSet(null); setSearchError(result.error.message) }
       }).catch((error: unknown) => { if (current) { setResultSet(null); setSearchError(error instanceof Error ? error.message : '搜索失败') } }).finally(() => { if (current) setIsSearching(false) })
     }, 400)
@@ -93,6 +97,12 @@ function FolderSearch(props: SidebarProps) {
     {excludeDirectories ? <p className="search-help">{t('排除目录使用逗号分隔，可使用 * 和 ?；相对路径以工作区为起点。')}</p> : null}
     {searchError ? <p className="search-error" role="alert">{searchError}</p> : null}
     {regex ? <p className="search-help">使用 RE2 语法，支持分组、字符类和重复；不支持反向引用、前瞻。</p> : null}
-    {!props.workspace ? <div className="empty-hint"><p>{t('先打开一个文件夹。')}</p><button className="text-button" onClick={() => props.onOpenFolder()}>{t('打开文件夹')}</button></div> : <><h2 className="sidebar-label" aria-live="polite">{isSearching ? t('正在搜索…') : query ? locale === 'en-US' ? `${results.length} results` : `${results.length} 个结果` : props.workspace.name}</h2>{results.slice(0, visibleLimit).map((hit, index) => <button key={`${hit.path}-${hit.line}-${index}`} className="search-result" aria-current={selected?.path === hit.path && selected.line === hit.line && props.current?.path === hit.path ? 'location' : undefined} onClick={() => { setSelected({ path: hit.path, line: hit.line }); props.onOpen(hit.path, hit.line) }} title={hit.path}><strong>{hit.name}<span>:{hit.line}</span></strong><small><SearchHighlight text={hit.text} query={query} caseSensitive={caseSensitive} wholeWord={wholeWord} regex={regex} excerpt /></small></button>)}{query && !isSearching && !searchError && !results.length ? <p className="empty-hint">{t('没有匹配的内容。')}</p> : null}{results.length > visibleLimit ? <button type="button" className="text-button search-more" onClick={() => setVisibleLimit(value => value + 100)}>{t('显示更多')} ({visibleLimit} / {results.length})</button> : null}{results.length >= 1000 ? <p className="empty-hint">{t('已达到 1000 条结果上限，请缩小搜索范围。')}</p> : null}</>}
+    {limits && (limits.resultLimit || limits.entryLimit || limits.oversizedFiles > 0) ? <div className="search-help" aria-live="polite" data-testid="search-limitations">
+      {locale === 'en-US' ? 'Search results may be incomplete:' : '搜索结果可能不完整：'}
+      {limits.resultLimit ? <p>{locale === 'en-US' ? 'The 1,000-result limit was reached.' : '达到 1000 条结果上限。'}</p> : null}
+      {limits.entryLimit ? <p>{locale === 'en-US' ? 'The 10,000-entry scan limit was reached.' : '达到 10000 个文件或目录的扫描上限。'}</p> : null}
+      {limits.oversizedFiles ? <p>{locale === 'en-US' ? `${limits.oversizedFiles} file(s) over 16 MB were skipped.` : `跳过 ${limits.oversizedFiles} 个超过 16 MB 的文件。`}</p> : null}
+    </div> : null}
+    {!props.workspace ? <div className="empty-hint"><p>{t('先打开一个文件夹。')}</p><button className="text-button" onClick={() => props.onOpenFolder()}>{t('打开文件夹')}</button></div> : <><h2 className="sidebar-label" aria-live="polite">{isSearching ? t('正在搜索…') : query ? locale === 'en-US' ? `${results.length} results` : `${results.length} 个结果` : props.workspace.name}</h2>{results.slice(0, visibleLimit).map((hit, index) => <button key={`${hit.path}-${hit.line}-${index}`} className="search-result" aria-current={selected?.path === hit.path && selected.line === hit.line && props.current?.path === hit.path ? 'location' : undefined} onClick={() => { setSelected({ path: hit.path, line: hit.line }); props.onOpen(hit.path, hit.line) }} title={hit.path}><strong>{hit.name}<span>:{hit.line}</span></strong><small><SearchHighlight text={hit.text} query={query} caseSensitive={caseSensitive} wholeWord={wholeWord} regex={regex} excerpt /></small></button>)}{query && !isSearching && !searchError && !results.length ? <p className="empty-hint">{t('没有匹配的内容。')}</p> : null}{results.length > visibleLimit ? <button type="button" className="text-button search-more" onClick={() => setVisibleLimit(value => value + 100)}>{t('显示更多')} ({visibleLimit} / {results.length})</button> : null}</>}
   </div>
 }

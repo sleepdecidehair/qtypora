@@ -18,6 +18,7 @@
   background: var(--color-surface);
 }
 .markdown-editor .cm-editor { height: 100%; outline: none; }
+:where(.cm-paragraph-first-line-indent) { text-indent: 2em; }
 .editor-mount { height: 100%; min-height: 0; }
 .editor-mount[hidden] { display: none; }
 .reading-view { height: 100%; min-height: 0; overflow: auto; outline: none; color: var(--color-text); background: var(--color-surface); font-family: var(--font-editor); caret-color: transparent; }
@@ -78,6 +79,8 @@
 .cm-fit-math-content { display: inline-block; width: max-content; position: absolute; left: 0; top: 0; transform-origin: left top; }
 .md-preview-error { color: var(--color-text-muted); white-space: pre-wrap; }
 .md-preview-muted, .cm-focus-muted { opacity: .38; }
+.cm-code-focus-muted, .cm-code-focus-muted span { color: var(--color-text-muted) !important; }
+.cm-focus-image-muted img { opacity: .2; }
 .markdown-editor .cm-line.cm-live-heading { font-weight: 650; color: var(--color-text); line-height: 1.35 !important; margin: 0; padding-top: var(--editor-space-md) !important; padding-bottom: var(--editor-space-md) !important; }
 .cm-live-heading-1 { font-size: var(--editor-heading-1); }
 .cm-live-heading-2 { font-size: var(--editor-heading-2); padding-bottom: var(--editor-space-sm) !important; }
@@ -144,3 +147,5 @@
 .editor-resource-message { position: absolute; inset: 0; display: grid; place-items: center; margin: 0; color: var(--color-text-muted); font-size: var(--font-size-body); }
 .editor-resource-help { flex-shrink: 0; margin: 0; color: var(--color-text-muted); font-size: var(--font-size-interface); line-height: 1.6; }
 @media (max-width: 600px) { .editor-resource-backdrop { padding: var(--space-2); } .editor-resource-viewer { padding: var(--space-2); } .editor-resource-title { width: 100%; } }
+
+.cm-live-underline { text-decoration: underline; }

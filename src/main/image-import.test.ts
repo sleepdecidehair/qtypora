@@ -10,6 +10,7 @@ import { importImageFiles, importImages, organizeImages, validateImageImport } f
 import { LocalStore } from './preferences'
 import { ResourceRegistry } from './resources'
 import { readImageFile } from './image-bytes'
+import { MAX_DOCUMENT_BYTES } from '../shared/document-size'
 
 const png = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aD1sAAAAASUVORK5CYII=', 'base64')
 let directory: string
@@ -27,6 +28,143 @@ beforeEach(async () => {
 afterEach(async () => { documents.dispose(); await fs.rm(directory, { recursive: true, force: true }) })
 
 describe('image receiving and resource policy', () => {
+  it('checks the final collision name and encoding budget before writing a clipboard image', async () => {
+    await fs.mkdir(path.join(directory, 'assets'))
+    await fs.writeFile(path.join(directory, 'assets', 'x.png'), 'existing')
+    const content = 'a'.repeat(MAX_DOCUMENT_BYTES - 19)
+    const request = { id: record.id, content, revision: 1, images: [{ name: 'x.png', bytes: png }], pasteBudget: { from: content.length, to: content.length, table: false, encoding: 'utf8' as const, lineEnding: record.lineEnding } }
+    await expect(importImages(request, documents, DEFAULT_IMAGE_OPTIONS, async () => null)).rejects.toThrow('16 MB')
+    expect(await fs.readdir(path.join(directory, 'assets'))).toEqual(['x.png'])
+    expect(await fs.readFile(path.join(directory, 'assets', 'x.png'), 'utf8')).toBe('existing')
+  })
+
+  it('rejects stale budgets and accepts a size-reducing replacement', async () => {
+    const content = 'a'.repeat(MAX_DOCUMENT_BYTES)
+    const request = { id: record.id, content, revision: 1, images: [{ name: 'x.png', bytes: png }], pasteBudget: { from: 0, to: 100, table: false, encoding: 'utf8' as const, lineEnding: record.lineEnding } }
+    await expect(importImages({ ...request, pasteBudget: { ...request.pasteBudget, encoding: 'utf8-bom' } }, documents, DEFAULT_IMAGE_OPTIONS, async () => null)).rejects.toThrow('编码')
+    const result = await importImages(request, documents, DEFAULT_IMAGE_OPTIONS, async () => null)
+    expect(result?.markdown).toBe('![x](assets/x.png)')
+    expect(await fs.readFile(result!.paths[0])).toEqual(png)
+    expect(() => validateImageImport({ ...request, pasteBudget: { ...request.pasteBudget, to: content.length + 1 } })).toThrow()
+  })
+
+  it('counts BOM and CRLF and rejects a changed newline target before writing', async () => {
+    const filename = path.join(directory, 'encoded.md')
+    await fs.writeFile(filename, Buffer.from('\ufefffirst\r\nsecond', 'utf8'))
+    record = await documents.open(filename, true)
+    const content = 'a'.repeat(MAX_DOCUMENT_BYTES - 22) + '\n'
+    const budget = { from: content.length, to: content.length, table: false, encoding: 'utf8-bom' as const, lineEnding: 'CRLF' as const }
+    const request = { id: record.id, content, revision: 1, images: [{ name: 'x.png', bytes: png }], pasteBudget: budget }
+    await expect(importImages({ ...request, pasteBudget: { ...budget, lineEnding: 'LF' } }, documents, DEFAULT_IMAGE_OPTIONS, async () => null)).rejects.toThrow('换行')
+    await expect(importImages(request, documents, DEFAULT_IMAGE_OPTIONS, async () => null)).rejects.toThrow('16 MB')
+    await expect(fs.access(path.join(directory, 'assets', 'x.png'))).rejects.toThrow()
+  })
+
+  it('counts the blank lines added around a keyboard image before creating it', async () => {
+    const content = 'a'.repeat(MAX_DOCUMENT_BYTES - 18)
+    const request = { id: record.id, content, revision: 1, images: [{ name: 'x.png', bytes: png }], pasteBudget: { from: content.length, to: content.length, table: false, block: true, encoding: 'utf8' as const, lineEnding: record.lineEnding } }
+    await expect(importImages(request, documents, DEFAULT_IMAGE_OPTIONS, async () => null)).rejects.toThrow('16 MB')
+    await expect(fs.access(path.join(directory, 'assets', 'x.png'))).rejects.toThrow()
+    await expect(fs.access(path.join(directory, 'assets'))).rejects.toThrow()
+    await expect(importImages(request, documents, { ...DEFAULT_IMAGE_OPTIONS, directory: 'media/images' }, async () => null)).rejects.toThrow('16 MB')
+    await expect(fs.access(path.join(directory, 'media'))).rejects.toThrow()
+  })
+
+  it('rejects symlink directories during budget planning', async () => {
+    await fs.mkdir(path.join(directory, 'assets'))
+    await fs.symlink(path.join(directory, 'user'), path.join(directory, 'assets', 'link'), 'dir')
+    const request = { ...snapshot(), images: [{ name: 'x.png', bytes: png }], pasteBudget: { from: 0, to: 0, table: false, encoding: 'utf8' as const, lineEnding: record.lineEnding } }
+    await expect(importImages(request, documents, { ...DEFAULT_IMAGE_OPTIONS, directory: 'assets/link' }, async () => null)).rejects.toMatchObject({ code: 'PERMISSION_DENIED' })
+    await expect(fs.access(path.join(directory, 'user', 'x.png'))).rejects.toThrow()
+  })
+
+  it('plans all image names before rejecting an oversized combined insertion', async () => {
+    await fs.mkdir(path.join(directory, 'assets'))
+    await fs.writeFile(path.join(directory, 'assets', 'x.png'), 'existing')
+    const content = 'a'.repeat(MAX_DOCUMENT_BYTES - 30)
+    const request = { id: record.id, content, revision: 1, images: [{ name: 'x.png', bytes: png }, { name: 'x.png', bytes: png }], pasteBudget: { from: content.length, to: content.length, table: false, block: true, encoding: 'utf8' as const, lineEnding: record.lineEnding } }
+    await expect(importImages(request, documents, DEFAULT_IMAGE_OPTIONS, async () => null)).rejects.toThrow('16 MB')
+    expect(await fs.readdir(path.join(directory, 'assets'))).toEqual(['x.png'])
+    expect(await fs.readFile(path.join(directory, 'assets', 'x.png'), 'utf8')).toBe('existing')
+    const replacement = await importImages({ ...request, pasteBudget: { ...request.pasteBudget, from: content.length - 100 } }, documents, DEFAULT_IMAGE_OPTIONS, async () => null)
+    expect(new Set(replacement?.paths).size).toBe(2)
+    expect(replacement?.markdown.split('\n\n')).toHaveLength(2)
+    expect(await fs.readFile(path.join(directory, 'assets', 'x.png'), 'utf8')).toBe('existing')
+  })
+
+  it('budgets the escaped table-cell representation before writing images', async () => {
+    const content = 'a'.repeat(MAX_DOCUMENT_BYTES - 46) + '\n| x |'
+    const request = { id: record.id, content, revision: 1, images: [{ name: 'x.png', bytes: png }, { name: 'y.png', bytes: png }], pasteBudget: { from: content.length, to: content.length, table: true, encoding: 'utf8' as const, lineEnding: record.lineEnding } }
+    await expect(importImages(request, documents, DEFAULT_IMAGE_OPTIONS, async () => null)).rejects.toThrow('16 MB')
+    await expect(fs.access(path.join(directory, 'assets'))).rejects.toThrow()
+  })
+
+  it('validates a virtual table cell and budgets its computed prefix and suffix', async () => {
+    const table = '| A | B | C |\n| --- | --- | --- |\n| only |'
+    const at = table.length
+    const budget = { from: at, to: at, table: true, virtualCell: { tableFrom: 0, tableTo: at, row: 1, column: 2 }, encoding: 'utf8' as const, lineEnding: record.lineEnding }
+    const request = { id: record.id, content: table, revision: 1, images: [{ name: 'x.png', bytes: png }], pasteBudget: budget }
+    await fs.mkdir(path.join(directory, 'assets'))
+    await fs.writeFile(path.join(directory, 'assets', 'x.png'), 'existing')
+    const result = await importImages(request, documents, DEFAULT_IMAGE_OPTIONS, async () => null)
+    expect(result?.markdown).toMatch(/^!\[x\]\(assets\/x-[a-f0-9]{8}\.png\)$/)
+    expect(await fs.readFile(path.join(directory, 'assets', 'x.png'), 'utf8')).toBe('existing')
+    await expect(importImages({ ...request, pasteBudget: { ...budget, virtualCell: { ...budget.virtualCell, row: 0 } } }, documents, DEFAULT_IMAGE_OPTIONS, async () => null)).rejects.toThrow()
+  })
+
+  it('includes virtual-cell syntax in the byte budget before creating a directory', async () => {
+    const table = '| A | B | C |\n| --- | --- | --- |\n| only |'
+    const head = 'a'.repeat(MAX_DOCUMENT_BYTES - table.length - 2 - 18) + '\n\n'
+    const content = head + table
+    const at = content.length
+    const request = { id: record.id, content, revision: 1, images: [{ name: 'x.png', bytes: png }], pasteBudget: { from: at, to: at, table: true, virtualCell: { tableFrom: head.length, tableTo: at, row: 1, column: 2 }, encoding: 'utf8' as const, lineEnding: record.lineEnding } }
+    await expect(importImages(request, documents, DEFAULT_IMAGE_OPTIONS, async () => null)).rejects.toThrow('16 MB')
+    await expect(fs.access(path.join(directory, 'assets'))).rejects.toThrow()
+  }, 30000)
+
+  it('accepts an independently verified virtual cell in a BOM and CRLF document', async () => {
+    const table = '| A | B |\n| --- | --- |\n| only |'
+    const filename = path.join(directory, 'virtual-crlf.md')
+    await fs.writeFile(filename, Buffer.from('\ufeff' + table.replaceAll('\n', '\r\n'), 'utf8'))
+    record = await documents.open(filename, true)
+    const at = table.length
+    const request = { id: record.id, content: table, revision: 0, images: [{ name: 'x.png', bytes: png }], pasteBudget: { from: at, to: at, table: true, virtualCell: { tableFrom: 0, tableTo: at, row: 1, column: 1 }, encoding: 'utf8-bom' as const, lineEnding: 'CRLF' as const } }
+    const result = await importImages(request, documents, DEFAULT_IMAGE_OPTIONS, async () => null)
+    expect(result?.markdown).toBe('![x](assets/x.png)')
+  })
+
+  it('independently verifies existing empty cell identity before writing', async () => {
+    const table = '| A | B |\n| --- | --- |\n|  | x |'
+    const at = table.lastIndexOf('|  |') + 2
+    const budget = { from: at, to: at, table: true, emptyCell: { tableFrom: 0, tableTo: table.length, row: 1, column: 0 }, encoding: 'utf8' as const, lineEnding: record.lineEnding }
+    const request = { id: record.id, content: table, revision: 1, images: [{ name: 'x.png', bytes: png }], pasteBudget: budget }
+    await expect(importImages({ ...request, pasteBudget: { ...budget, emptyCell: { ...budget.emptyCell, column: 1 } } }, documents, DEFAULT_IMAGE_OPTIONS, async () => null)).rejects.toThrow('单元格')
+    expect((await importImages(request, documents, DEFAULT_IMAGE_OPTIONS, async () => null))?.markdown).toBe('![x](assets/x.png)')
+  })
+
+  it('refuses either half of a table escape before creating image files', async () => {
+    const content = '| A | B |\n| --- | --- |\n| a\\|b | x |'
+    const at = content.indexOf('\\|')
+    const budget = { from: at, to: at + 1, table: true, encoding: 'utf8' as const, lineEnding: record.lineEnding }
+    const request = { id: record.id, content, revision: 1, images: [{ name: 'x.png', bytes: png }], pasteBudget: budget }
+    await expect(importImages(request, documents, DEFAULT_IMAGE_OPTIONS, async () => null)).rejects.toThrow('转义')
+    await expect(importImages({ ...request, pasteBudget: { ...budget, from: at + 1, to: at + 2 } }, documents, DEFAULT_IMAGE_OPTIONS, async () => null)).rejects.toThrow('转义')
+    await expect(fs.access(path.join(directory, 'assets'))).rejects.toThrow()
+    const result = await importImages({ ...request, pasteBudget: { ...budget, to: at + 2 } }, documents, DEFAULT_IMAGE_OPTIONS, async () => null)
+    expect(result?.markdown).toBe('![x](assets/x.png)')
+  })
+
+  it('rejects entity and grapheme interiors before creating image files', async () => {
+    const content = '| A | B |\n| --- | --- |\n| a&amp;b👩‍💻c | x |'
+    const entity = content.indexOf('&amp;'), emoji = content.indexOf('👩‍💻')
+    const budget = { from: entity + 1, to: entity + 4, table: true, encoding: 'utf8' as const, lineEnding: record.lineEnding }
+    const request = { id: record.id, content, revision: 1, images: [{ name: 'x.png', bytes: png }], pasteBudget: budget }
+    await expect(importImages(request, documents, DEFAULT_IMAGE_OPTIONS, async () => null)).rejects.toThrow('字符或实体')
+    await expect(importImages({ ...request, pasteBudget: { ...budget, from: emoji, to: emoji + 2 } }, documents, DEFAULT_IMAGE_OPTIONS, async () => null)).rejects.toThrow('字符或实体')
+    await expect(fs.access(path.join(directory, 'assets'))).rejects.toThrow()
+    const result = await importImages({ ...request, pasteBudget: { ...budget, from: entity, to: entity + 5 } }, documents, DEFAULT_IMAGE_OPTIONS, async () => null)
+    expect(result?.markdown).toBe('![x](assets/x.png)')
+  })
   it('bounds disk reads by the opened file size and refuses oversized local files', async () => {
     const filename = path.join(directory, 'bounded.png')
     await fs.writeFile(filename, png)

@@ -2,7 +2,7 @@ import * as fs from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import { atomicWrite, canonicalInside, encodedDocument, readMarkdown, safeName, saveMarkdown, searchMarkdown } from './files'
+import { atomicWrite, canonicalInside, encodedDocument, MAX_DOCUMENT_BYTES, readMarkdown, safeName, saveMarkdown, searchMarkdown } from './files'
 
 let directory: string
 beforeEach(async () => { directory = await fs.mkdtemp(path.join(os.tmpdir(), 'qtypora-files-')) })
@@ -40,6 +40,52 @@ describe('Markdown filesystem behavior', () => {
     expect(await fs.readFile(target)).toEqual(original)
     expect(saved.version).toBe(document.version)
     expect(saved.content).toBe('# 标题\n\n中文内容😀\n末尾\n')
+  })
+
+  for (const ending of ['LF', 'CRLF'] as const) {
+    it(`converts mixed endings to ${ending} only when explicitly requested, preserving BOM`, async () => {
+      const target = path.join(directory, `convert-${ending}.md`)
+      const original = Buffer.from('\ufefffirst\r\nsecond\nthird\rlast', 'utf8')
+      await fs.writeFile(target, original)
+      const document = await readMarkdown(target)
+      const saved = await saveMarkdown(document, target, document.content, true, undefined, ending)
+      expect(await fs.readFile(target)).toEqual(Buffer.from(`\ufefffirst${ending === 'LF' ? '\n' : '\r\n'}second${ending === 'LF' ? '\n' : '\r\n'}third${ending === 'LF' ? '\n' : '\r\n'}last`, 'utf8'))
+      expect(saved.lineEnding).toBe(ending)
+      expect(saved.version).not.toBe(document.version)
+    })
+  }
+
+  it('refuses explicit line-ending conversion when the disk changed', async () => {
+    const target = path.join(directory, 'conversion-conflict.md')
+    await fs.writeFile(target, 'first\r\nsecond')
+    const document = await readMarkdown(target)
+    await fs.writeFile(target, 'external\r\nchange')
+    await expect(saveMarkdown(document, target, document.content, true, undefined, 'LF')).rejects.toMatchObject({ code: 'CONFLICT' })
+    expect(await fs.readFile(target, 'utf8')).toBe('external\r\nchange')
+  })
+
+  it('accepts an encoded file at the limit and rejects an oversized CRLF/BOM save without replacing either destination', async () => {
+    const target = path.join(directory, 'size-source.md'), destination = path.join(directory, 'size-copy.md')
+    const original = Buffer.from('\ufefforiginal\r\n')
+    await fs.writeFile(target, original)
+    const document = await readMarkdown(target)
+    const atLimit = '\n'.repeat((MAX_DOCUMENT_BYTES - 4) / 2) + 'x'
+    await saveMarkdown(document, destination, atLimit, false)
+    expect((await fs.stat(destination)).size).toBe(MAX_DOCUMENT_BYTES)
+    const tooLarge = atLimit + 'x'
+    await expect(saveMarkdown(document, target, tooLarge, true)).rejects.toMatchObject({ code: 'UNSUPPORTED' })
+    await expect(saveMarkdown(document, destination, tooLarge, false)).rejects.toMatchObject({ code: 'UNSUPPORTED' })
+    expect(await fs.readFile(target)).toEqual(original)
+    expect((await fs.stat(destination)).size).toBe(MAX_DOCUMENT_BYTES)
+  })
+
+  it('does not write a converted file beyond the document size limit', async () => {
+    const target = path.join(directory, 'large-conversion.md')
+    const original = Buffer.alloc(8 * 1024 * 1024 + 1, 10)
+    await fs.writeFile(target, original)
+    const document = await readMarkdown(target)
+    await expect(saveMarkdown(document, target, document.content, true, undefined, 'CRLF')).rejects.toMatchObject({ code: 'UNSUPPORTED' })
+    expect(await fs.readFile(target)).toEqual(original)
   })
 
   it('removes only the encoding BOM and retains a literal leading U+FEFF content character', async () => {

@@ -25,6 +25,52 @@ function signal() {
 }
 
 describe('preference persistence transactions', () => {
+  it('defaults paragraph indentation off and persists explicit changes', async () => {
+    const { indentFirstLine: _indent, ...legacy } = DEFAULT_PREFERENCES
+    expect(validatePreferences(legacy).indentFirstLine).toBe(false)
+    expect(() => validatePreferences({ ...DEFAULT_PREFERENCES, indentFirstLine: 'true' })).toThrow('段落首行缩进')
+    await store.updatePreferences(validatePreferences({ ...DEFAULT_PREFERENCES, indentFirstLine: true }))
+    const reopened = new LocalStore(directory)
+    await reopened.load()
+    expect(reopened.preferences.indentFirstLine).toBe(true)
+  })
+  it('defaults legacy outlines to collapsible and persists flat mode', async () => {
+    const { outlineFlat: _flat, ...legacy } = DEFAULT_PREFERENCES
+    expect(validatePreferences(legacy).outlineFlat).toBe(false)
+    for (const value of [null, 1, 'true']) expect(() => validatePreferences({ ...DEFAULT_PREFERENCES, outlineFlat: value })).toThrow('大纲视图')
+    await store.updatePreferences(validatePreferences({ ...DEFAULT_PREFERENCES, outlineFlat: true }))
+    const reopened = new LocalStore(directory)
+    await reopened.load()
+    expect(reopened.preferences.outlineFlat).toBe(true)
+  })
+  it('defaults legacy status bar to visible and persists an explicit choice', async () => {
+    const { showStatusBar: _statusBar, ...legacy } = DEFAULT_PREFERENCES
+    expect(validatePreferences(legacy).showStatusBar).toBe(true)
+    for (const value of [null, 1, 'false']) expect(() => validatePreferences({ ...DEFAULT_PREFERENCES, showStatusBar: value })).toThrow('状态栏')
+    await store.updatePreferences(validatePreferences({ ...DEFAULT_PREFERENCES, showStatusBar: false }))
+    const reloaded = new LocalStore(directory)
+    await reloaded.load()
+    expect(reloaded.preferences.showStatusBar).toBe(false)
+  })
+  it('migrates old theme settings while validating and persisting theme identifiers', async () => {
+    const { typoraThemeId: _theme, ...legacy } = DEFAULT_PREFERENCES
+    expect(validatePreferences(legacy).typoraThemeId).toBe('')
+    for (const value of [null, 3, '../outside', 'theme/user', 'base.user', 'CON']) expect(() => validatePreferences({ ...DEFAULT_PREFERENCES, typoraThemeId: value })).toThrow('主题名称')
+    const next = validatePreferences({ ...DEFAULT_PREFERENCES, typoraThemeId: '纸白' })
+    await store.updatePreferences(next)
+    const reopened = new LocalStore(directory)
+    await reopened.load()
+    expect(reopened.preferences.typoraThemeId).toBe('纸白')
+    expect(reopened.preferences.lightTheme).toBe(DEFAULT_PREFERENCES.lightTheme)
+  })
+
+  it('defaults legacy native tab preference off and validates its type', () => {
+    const { macNativeTabs: _tabs, ...legacy } = DEFAULT_PREFERENCES
+    expect(validatePreferences(legacy).macNativeTabs).toBe(false)
+    expect(validatePreferences({ ...DEFAULT_PREFERENCES, macNativeTabs: true }).macNativeTabs).toBe(true)
+    for (const value of [null, 'true', 1]) expect(() => validatePreferences({ ...DEFAULT_PREFERENCES, macNativeTabs: value })).toThrow('原生标签')
+  })
+
   it('migrates old statistics settings and persists the chosen unit across store restarts', async () => {
     const { statisticsUnit: _unit, ...legacy } = DEFAULT_PREFERENCES
     expect(validatePreferences(legacy).statisticsUnit).toBe('words')

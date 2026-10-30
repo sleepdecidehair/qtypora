@@ -4,19 +4,23 @@ import { undoDepth, redoDepth, isolateHistory } from '@codemirror/commands'
 import { indentRange } from '@codemirror/language'
 import type { ClipboardContent, ContextMenuAction, ContextMenuRequest, Result } from '../../shared/contracts'
 import type { EditorAction, MarkdownEditorProps } from './types'
-import { sourceContextTarget, imageContextTarget, contextTargetUnchanged, contextObjectSource, isLocalResource, type ContextTarget } from './context-target'
+import { sourceContextTarget, imageContextTarget, tableLinkContextTarget, contextTargetUnchanged, contextObjectSource, isLocalResource, type ContextTarget } from './context-target'
 import { tableOperation } from './table-operations'
 import { parseTableSource, escapeCellInput } from './table-model'
-import { editLiveBlock, liveEditingBlock } from './live-blocks'
+import { editLiveBlock, liveBlocks, liveEditingBlock } from './live-blocks'
 import { renderMarkdown, isSafeLink } from './markdown'
 import { mathMarkup, diagramSvg, rasterizeDiagram, type ViewedResource } from './context-resource'
-import { focusLiveTableSelection } from './live-table'
+import { captureLiveTableImageTarget, focusLiveTableSelection, type LiveTableImageTarget } from './live-table'
 import { markdownOptionsFacet } from './markdown-config'
 import type { MarkdownOptions } from '../../shared/markdown-options'
 import { chooseImageSize, currentImageSize, imageSizeEdit } from './image-size'
 import { clipboardHtmlToMarkdown } from './clipboard-import'
+import { htmlPasteContext } from './html-paste-context'
+import { fitsPasteBudget } from './paste-budget'
+import { chooseAndInsertImages } from './choose-image'
 import { validSpellingWord } from '../../shared/spelling'
-import { richClipboardContent, richFragmentToRtf, richSelectionMarkdown } from './rich-clipboard'
+import { queueClipboardWrite } from './clipboard-write'
+import { assertFormattedCopySize, literalCodeHtml, literalCodeSelection, richClipboardContent, richFragmentToRtf, richSelectionMarkdown } from './rich-clipboard'
 
 interface ContextSnapshot {
   documentId: string
@@ -25,9 +29,10 @@ interface ContextSnapshot {
   target: ContextTarget
   selection: { from: number; to: number; text: string }
   spelling?: { from: number; to: number; word: string; suggestions: string[] }
+  tableImageTarget?: LiveTableImageTarget | null
 }
 type ApplyAction = (view: EditorView, action: EditorAction, value?: string) => boolean
-const formatActions = ['bold', 'italic', 'strike', 'inline-code', 'clear-format', 'heading-1', 'heading-2', 'heading-3', 'heading-4', 'heading-5', 'heading-6', 'paragraph', 'quote', 'ordered-list', 'bullet-list', 'task-list', 'code', 'math', 'table', 'link'] as const
+const formatActions = ['bold', 'italic', 'underline', 'strike', 'inline-code', 'clear-format', 'heading-1', 'heading-2', 'heading-3', 'heading-4', 'heading-5', 'heading-6', 'paragraph', 'quote', 'ordered-list', 'bullet-list', 'task-list', 'code', 'math', 'table', 'link'] as const
 
 function resultValue<T>(result: Result<T>): T {
   if (!result.ok) throw new Error(result.error.message)
@@ -80,6 +85,9 @@ export function contextMenuRequest(view: EditorView, target: ContextTarget, hasS
 export function installEditorContext(view: EditorView, getProps: () => MarkdownEditorProps, applyAction: ApplyAction, onError: (message: string) => void, showResource: (resource: ViewedResource) => void): () => void {
   let requestId = 0
   let disposed = false
+  let tableLinkHit: { cell: HTMLElement; doc: EditorView['state']['doc']; x: number; y: number; hrefs: string[]; index: number } | null = null
+  let tableTextHit: { cell: HTMLElement; doc: EditorView['state']['doc']; x: number; y: number; offset: number } | null = null
+  let tablePointer = false
   function unchanged(snapshot: ContextSnapshot): boolean {
     return !disposed && getProps().documentId === snapshot.documentId && getProps().revision === snapshot.revision && view.state.doc.toString() === snapshot.content && contextTargetUnchanged(snapshot.target, view.state.doc.toString())
   }
@@ -92,8 +100,8 @@ export function installEditorContext(view: EditorView, getProps: () => MarkdownE
   }
   function focus(): void { if (!focusLiveTableSelection(view)) view.focus() }
   async function write(snapshot: ContextSnapshot, content: ClipboardContent): Promise<void> {
-    requireCurrent(snapshot)
-    resultValue(await getProps().desktopApi.writeClipboard(content))
+    const api = getProps().desktopApi
+    await queueClipboardWrite(api, content, () => requireCurrent(snapshot))
   }
   async function execute(action: ContextMenuAction, snapshot: ContextSnapshot, cachedSvg: string | null): Promise<void> {
     requireCurrent(snapshot)
@@ -116,12 +124,20 @@ export function installEditorContext(view: EditorView, getProps: () => MarkdownE
       view.focus(); return
     }
     const select = (): void => { view.dispatch({ selection: EditorSelection.range(selection.from, selection.to) }) }
-    const clipboardSelection = (withTheme = true): ClipboardContent => props.mode === 'hybrid' ? richClipboardContent(richSelectionMarkdown(view.state, selection.from, selection.to), markdownOptions, view.contentDOM, withTheme, props.locale) : { text: selection.text }
+    const codeText = (): string | null => props.mode === 'hybrid' ? literalCodeSelection(view.state, selection.from, selection.to) : null
+    const clipboardSelection = (withTheme = true): ClipboardContent => {
+      if (props.mode !== 'hybrid') return { text: selection.text }
+      const content = richClipboardContent(richSelectionMarkdown(view.state, selection.from, selection.to), markdownOptions, view.contentDOM, withTheme, props.locale, codeText())
+      if (markdownOptions.copyPlainMarkdown) content.text = selection.text
+      return content
+    }
     if (action === 'copy') { await write(snapshot, clipboardSelection()); return }
     if (action === 'copy-without-theme') { await write(snapshot, clipboardSelection(false)); return }
     if (action === 'copy-markdown') { await write(snapshot, { text: selection.text }); return }
-    if (action === 'copy-plain') { await write(snapshot, { text: plainText(selection.text, markdownOptions) }); return }
-    if (action === 'copy-html') { const html = renderMarkdown(selection.text, markdownOptions); await write(snapshot, { text: html, html }); return }
+    if (action === 'copy-plain' || action === 'copy-html') assertFormattedCopySize(selection.to - selection.from, props.locale)
+    const renderedSelection = (): string => props.mode === 'hybrid' ? richSelectionMarkdown(view.state, selection.from, selection.to) : selection.text
+    if (action === 'copy-plain') { const literal = codeText(); await write(snapshot, { text: literal ?? plainText(renderedSelection(), markdownOptions) }); return }
+    if (action === 'copy-html') { const literal = codeText(); const html = literal !== null ? literalCodeHtml(literal) : renderMarkdown(renderedSelection(), markdownOptions); await write(snapshot, { text: html, html }); return }
     if (action === 'copy-table') { await write(snapshot, { text: target.source }); return }
     if (action === 'copy-code' || action === 'copy-math' || action === 'copy-diagram') { await write(snapshot, { text: contextObjectSource(target) }); return }
     if (action === 'copy-mathml') { await write(snapshot, { text: await mathMarkup(target) }); return }
@@ -147,20 +163,38 @@ export function installEditorContext(view: EditorView, getProps: () => MarkdownE
       view.dispatch({ changes: { from: selection.from, to: selection.to, insert: '' }, selection: { anchor: selection.from }, userEvent: 'delete.cut' }); focus(); return
     }
     if (action === 'paste' || action === 'paste-plain') {
+      const editorSelection = view.state.selection
+      const requirePasteCurrent = () => {
+        requireEditable(snapshot)
+        const current = getProps()
+        const selectionUnchanged = view.state.selection.eq(editorSelection) ||
+          (selection.from === selection.to && view.state.selection.ranges.length === 1 && view.state.selection.main.empty && view.state.selection.main.head === selection.from)
+        if (current.mode !== props.mode || current.encoding !== props.encoding || current.lineEnding !== props.lineEnding || !selectionUnchanged) throw new Error('文档或选区已变化，未粘贴文本。')
+        return current
+      }
       let text: string
       if (action === 'paste-plain') text = resultValue(await api.readClipboardText())
       else {
         const clipboard = resultValue(await api.readClipboard())
-        requireEditable(snapshot)
+        requirePasteCurrent()
         if (clipboard.images?.length) {
-          const imported = resultValue(await api.importImages({ id: snapshot.documentId, content: snapshot.content, revision: snapshot.revision, images: clipboard.images }))
+          const pasteBudget = !props.imageOptions.uploadOnInsert ? { from: selection.from, to: selection.to, table: target.kind === 'table', encoding: props.encoding, lineEnding: props.lineEnding } : undefined
+          const imported = resultValue(await api.importImages({ id: snapshot.documentId, content: snapshot.content, revision: snapshot.revision, images: clipboard.images, ...(pasteBudget ? { pasteBudget } : {}) }))
           if (!imported) return
           text = imported.markdown
-        } else text = props.mode === 'hybrid' && props.imageOptions.smartPaste && clipboard.html ? clipboardHtmlToMarkdown(clipboard.html) ?? clipboard.text : clipboard.text
+        } else if (props.mode === 'hybrid' && props.imageOptions.smartPaste && clipboard.html) {
+          const selected = EditorSelection.single(selection.from, selection.to)
+          const targetContext = htmlPasteContext(view.state, clipboard.text, selected)
+          if (targetContext.kind === 'unsafe') throw new Error('无法安全粘贴到该代码位置，请调整选区或内容后重试。')
+          if (targetContext.kind === 'code' && !clipboard.text) throw new Error('剪贴板没有可粘贴的纯文本。')
+          text = targetContext.kind === 'code' ? targetContext.text : clipboardHtmlToMarkdown(clipboard.html) ?? clipboard.text
+        } else text = clipboard.text
       }
-      requireEditable(snapshot)
+      const current = requirePasteCurrent()
       const insert = target.kind === 'table' ? escapeCellInput(text) : text
-      view.dispatch({ changes: { from: selection.from, to: selection.to, insert }, selection: { anchor: selection.from + insert.length }, userEvent: 'input.paste', annotations: isolateHistory.of('full') }); focus(); return
+      const changes = view.state.changes({ from: selection.from, to: selection.to, insert })
+      if (!fitsPasteBudget(view.state.doc, changes.apply(view.state.doc), current.encoding, current.lineEnding)) throw new Error('粘贴后的文件将超过 16 MB，未执行粘贴。')
+      view.dispatch({ changes, selection: { anchor: changes.mapPos(selection.from, 1) }, userEvent: 'input.paste', annotations: isolateHistory.of('full') }); focus(); return
     }
     if (action.startsWith('table-') && target.kind === 'table') {
       const changes = tableOperation(target.source, target.from, target.row || 0, target.column || 0, action)
@@ -198,7 +232,12 @@ export function installEditorContext(view: EditorView, getProps: () => MarkdownE
       const changes = outcome.source === null ? { from: target.from, to: target.to, insert: '' } : { from: target.address.from, to: target.address.to, insert: outcome.source.replace(/\\/g, '/').replace(/[ <>()[\]]/g, encodeURIComponent) }
       view.dispatch({ changes, userEvent: 'input.image-resource' }); focus(); return
     }
-    if (action === 'insert-image') { const markdown = resultValue(await api.insertImage(snapshot.documentId)); if (markdown) { requireEditable(snapshot); select(); applyAction(view, 'image', markdown) }; return }
+    if (action === 'insert-image') {
+      if (snapshot.tableImageTarget === null) throw new Error('无法安全插入图片，请先在表格单元格中选择位置。')
+      const table = snapshot.tableImageTarget
+      await chooseAndInsertImages(view, getProps, table ? { ...table.range, isCurrent: table.isCurrent, virtualCell: table.virtualCell } : selection)
+      return
+    }
     select()
     if (action === 'horizontal-rule') applyAction(view, 'rule')
     else if (action === 'undo' || action === 'redo' || formatActions.includes(action as typeof formatActions[number])) applyAction(view, action as EditorAction)
@@ -207,6 +246,11 @@ export function installEditorContext(view: EditorView, getProps: () => MarkdownE
     if (event.defaultPrevented || getProps().mode === 'reading' || !(event.target instanceof Element) || !view.contentDOM.contains(event.target)) return
     event.preventDefault()
     const props = getProps(), element = event.target
+    const finish = props.closeCoordinator.start()
+    if (!finish) { onError('文档正在关闭，操作未执行。'); return }
+    try { await runContextMenu(event, props, element) } finally { finish() }
+  }
+  async function runContextMenu(event: MouseEvent, props: MarkdownEditorProps, element: Element): Promise<void> {
     const metadata = element.closest<HTMLElement>('[data-source-from]')
     const coordinates = { x: event.clientX, y: event.clientY }
     let pos = metadata ? Number(metadata.dataset.sourceFrom) : view.posAtCoords(coordinates)
@@ -219,18 +263,46 @@ export function installEditorContext(view: EditorView, getProps: () => MarkdownE
     }
     if (pos === null || !Number.isFinite(pos)) return
     let target = sourceContextTarget(view.state, pos)
+    const cell = element.closest<HTMLElement>('th[data-row],td[data-row]')
+    if (cell) {
+      const table = cell.closest<HTMLElement>('[data-testid="live-table"]')
+      const block = table && liveBlocks(view.state).find(item => item.kind === 'table' && item.from === Number(table.dataset.sourceFrom))
+      if (block) {
+        target = { kind: 'table', from: block.from, to: block.to, source: block.source, row: Number(cell.dataset.row), column: Number(cell.dataset.column) }
+        // Chromium retargets pointer events inside contenteditable cells to the cell.
+        const hit = tableLinkHit
+        tableLinkHit = null
+        if (hit && hit.cell === cell && hit.doc === view.state.doc && hit.x === event.clientX && hit.y === event.clientY) target = tableLinkContextTarget(view.state, Number(cell.dataset.sourceFrom), Number(cell.dataset.sourceTo), hit.hrefs, hit.index) || target
+        if (target.kind === 'table') {
+          const from = Number(cell.dataset.sourceFrom), to = Number(cell.dataset.sourceTo)
+          const text = tableTextHit
+          tableTextHit = null
+          const pointer = tablePointer
+          tablePointer = false
+          const selection = cell.ownerDocument.getSelection()
+          const offset = text && text.cell === cell && text.doc === view.state.doc && text.x === event.clientX && text.y === event.clientY ? text.offset
+            : !pointer && selection?.isCollapsed && selection.anchorNode === cell.firstChild ? selection.anchorOffset : -1
+          if (Number.isInteger(from) && Number.isInteger(to) && from >= 0 && to <= view.state.doc.length && cell.childNodes.length === 1 && cell.firstChild?.nodeType === Node.TEXT_NODE && cell.textContent === view.state.doc.sliceString(from, to) && offset >= 0 && offset <= to - from) {
+            const candidate = sourceContextTarget(view.state, from + offset)
+            if (candidate.kind === 'link' && candidate.from >= from && candidate.to <= to && from + offset >= candidate.from && from + offset <= candidate.to) target = candidate
+          }
+        }
+      }
+      tablePointer = false
+      tableTextHit = null
+      tableLinkHit = null
+    }
     const image = element.closest<HTMLImageElement>('img[data-original-resource]')
     if (image) {
       const firstLine = Number(metadata?.dataset.sourceLine) || view.state.doc.lineAt(pos).number
       const lastLine = Number(metadata?.dataset.sourceEnd) || firstLine
       target = imageContextTarget(view.state, image.dataset.originalResource!, view.state.doc.line(Math.min(firstLine, view.state.doc.lines)).from, view.state.doc.line(Math.min(lastLine, view.state.doc.lines)).to) || target
     }
-    const cell = element.closest<HTMLElement>('th[data-row],td[data-row]')
     if (cell && target.kind === 'table') { target.row = Number(cell.dataset.row); target.column = Number(cell.dataset.column) }
     const current = view.state.selection.main
     const from = pos >= current.from && pos <= current.to ? current.from : pos
     const to = pos >= current.from && pos <= current.to ? current.to : pos
-    const snapshot: ContextSnapshot = { documentId: props.documentId, revision: props.revision, content: view.state.doc.toString(), target, selection: { from, to, text: view.state.doc.sliceString(from, to) } }
+    const snapshot: ContextSnapshot = { documentId: props.documentId, revision: props.revision, content: view.state.doc.toString(), target, selection: { from, to, text: view.state.doc.sliceString(from, to) }, ...(cell ? { tableImageTarget: captureLiveTableImageTarget(view, cell) } : {}) }
     const id = ++requestId
     try {
       let cachedSvg: string | null = null
@@ -259,6 +331,36 @@ export function installEditorContext(view: EditorView, getProps: () => MarkdownE
     } catch (error) { if (!disposed) onError(error instanceof Error ? error.message : '右键操作失败，请重试。') }
   }
   const listener = (event: MouseEvent): void => { void contextmenu(event) }
+  const captureTableLink = (event: MouseEvent): void => {
+    tableLinkHit = null
+    tableTextHit = null
+    tablePointer = false
+    if (event.button !== 2) return
+    tablePointer = true
+    const hit = view.dom.ownerDocument.elementFromPoint(event.clientX, event.clientY)
+    const cell = hit?.closest<HTMLElement>('th[data-row],td[data-row]')
+    const anchor = hit?.closest<HTMLAnchorElement>('a[href]')
+    if (!cell || !view.contentDOM.contains(cell)) return
+    if (!anchor || !cell.contains(anchor)) {
+      const range = cell.ownerDocument.caretRangeFromPoint(event.clientX, event.clientY)
+      if (range?.startContainer === cell.firstChild) tableTextHit = { cell, doc: view.state.doc, x: event.clientX, y: event.clientY, offset: range.startOffset }
+      return
+    }
+    const links = Array.from(cell.querySelectorAll<HTMLAnchorElement>('a[href]'))
+    tableLinkHit = { cell, doc: view.state.doc, x: event.clientX, y: event.clientY, hrefs: links.map(link => link.getAttribute('href') || ''), index: links.indexOf(anchor) }
+  }
+  const tableKeyboardMenu = (event: KeyboardEvent): void => {
+    if (!(event.key === 'ContextMenu' || (event.key === 'F10' && event.shiftKey)) || !(event.target instanceof HTMLElement)) return
+    const cell = event.target.closest<HTMLElement>('th[data-row],td[data-row]')
+    if (!cell || !view.contentDOM.contains(cell)) return
+    event.preventDefault()
+    tablePointer = false
+    tableLinkHit = null
+    tableTextHit = null
+    cell.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true }))
+  }
+  view.dom.addEventListener('mousedown', captureTableLink, true)
+  view.dom.addEventListener('keydown', tableKeyboardMenu, true)
   view.dom.addEventListener('contextmenu', listener, true)
-  return () => { disposed = true; requestId++; view.dom.removeEventListener('contextmenu', listener, true) }
+  return () => { disposed = true; requestId++; view.dom.removeEventListener('mousedown', captureTableLink, true); view.dom.removeEventListener('keydown', tableKeyboardMenu, true); view.dom.removeEventListener('contextmenu', listener, true) }
 }

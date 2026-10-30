@@ -1,6 +1,6 @@
 import type { EditorState } from '@codemirror/state'
-import type { SyntaxNode } from '@lezer/common'
-import { syntaxTree } from '@codemirror/language'
+import type { SyntaxNode, Tree } from '@lezer/common'
+import { ensureSyntaxTree } from '@codemirror/language'
 import type { ContextMenuKind } from '../../shared/contracts'
 import { getMarkdownParser } from './markdown'
 import { markdownOptionsFacet } from './markdown-config'
@@ -18,7 +18,7 @@ export interface ContextTarget {
   column?: number
 }
 
-function referenceImageTarget(state: EditorState, node: SyntaxNode): ContextTarget | null {
+function referenceImageTarget(state: EditorState, node: SyntaxNode, tree: Tree): ContextTarget | null {
   const parser = getMarkdownParser(state.facet(markdownOptionsFacet))
   const source = state.doc.sliceString(node.from, node.to)
   const label = node.getChild('LinkLabel')
@@ -27,7 +27,7 @@ function referenceImageTarget(state: EditorState, node: SyntaxNode): ContextTarg
   const normalize = (value: string) => parser.utils.unescapeAll(value).trim().replace(/\s+/g, ' ').toUpperCase()
   const key = normalize(explicit || implicit)
   let address: ContextTarget['address']
-  syntaxTree(state).iterate({ enter(definition) {
+  tree.iterate({ enter(definition) {
     if (address || definition.name !== 'LinkReference') return
     const name = definition.node.getChild('LinkLabel'), url = definition.node.getChild('URL')
     if (!name || !url || normalize(state.doc.sliceString(name.from + 1, name.to - 1)) !== key) return
@@ -43,9 +43,30 @@ function referenceImageTarget(state: EditorState, node: SyntaxNode): ContextTarg
   return { kind: 'image', from: node.from, to: node.to, source, address, imageText: { alt: parser.renderer.renderInlineAsText(image.children || [], parser.options, environment), title: image.attrGet('title') || '' } }
 }
 
-export function sourceContextTarget(state: EditorState, position: number): ContextTarget {
+function referenceLinkTarget(state: EditorState, node: SyntaxNode): ContextTarget | null {
+  // Parsing is bounded as in the block-context fallback. The Markdown parser
+  // resolves duplicate, escaped and implicit reference labels authoritatively.
+  if (state.doc.length > 200000) return null
+  const parser = getMarkdownParser(state.facet(markdownOptionsFacet))
+  const source = state.doc.sliceString(node.from, node.to)
+  const environment = {}
+  parser.parse(state.doc.toString(), environment)
+  const children = parser.parseInline(source, environment).flatMap(token => token.children || [])
+  const link = children[0]?.type === 'link_open' && children.at(-1)?.type === 'link_close' ? children[0] : null
+  const href = link?.attrGet('href')
+  if (href == null) return null
+  // Link menu operations only read value; never edit a shared definition.
+  return { kind: 'link', from: node.from, to: node.to, source, address: { from: node.from, to: node.to, value: href } }
+}
+
+export function sourceContextTarget(state: EditorState, position: number, tree?: Tree): ContextTarget {
   const pos = Math.max(0, Math.min(state.doc.length, position))
-  let node = syntaxTree(state).resolveInner(pos, 1)
+  const completeTree = tree ?? ensureSyntaxTree(state, state.doc.length, 50)
+  if (!completeTree) {
+    const line = state.doc.lineAt(pos)
+    return { kind: 'editor', from: line.from, to: line.to, source: line.text }
+  }
+  let node = completeTree.resolveInner(pos, 1)
   while (node.parent) {
     if (node.name === 'InlineCode') {
       const source = state.doc.sliceString(node.from, node.to)
@@ -60,7 +81,11 @@ export function sourceContextTarget(state: EditorState, position: number): Conte
         return { kind: node.name === 'Image' ? 'image' : 'link', from: node.from, to: node.to, source: state.doc.sliceString(node.from, node.to), address: { from, to, value: state.doc.sliceString(from, to).replace(/\\([\\() ])/g, '$1') } }
       }
       if (node.name === 'Image') {
-        const reference = referenceImageTarget(state, node)
+        const reference = referenceImageTarget(state, node, completeTree)
+        if (reference) return reference
+      }
+      if (node.name === 'Link') {
+        const reference = referenceLinkTarget(state, node)
         if (reference) return reference
       }
     }
@@ -107,13 +132,35 @@ export function contextTargetUnchanged(target: ContextTarget, content: string): 
 
 export function contextObjectSource(target: ContextTarget): string { return target.body?.text ?? target.source }
 
-export function imageContextTarget(state: EditorState, source: string, from: number, to: number): ContextTarget | null {
-  let match: ContextTarget | null = null
+/** Match every rendered cell link before trusting a clicked link's ordinal. */
+export function tableLinkContextTarget(state: EditorState, from: number, to: number, hrefs: string[], index: number): ContextTarget | null {
+  if (!Number.isInteger(from) || !Number.isInteger(to) || from < 0 || to > state.doc.length || from > to || !Number.isInteger(index) || index < 0 || index >= hrefs.length) return null
+  const tree = ensureSyntaxTree(state, state.doc.length, 50)
+  if (!tree) return null
+  const targets: ContextTarget[] = []
+  tree.iterate({ from, to, enter(node) {
+    if (node.name !== 'Link' || node.from < from || node.to > to) return
+    const target = sourceContextTarget(state, node.from + 1, tree)
+    if (target.kind === 'link' && target.from === node.from && target.to === node.to && target.address) targets.push(target)
+  } })
+  if (targets.length !== hrefs.length) return null
   const parser = getMarkdownParser(state.facet(markdownOptionsFacet))
   const normalize = (value: string) => parser.normalizeLink(parser.utils.unescapeAll(value))
-  syntaxTree(state).iterate({ from, to, enter: (node) => {
+  if (targets.some((target, i) => normalize(target.address!.value) !== normalize(hrefs[i]))) return null
+  return targets[index]
+}
+
+export function imageContextTarget(state: EditorState, source: string, from: number, to: number): ContextTarget | null {
+  let match: ContextTarget | null = null
+  // Reference definitions may be after the visible image. A published tree can be
+  // partial under load, so resolve against one bounded complete snapshot.
+  const tree = ensureSyntaxTree(state, state.doc.length, 50)
+  if (!tree) return null
+  const parser = getMarkdownParser(state.facet(markdownOptionsFacet))
+  const normalize = (value: string) => parser.normalizeLink(parser.utils.unescapeAll(value))
+  tree.iterate({ from, to, enter: (node) => {
     if (match || node.name !== 'Image') return
-    const candidate = sourceContextTarget(state, node.from + 2)
+    const candidate = sourceContextTarget(state, node.from + 2, tree)
     if (candidate.kind === 'image' && candidate.address && normalize(candidate.address.value) === normalize(source)) match = candidate
   } })
   if (!match) {

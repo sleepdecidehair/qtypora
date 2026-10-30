@@ -8,7 +8,7 @@ import { createMenuTemplate, type DesktopMenuItem, type MenuActions } from './me
 import { contextMenuTemplate } from './context-menu'
 import { diagnosticsText, helpText } from './app-help'
 
-const actions: MenuActions = { command: () => undefined, openRecent: () => undefined, exit: () => undefined, about: () => undefined }
+const actions: MenuActions = { command: () => undefined, openRecent: () => undefined, minimizeAll: () => undefined, exit: () => undefined, about: () => undefined }
 function flatten(menu: DesktopMenuItem[]): DesktopMenuItem[] { return menu.flatMap(item => [item, ...flatten(item.submenu ?? [])]) }
 
 describe('localized desktop application', () => {
@@ -32,6 +32,10 @@ describe('localized desktop application', () => {
     const menu = flatten(createMenuTemplate('win32', false, [recent], actions, { locale: 'en-US' }))
     expect(menu.map(item => item.label)).toContain('File(&F)')
     expect(menu.map(item => item.label)).toContain('Save')
+    const macMenu = flatten(createMenuTemplate('darwin', false, [], actions, { locale: 'en-US' }))
+    expect(macMenu.find(item => item.role === 'zoom')?.label).toBe('Zoom')
+    expect(macMenu.some(item => item.label === 'Minimize All')).toBe(true)
+    expect(macMenu.find(item => item.role === 'front')?.label).toBe('Bring All to Front')
     expect(menu.map(item => item.label)).toContain('/tmp/中文&&草稿.md')
     const labels = menu.map(item => item.label).filter((label): label is string => Boolean(label) && label !== '/tmp/中文&&草稿.md')
     expect(labels.filter(label => /[\u4e00-\u9fff]/.test(label))).toEqual([])

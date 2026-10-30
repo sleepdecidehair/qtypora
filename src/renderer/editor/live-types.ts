@@ -11,6 +11,9 @@ export interface LiveOptions {
   readOnly: boolean
   resolveResource: (source: string) => Promise<string>
   onLinkOpen: (target: string) => void
+  onError?: (message: string) => void
+  onTableImagePaste?: (view: import('@codemirror/view').EditorView, files: File[], range: { from: number; to: number }, isCurrent: () => boolean, virtualCell?: { tableFrom: number; tableTo: number; row: number; column: number; prefix: string }) => void
+  onTableHtmlPaste?: (view: import('@codemirror/view').EditorView, html: string, target: import('./live-table').LiveTableImageTarget) => void
 }
 
 export interface LiveBlock {

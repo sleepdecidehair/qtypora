@@ -5,6 +5,11 @@ export const editorLocale = Facet.define<AppLocale, AppLocale>({ combine: values
 
 // Translate only fixed application UI labels, never document or clipboard contents.
 const english: Record<string, string> = {
+  '剪贴板没有可粘贴到表格的文本，原内容已保留。': 'The clipboard has no text that can be pasted into the table. The original content was preserved.',
+  '无法安全粘贴 HTML 到此表格选区。': 'HTML cannot be pasted safely into this table selection.',
+  '无法安全粘贴图片到此表格选区，请使用插入图片。': 'Images cannot be pasted safely into this table selection. Use Insert Image instead.',
+  '文档解析尚未完成，无法安全复制格式内容，请稍后重试或复制为 Markdown。': 'The document has not finished parsing, so formatted content cannot be copied safely. Try again or copy as Markdown.',
+  '文档解析尚未完成，图片处理未执行，请稍后重试。': 'The document has not finished parsing. No images were processed; please try again.',
   'YAML 前置信息': 'YAML front matter', '前置信息超过 64 KB，请在源码模式编辑。': 'Front matter exceeds 64 KB. Edit it in source mode.',
   'YAML 语法无效，原文已保留。': 'Invalid YAML syntax; the source has been preserved.', 'YAML 包含不支持的别名或无效数据，原文已保留。': 'YAML contains unsupported aliases or invalid data; the source has been preserved.',
   '注意': 'Note', '提示': 'Tip', '重要': 'Important', '警告': 'Warning', '小心': 'Caution',
@@ -16,6 +21,8 @@ const english: Record<string, string> = {
   '文档已改变，未插入图片。请重新粘贴或拖放。': 'The document changed; images were not inserted. Paste or drop them again.',
   '图片已保存，文档已改变，未插入引用。请重新插入图片。': 'The images were saved, but the document changed and their references were not inserted. Insert the images again.',
   '文档已变化，未粘贴文本。': 'The document changed; text was not pasted.',
+  '文档正在关闭，操作未执行。': 'The document is closing; the operation was not performed.',
+  '关闭期间文档发生变化，请重试。': 'The document changed while closing. Please try again.',
   '图片尺寸必须为 1–10000 的整数，留空表示自动。': 'Image dimensions must be integers from 1 to 10000; leave blank for automatic size.', '图片对齐方式无效。': 'Invalid image alignment.',
   '无法生成图表，请先检查图表源码。': 'Could not generate the diagram. Check its source.', '图表缺少有效尺寸。': 'The diagram has no valid dimensions.', '图表尺寸无效。': 'Invalid diagram dimensions.', '无法创建图片画布。': 'Could not create an image canvas.',
   '公式导出失败：{message}': 'Formula export failed: {message}', '图表导出失败：{message}': 'Diagram export failed: {message}', '图片导出失败：{message}': 'Image export failed: {message}', '图片导出失败（{resource}）：{message}': 'Image export failed ({resource}): {message}', '未知错误': 'Unknown error', '资源无法读取': 'Resource could not be read',

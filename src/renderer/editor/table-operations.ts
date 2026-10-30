@@ -1,9 +1,11 @@
 import type { ContextMenuAction } from '../../shared/contracts'
-import { escapeCellInput, parseTableSource } from './table-model'
+import { escapeCellInput, missingTableCellSource, parseTableSource } from './table-model'
 
 export interface SourcePatch { from: number; to: number; insert: string }
 
 function rowLayout(line: string): { from: number; to: number }[] {
+  // CR is part of the CRLF separator, not the final cell's contents.
+  if (line.endsWith('\r')) line = line.slice(0, -1)
   const pipes: number[] = []
   for (let index = 0; index < line.length; index++) {
     if (line[index] !== '|') continue
@@ -31,24 +33,32 @@ export function tableOperation(source: string, offset: number, row: number, colu
   if (action === 'table-row-delete') {
     // A header and at least one body row remain; deleting the entire table is explicit.
     if (row === 0 || model.rows <= 2) return null
-    const from = starts[sourceRow] - 1
-    return [{ from, to: starts[sourceRow] + lines[sourceRow].length, insert: '' }]
+    const from = starts[sourceRow] - (lines[sourceRow - 1].endsWith('\r') ? 2 : 1)
+    const to = starts[sourceRow] + lines[sourceRow].length - (lines[sourceRow].endsWith('\r') ? 1 : 0)
+    return [{ from, to, insert: '' }]
   }
   if (action === 'table-row-before' || action === 'table-row-after') {
     const emptyRow = `| ${Array.from({ length: model.columns }, () => ' ').join(' | ')} |`
+    const newline = lines[Math.min(sourceRow, lines.length - 2)]?.endsWith('\r') ? '\r\n' : '\n'
+    const header = lines[0].endsWith('\r') ? lines[0].slice(0, -1) : lines[0]
     if (row === 0 && action === 'table-row-before') return [
-      { from: offset, to: offset + lines[0].length, insert: emptyRow },
-      { from: starts[2] ?? offset + source.length, to: starts[2] ?? offset + source.length, insert: starts[2] === undefined ? `\n${lines[0]}` : `${lines[0]}\n` },
+      { from: offset, to: offset + header.length, insert: emptyRow },
+      { from: starts[2] ?? offset + source.length, to: starts[2] ?? offset + source.length, insert: starts[2] === undefined ? `${newline}${header}` : `${header}${newline}` },
     ]
     const index = row === 0 ? 2 : sourceRow + (action === 'table-row-after' ? 1 : 0)
-    return index >= lines.length ? [{ from: offset + source.length, to: offset + source.length, insert: `\n${emptyRow}` }] : [{ from: starts[index], to: starts[index], insert: `${emptyRow}\n` }]
+    return index >= lines.length ? [{ from: offset + source.length, to: offset + source.length, insert: `${newline}${emptyRow}` }] : [{ from: starts[index], to: starts[index], insert: `${emptyRow}${newline}` }]
   }
   const patches: SourcePatch[] = []
   for (let index = 0; index < lines.length; index++) {
     if (!lines[index].trim()) continue
     const cells = rowLayout(lines[index])
     const cell = cells[column]
-    if (!cell) return null
+    // A short body row has implicit empty trailing cells. Leaving it short
+    // preserves its source while adding, deleting or aligning such a column.
+    if (!cell) {
+      if (index > 1 && (action.startsWith('table-column-') || action.startsWith('table-align-'))) continue
+      return null
+    }
     if (action.startsWith('table-align-')) {
       if (index !== 1) continue
       const raw = lines[index].slice(cell.from, cell.to)
@@ -56,14 +66,34 @@ export function tableOperation(source: string, offset: number, row: number, colu
       patches.push({ from: starts[index] + cell.from, to: starts[index] + cell.to, insert: `${raw.match(/^\s*/)?.[0] || ''}${marker}${raw.match(/\s*$/)?.[0] || ''}` })
     } else if (action === 'table-column-before' || action === 'table-column-after') {
       const after = action === 'table-column-after'
-      const at = after ? cell.to : cell.from
+      const at = after ? cell.to - (cell.to === lines[index].length && lines[index].endsWith('\r') ? 1 : 0) : cell.from
       const value = index === 1 ? ' --- ' : '   '
-      patches.push({ from: starts[index] + at, to: starts[index] + at, insert: after ? `|${value}` : `${value}|` })
+      const outerPipe = !after && column === 0 && cell.from === 0 ? '|' : ''
+      const trailingPipe = after && column === cells.length - 1 && !lines[index].slice(at).trim() ? '|' : ''
+      patches.push({ from: starts[index] + at, to: starts[index] + at, insert: after ? `|${value}${trailingPipe}` : `${outerPipe}${value}|` })
     } else if (action === 'table-column-delete') {
       if (model.columns === 1) return null
+      if (index > 1 && column === 0 && cells.length === 1) {
+        const end = lines[index].endsWith('\r') ? lines[index].length - 1 : lines[index].length
+        patches.push({ from: starts[index], to: starts[index] + end, insert: '| |' })
+        continue
+      }
       // Remove one separator with the cell, leaving all other cell bytes untouched.
       const from = column === 0 ? cell.from : cell.from - 1
       const to = column === 0 ? cell.to + 1 : cell.to
+      if (index < 2 && model.columns === 2) {
+        const remaining = lines[index].slice(0, from) + lines[index].slice(to)
+        const row = remaining.endsWith('\r') ? remaining.slice(0, -1) : remaining
+        const trimmed = row.trim()
+        let slashes = 0
+        for (let i = trimmed.length - 2; i >= 0 && trimmed[i] === '\\'; i--) slashes++
+        const leading = trimmed.startsWith('|')
+        const trailing = trimmed.endsWith('|') && slashes % 2 === 0
+        if (!leading || !trailing) {
+          patches.push({ from: starts[index], to: starts[index] + lines[index].length, insert: `${leading ? '' : '|'}${row}${trailing ? '' : '|'}${remaining.endsWith('\r') ? '\r' : ''}` })
+          continue
+        }
+      }
       patches.push({ from: starts[index] + from, to: starts[index] + to, insert: '' })
     } else return null
   }
@@ -115,11 +145,18 @@ export function moveTableColumn(source: string, offset: number, fromColumn: numb
   for (const line of source.split('\n')) {
     if (line.trim()) {
       const cells = rowLayout(line)
-      if (cells.length < model.columns) return null
-      const values = cells.slice(low, high + 1).map(cell => line.slice(cell.from, cell.to))
+      if (low >= cells.length) { start += line.length + 1; continue }
+      const values = Array.from({ length: high - low + 1 }, (_, index) => {
+        const cell = cells[low + index]
+        return cell ? { raw: line.slice(cell.from, cell.to), implicit: false } : { raw: ' ', implicit: true }
+      })
       const [moved] = values.splice(fromColumn - low, 1)
       values.splice(toColumn - low, 0, moved)
-      changes.push({ from: start + cells[low].from, to: start + cells[high].to, insert: values.join('|') })
+      while (values.at(-1)?.implicit) values.pop()
+      // An empty first cell needs an outer pipe; otherwise Markdown treats its
+      // separator as the optional leading pipe and shifts the row left.
+      const outerPipe = low === 0 && cells[0].from === 0 && values.length > 1 && !values[0].raw.trim() ? '|' : ''
+      changes.push({ from: start + cells[low].from, to: start + cells[Math.min(high, cells.length - 1)].to, insert: outerPipe + values.map(value => value.raw).join('|') })
     }
     start += line.length + 1
   }
@@ -138,8 +175,13 @@ export function clearTableRange(source: string, offset: number, range: TableRang
 export function copyTableRange(source: string, range: TableRange): string {
   const model = parseTableSource(source)
   const rows: string[][] = []
+  const firstColumn = Math.max(0, Math.min(range.fromColumn, range.toColumn))
+  const lastColumn = Math.min(model.columns - 1, Math.max(range.fromColumn, range.toColumn))
   for (let row = Math.min(range.fromRow, range.toRow); row <= Math.min(model.rows - 1, Math.max(range.fromRow, range.toRow)); row++) {
-    rows.push(model.cells.filter(cell => cell.row === row && tableRangeContains(range, row, cell.column)).map(cell => cell.content.replace(/\\\|/g, '|').replace(/<br\s*\/?\s*>/gi, ' ')))
+    const cells = model.cells.filter(cell => cell.row === row)
+    const values: string[] = []
+    for (let column = firstColumn; column <= lastColumn; column++) values.push((cells.find(cell => cell.column === column)?.content ?? '').replace(/\\\|/g, '|').replace(/<br\s*\/?\s*>/gi, ' '))
+    rows.push(values)
   }
   return rows.map(row => row.join('\t')).join('\n')
 }
@@ -165,6 +207,18 @@ export function pasteTableCells(source: string, offset: number, row: number, col
     const value = values[cell.row - row]?.[cell.column - column]
     return value === undefined ? [] : [{ from: cell.from, to: cell.to, insert: escapeCellInput(value) }]
   })
+  for (let targetRow = row; targetRow < Math.min(next.rows, row + values.length); targetRow++) {
+    const actual = next.cells.filter(cell => cell.row === targetRow).length
+    const rowValues = values[targetRow - row]
+    let last = Math.min(next.columns - 1, column + rowValues.length - 1)
+    while (last >= Math.max(actual, column) && !rowValues[last - column]) last--
+    if (last < Math.max(actual, column)) continue
+    const first = Math.max(actual, column)
+    const cell = missingTableCellSource(expanded, next, targetRow, first)
+    if (!cell) return null
+    const cells = rowValues.slice(first - column, last - column + 1).map(escapeCellInput)
+    changes.push({ from: cell.from, to: cell.to, insert: `${cell.missingPrefix}${cells.join(' | ')} |` })
+  }
   const updated = applyPatches(expanded, changes)
   return updated === source ? null : { from: offset, to: offset + source.length, insert: updated }
 }

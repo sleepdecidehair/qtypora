@@ -28,6 +28,162 @@ async function openTableTools(table: Locator): Promise<void> {
   await expect(table.getByRole('group', { name: '表格工具' })).toBeVisible()
 }
 
+test('表格短行补出的单元格可编辑且预览不修改原文', async () => {
+  const original = '| A | B |\n| --- | --- |\n| only |\n'
+  const filename = await openFixture(session, 'short-table-row.md', original)
+  await session.page.keyboard.press('ControlOrMeta+/')
+  const table = session.page.getByTestId('live-table')
+  const cell = table.getByRole('cell', { name: '表格第 2 行第 2 列' })
+  await expect(cell).toBeVisible()
+  expect(await content()).toBe(original)
+  expect(await readFile(filename, 'utf8')).toBe(original)
+  await cell.click()
+  await expect(cell).toBeFocused()
+  await session.page.keyboard.type('filled')
+  await expect.poll(content).toContain('filled')
+  for (let index = 0; index < 6; index++) await session.page.keyboard.press('ControlOrMeta+z')
+  await expect.poll(content).toBe(original)
+  expect(await readFile(filename, 'utf8')).toBe(original)
+})
+
+test('短行表格多格粘贴完整保留内容且一次撤销', async () => {
+  const original = '| A | B |\n| --- | --- |\n| only |\n| untouched | keep |\n'
+  const filename = await openFixture(session, 'short-row-paste.md', original)
+  await session.page.keyboard.press('ControlOrMeta+/')
+  const table = session.page.getByTestId('live-table')
+  await table.getByRole('cell', { name: '表格第 2 行第 1 列' }).click()
+  await session.app.evaluate(({ clipboard }) => clipboard.writeText('x\ty'))
+  await session.page.keyboard.press('ControlOrMeta+v')
+  await expect.poll(content).toBe(original.replace('| only |', '| x | y |'))
+  await session.page.keyboard.press('ControlOrMeta+z')
+  await expect.poll(content).toBe(original)
+  expect(await readFile(filename, 'utf8')).toBe(original)
+})
+
+test('短行表格跨列粘贴会扩列且一次撤销', async () => {
+  const original = '| A | B |\n| --- | --- |\n| only |\n| untouched | keep |\n'
+  const filename = await openFixture(session, 'short-row-grow-paste.md', original)
+  await session.page.keyboard.press('ControlOrMeta+/')
+  const table = session.page.getByTestId('live-table')
+  await table.getByRole('cell', { name: '表格第 2 行第 1 列' }).click()
+  await session.app.evaluate(({ clipboard }) => clipboard.writeText('甲\t乙\t丙'))
+  await session.page.keyboard.press('ControlOrMeta+v')
+  await expect.poll(content).toContain('甲 | 乙 | 丙')
+  expect(await content()).toContain('untouched | keep')
+  await session.page.keyboard.press('ControlOrMeta+z')
+  await expect.poll(content).toBe(original)
+  expect(await readFile(filename, 'utf8')).toBe(original)
+})
+
+test('短行矩形复制保留空列并覆盖目标单元格', async () => {
+  const original = '| A | B |\n| --- | --- |\n| only |\n| next | value |\n| old | stale |\n| old2 | stale2 |\n'
+  const filename = await openFixture(session, 'short-row-copy.md', original)
+  await session.page.keyboard.press('ControlOrMeta+/')
+  const table = session.page.getByTestId('live-table')
+  await table.getByRole('cell', { name: '表格第 2 行第 1 列' }).click()
+  await table.getByRole('cell', { name: '表格第 3 行第 2 列' }).click({ modifiers: ['Shift'] })
+  await session.page.keyboard.press('ControlOrMeta+c')
+  expect(await session.app.evaluate(({ clipboard }) => clipboard.readText())).toBe('only\t\nnext\tvalue')
+  expect(await content()).toBe(original)
+  await table.getByRole('cell', { name: '表格第 4 行第 1 列' }).click()
+  await session.page.keyboard.press('ControlOrMeta+v')
+  await expect.poll(content).toBe(original.replace('| old | stale |\n| old2 | stale2 |', '| only |  |\n| next | value |'))
+  await session.page.keyboard.press('ControlOrMeta+z')
+  await expect.poll(content).toBe(original)
+  expect(await readFile(filename, 'utf8')).toBe(original)
+})
+
+test('短行表格可排序列并撤销', async () => {
+  const original = '| A | B |\n| --- | --- |\n| only |\n| left | right |\n'
+  const filename = await openFixture(session, 'short-row-sort.md', original)
+  await session.page.keyboard.press('ControlOrMeta+/')
+  const table = session.page.getByTestId('live-table')
+  await table.getByRole('cell', { name: '表格第 2 行第 1 列' }).click()
+  await openTableTools(table)
+  await table.getByRole('button', { name: '右移列' }).click()
+  await expect.poll(content).toBe('| B | A |\n| --- | --- |\n| | only |\n| right | left |\n')
+  await session.page.keyboard.press('ControlOrMeta+z')
+  await expect.poll(content).toBe(original)
+  expect(await readFile(filename, 'utf8')).toBe(original)
+})
+
+test('无首竖线短行排序后文字进入正确列', async () => {
+  const original = 'A | B\n--- | ---\nonly\n'
+  const filename = await openFixture(session, 'bare-short-row-sort.md', original)
+  await session.page.keyboard.press('ControlOrMeta+/')
+  const table = session.page.getByTestId('live-table')
+  await table.getByRole('cell', { name: '表格第 2 行第 1 列' }).click()
+  await openTableTools(table)
+  await table.getByRole('button', { name: '右移列' }).click()
+  await expect(table.getByRole('cell', { name: '表格第 2 行第 1 列' })).toHaveText('')
+  await expect(table.getByRole('cell', { name: '表格第 2 行第 2 列' })).toHaveText('only')
+  await session.page.keyboard.press('ControlOrMeta+z')
+  await expect.poll(content).toBe(original)
+  expect(await readFile(filename, 'utf8')).toBe(original)
+})
+
+test('删除裸短行首列不会合并下一行且可撤销', async () => {
+  const original = 'A | B\n--- | ---\nonly\nnext | keep\n'
+  const filename = await openFixture(session, 'bare-short-row-delete.md', original)
+  await session.page.keyboard.press('ControlOrMeta+/')
+  await setContextMenuChoice(session, 'table-column-delete')
+  await session.page.getByTestId('live-table').getByRole('cell', { name: '表格第 2 行第 1 列' }).click({ button: 'right' })
+  await expect.poll(content).toBe('| B|\n| ---|\n| |\n keep\n')
+  await expect(session.page.getByTestId('live-table').locator('tr')).toHaveCount(3)
+  await session.page.keyboard.press('ControlOrMeta+z')
+  await expect.poll(content).toBe(original)
+  expect(await readFile(filename, 'utf8')).toBe(original)
+})
+
+test('仅首竖线表格删至一列仍为表格并可撤销', async () => {
+  const original = '|A|B\n|---|---\nX\n'
+  const filename = await openFixture(session, 'leading-pipe-table-delete.md', original)
+  await session.page.keyboard.press('ControlOrMeta+/')
+  await setContextMenuChoice(session, 'table-column-delete')
+  const table = session.page.getByTestId('live-table')
+  await table.getByRole('columnheader', { name: '表格第 1 行第 1 列' }).click({ button: 'right' })
+  await expect.poll(content).toBe('|B|\n|---|\n| |\n')
+  await expect(table.locator('th')).toHaveCount(1)
+  await expect(table.getByRole('columnheader', { name: '表格第 1 行第 1 列' })).toHaveText('B')
+  await session.page.keyboard.press('ControlOrMeta+z')
+  await expect.poll(content).toBe(original)
+  expect(await readFile(filename, 'utf8')).toBe(original)
+})
+
+test('裸表格首列前插入保持表格和内容并可撤销', async () => {
+  const original = 'before\n\nA | B\n--- | ---\none | two\n\nafter\n'
+  const filename = await openFixture(session, 'bare-table-insert.md', original)
+  await session.page.keyboard.press('ControlOrMeta+/')
+  await setContextMenuChoice(session, 'table-column-before')
+  const table = session.page.getByTestId('live-table')
+  await table.getByRole('columnheader', { name: '表格第 1 行第 1 列' }).click({ button: 'right' })
+  await expect(table.locator('th')).toHaveCount(3)
+  await expect(table.getByRole('columnheader', { name: '表格第 1 行第 2 列' })).toHaveText('A')
+  await expect(table.getByRole('cell', { name: '表格第 2 行第 2 列' })).toHaveText('one')
+  expect(await content()).toContain('before\n\n')
+  expect(await content()).toContain('\n\nafter\n')
+  await session.page.keyboard.press('ControlOrMeta+z')
+  await expect.poll(content).toBe(original)
+  expect(await readFile(filename, 'utf8')).toBe(original)
+})
+
+test('裸表格末列后插入保持表格和内容并可撤销', async () => {
+  const original = 'before\n\nA | B\n--- | ---\none | two\n\nafter\n'
+  const filename = await openFixture(session, 'bare-table-append.md', original)
+  await session.page.keyboard.press('ControlOrMeta+/')
+  await setContextMenuChoice(session, 'table-column-after')
+  const table = session.page.getByTestId('live-table')
+  await table.getByRole('columnheader', { name: '表格第 1 行第 2 列' }).click({ button: 'right' })
+  await expect(table.locator('th')).toHaveCount(3)
+  await expect(table.getByRole('columnheader', { name: '表格第 1 行第 2 列' })).toHaveText('B')
+  await expect(table.getByRole('cell', { name: '表格第 2 行第 2 列' })).toHaveText('two')
+  expect(await content()).toContain('before\n\n')
+  expect(await content()).toContain('\n\nafter\n')
+  await session.page.keyboard.press('ControlOrMeta+z')
+  await expect.poll(content).toBe(original)
+  expect(await readFile(filename, 'utf8')).toBe(original)
+})
+
 test('末格 Tab 与快捷键加行，尺寸面板、行列排序及矩形清空可逐步撤销', async () => {
   const original = 'before\n\n| A | B |\n| :--- | ---: |\n| one | two |\n| three | four |\n\nafter\n'
   const filename = await openFixture(session, 'table-features.md', original)
@@ -135,6 +291,10 @@ test('HTML 通过快捷键和右键转换 Markdown，纯文本粘贴保留原始
   await setContextMenuChoice(session, 'paste')
   await session.page.locator('.cm-line').last().click({ button: 'right' })
   await expect.poll(content).toContain('**Bold** and [Link](https://example.com)')
+  await session.page.keyboard.press('ControlOrMeta+z')
+  await expect.poll(content).toBe('before\n\n')
+  await clickNativeMenu(session, '粘贴为纯文本')
+  await expect.poll(content).toBe('before\n\nplain fallback')
   await session.page.keyboard.press('ControlOrMeta+z')
   await expect.poll(content).toBe('before\n\n')
   await session.page.keyboard.press('ControlOrMeta+Shift+v')

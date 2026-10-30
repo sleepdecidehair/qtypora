@@ -58,6 +58,39 @@ describe('Authorized image operations', () => {
     await expect(fs.access(source)).rejects.toMatchObject({ code: 'ENOENT' })
   })
 
+  it('refuses a substituted image or parent directory and accepts a normal update', async () => {
+    const external = await fs.mkdtemp(path.join(os.tmpdir(), 'qtypora-image-external-'))
+    try {
+      const outside = path.join(external, 'picture.png')
+      await fs.writeFile(outside, 'outside')
+      const originalLocalPath = registry.localPath.bind(registry)
+      let calls = 0
+      registry.localPath = async (...args) => {
+        const resolved = await originalLocalPath(...args)
+        if (++calls === 2) { await fs.unlink(source); await fs.symlink(outside, source) }
+        return resolved
+      }
+      await expect(operateImage(request('copy'), documents, registry, 1, dialogs)).rejects.toThrow()
+      await expect(fs.access(path.join(directory, 'new picture.png'))).rejects.toMatchObject({ code: 'ENOENT' })
+      await fs.unlink(source); await fs.writeFile(source, 'updated')
+      registry.localPath = originalLocalPath
+      await operateImage(request('copy'), documents, registry, 1, dialogs)
+      expect(await fs.readFile(path.join(directory, 'new picture.png'), 'utf8')).toBe('updated')
+      await fs.unlink(path.join(directory, 'new picture.png'))
+      const assets = path.join(directory, 'assets'), image = path.join(assets, 'picture.png')
+      await fs.mkdir(assets); await fs.writeFile(image, 'authorized')
+      const content = '![x](assets/picture.png)'
+      await expect(operateImage(request('copy', { source: 'assets/picture.png', content, revision: 1 }), documents, registry, 1, {
+        ...dialogs, destination: async () => {
+          await fs.rename(assets, assets + '-old')
+          await fs.symlink(external, assets, 'dir')
+          return path.join(directory, 'new picture.png')
+        },
+      })).rejects.toThrow()
+      await expect(fs.access(path.join(directory, 'new picture.png'))).rejects.toMatchObject({ code: 'ENOENT' })
+    } finally { await fs.rm(external, { recursive: true, force: true }) }
+  })
+
   it('save-as copies original bytes and keeps the original reference, while existing targets are never overwritten', async () => {
     expect(await operateImage(request('save-as'), documents, registry, 1, dialogs)).toEqual({ source: 'picture.png' })
     await fs.writeFile(path.join(directory, 'new picture.png'), 'other-owner')

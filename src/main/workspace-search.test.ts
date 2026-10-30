@@ -2,7 +2,7 @@ import * as fs from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import { listDirectory, searchMarkdown } from './files'
+import { listDirectory, MAX_DOCUMENT_BYTES, searchMarkdown, searchMarkdownDetailed } from './files'
 import { DEFAULT_WORKSPACE_OPTIONS } from '../shared/workspace-options'
 
 let root: string
@@ -36,5 +36,24 @@ describe('workspace file list and search', () => {
     const result = await searchMarkdown({ root, query: 'needle', excludeDirectories: 'cache,projects/*/generated' })
     expect(result.map(hit => path.relative(root, hit.path)).sort()).toEqual(['projects/one/source/visible.md', 'visible.md'])
     await expect(searchMarkdown({ root, query: 'needle', excludeDirectories: '../outside' })).rejects.toMatchObject({ code: 'INVALID_INPUT' })
+  })
+  it('searches deeply nested files and reports size or result limits', async () => {
+    const large = await fs.open(path.join(root, 'large.md'), 'w')
+    try { await large.truncate(MAX_DOCUMENT_BYTES + 1) } finally { await large.close() }
+    let deep = root
+    for (let i = 0; i < 25; i++) { deep = path.join(deep, `d${i}`); await fs.mkdir(deep) }
+    await fs.writeFile(path.join(deep, 'hidden.md'), 'needle')
+    await fs.writeFile(path.join(root, 'many.md'), 'needle\n'.repeat(1001))
+    const detailed = await searchMarkdownDetailed({ root, query: 'needle' })
+    expect(detailed.hits).toHaveLength(1000)
+    expect(detailed.hits[0].path).toBe(path.join(deep, 'hidden.md'))
+    expect(detailed.limitations).toEqual({ resultLimit: true, entryLimit: false, oversizedFiles: 1 })
+    expect((await searchMarkdownDetailed({ root, query: 'needle', excludeDirectories: 'd0' })).hits.some(hit => hit.path === path.join(deep, 'hidden.md'))).toBe(false)
+  })
+  it('does not report limitations when all eligible files were searched', async () => {
+    await fs.writeFile(path.join(root, 'notes.md'), 'needle\n')
+    const result = await searchMarkdownDetailed({ root, query: 'needle' })
+    expect(result.hits).toHaveLength(1)
+    expect(result.limitations).toEqual({ resultLimit: false, entryLimit: false, oversizedFiles: 0 })
   })
 })

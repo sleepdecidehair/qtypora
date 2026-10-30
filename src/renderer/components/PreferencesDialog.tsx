@@ -8,6 +8,7 @@ import { CustomExportSettings } from './CustomExportSettings'
 import { SpellingDictionary } from './SpellingDictionary'
 import { Dialog } from './Dialog'
 import { primaryShortcut } from '../platform-shortcuts'
+import { TyporaThemeSettings } from './TyporaThemeSettings'
 
 interface PreferencesDialogProps {
   desktopApi: DesktopApi
@@ -15,9 +16,10 @@ interface PreferencesDialogProps {
   preferences: Preferences
   onChange: (changes: Partial<Preferences>) => void
   onClose: () => void
+  onThemeRefresh?: (id: string) => void
 }
 
-export function PreferencesDialog({ desktopApi, platform, preferences: p, onChange, onClose }: PreferencesDialogProps) {
+export function PreferencesDialog({ desktopApi, platform, preferences: p, onChange, onClose, onThemeRefresh }: PreferencesDialogProps) {
   const t = useTranslation()
   const [query, setQuery] = useState('')
   const row = (label: string, input: ReactNode) => !query || label.toLowerCase().includes(query.toLowerCase()) || t(label).toLowerCase().includes(query.toLowerCase()) ? <label key={label} className="setting-row">{t(label)}{input}</label> : null
@@ -26,7 +28,7 @@ export function PreferencesDialog({ desktopApi, platform, preferences: p, onChan
   const text = (label: string, value: string, set: (value: string) => void, placeholder = '') => <input aria-label={t(label)} value={value} placeholder={t(placeholder)} onChange={event => set(event.target.value)} />
   const markdownSwitches: [keyof MarkdownOptions, string][] = [
     ['strictMode', '严格 Markdown（CommonMark）'],
-    ['frontMatter', 'YAML 前置信息'], ['toc', '自动目录 TOC'], ['alerts', 'GitHub Alerts 提示块'], ['highlight', '高亮 ==文字=='], ['subscript', '下标'], ['superscript', '上标'], ['footnotes', '脚注'], ['emoji', 'Emoji 表情语法'], ['inlineMath', '行内数学'], ['mathNumbering', '公式自动编号'], ['diagrams', 'Mermaid 图表'], ['smartPunctuation', '智能标点（显示时转换）'], ['softBreaks', '保留软换行'], ['autoPairBrackets', '自动配对括号和引号'], ['autoPairMarkdown', '自动配对 Markdown 标记'], ['codeLineNumbers', '代码块行号'], ['codeWrapLines', '代码块自动换行'],
+    ['frontMatter', 'YAML 前置信息'], ['toc', '自动目录 TOC'], ['alerts', 'GitHub Alerts 提示块'], ['highlight', '高亮 ==文字=='], ['subscript', '下标'], ['superscript', '上标'], ['footnotes', '脚注'], ['emoji', 'Emoji 表情语法'], ['inlineMath', '行内数学'], ['mathNumbering', '公式自动编号'], ['diagrams', 'Mermaid 图表'], ['smartPunctuation', '智能标点（显示时转换）'], ['smartDashInput', '智能破折号（键入时转换）'], ['softBreaks', '保留软换行'], ['autoPairBrackets', '自动配对括号和引号'], ['autoPairMarkdown', '自动配对 Markdown 标记'], ['codeLineNumbers', '代码块行号'], ['codeWrapLines', '代码块自动换行'],
   ]
   return <Dialog title={t('偏好设置')} onClose={onClose} className="preferences-dialog">
     <div className="preferences-search"><input aria-label={t('搜索设置')} placeholder={t('搜索设置名称…')} value={query} onChange={event => setQuery(event.target.value)} /></div>
@@ -37,11 +39,13 @@ export function PreferencesDialog({ desktopApi, platform, preferences: p, onChan
         {row('主题', <select data-testid="theme-select" value={p.theme} onChange={event => onChange({ theme: event.target.value as Theme })}><option value="light">{t('浅色')}</option><option value="dark">{t('深色')}</option><option value="system">{t('跟随系统')}</option></select>)}
         {row('浅色配色', <select aria-label={t('浅色配色')} value={p.lightTheme} onChange={event => onChange({ lightTheme: event.target.value as Preferences['lightTheme'] })}><option value="paper">{t('纸白')}</option><option value="sepia">{t('暖纸')}</option><option value="blue">{t('雾蓝')}</option></select>)}
         {row('深色配色', <select aria-label={t('深色配色')} value={p.darkTheme} onChange={event => onChange({ darkTheme: event.target.value as Preferences['darkTheme'] })}><option value="night">{t('夜色')}</option><option value="charcoal">{t('炭黑')}</option></select>)}
+        {(!query || 'Typora 主题'.toLowerCase().includes(query.toLowerCase()) || t('Typora 主题').toLowerCase().includes(query.toLowerCase())) ? <TyporaThemeSettings api={desktopApi} selectedId={p.typoraThemeId} onChange={typoraThemeId => onChange({ typoraThemeId })} onRefresh={onThemeRefresh} /> : null}
         {row('正文字号', number('正文字号', p.fontSize, 12, 32, fontSize => onChange({ fontSize })))}
         {row('正文字体', text('正文字体', p.fontFamily, fontFamily => onChange({ fontFamily }), '系统默认，可填写本机字体名'))}
         {row('正文行距', number('正文行距', p.lineHeight, 1, 3, lineHeight => onChange({ lineHeight }), 0.1))}
         {row('正文布局', <select aria-label={t('正文布局')} value={p.contentWidthMode} onChange={event => onChange({ contentWidthMode: event.target.value === 'fixed' ? 'fixed' : 'auto' })}><option value="auto">{t('适应窗口')}</option><option value="fixed">{t('固定宽度')}</option></select>)}
         {row('正文最大宽度', <input aria-label={t('正文最大宽度')} type="number" min={480} max={1440} step={40} disabled={p.contentWidthMode === 'auto'} value={p.contentWidth} onChange={event => { const value = Number(event.target.value); if (value >= 480 && value <= 1440) onChange({ contentWidth: value }) }} />)}
+        {platform === 'darwin' ? row('使用原生标签页（新窗口生效）', checkbox(p.macNativeTabs, macNativeTabs => onChange({ macNativeTabs }))) : null}
         {row('显示格式工具栏', checkbox(p.showToolbar, showToolbar => onChange({ showToolbar })))}
         {row('浮动格式工具栏', checkbox(p.floatingToolbar, floatingToolbar => onChange({ floatingToolbar })))}
         {row('显示侧栏', checkbox(p.showSidebar, showSidebar => onChange({ showSidebar })))}

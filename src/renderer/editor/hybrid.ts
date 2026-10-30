@@ -1,5 +1,6 @@
 import { supportsPreview } from './preview-budget'
 import { closeCompletion } from '@codemirror/autocomplete'
+import { isolateHistory } from '@codemirror/commands'
 import { Prec, StateField, type EditorState, type Extension, type Range } from '@codemirror/state'
 import { Decoration, type DecorationSet, EditorView, WidgetType, keymap } from '@codemirror/view'
 import { inlinePreviewSpans } from './live-inline'
@@ -15,6 +16,8 @@ import { liveCodeBlocks, liveCodeExtension } from './live-code'
 import { focusedHeadingEditRange, headingInputPreview, liveSourceEditExtension } from './live-source-edit'
 import { editorText } from './editor-i18n'
 import type { AppLocale } from '../../shared/i18n'
+import { isTaskMarker } from './task-marker'
+import { focusedParagraphLines } from './focus-paragraph'
 
 export type HybridOptions = LiveOptions
 
@@ -40,7 +43,10 @@ class TaskWidget extends WidgetType {
     input.addEventListener('mousedown', (event) => event.preventDefault())
     input.addEventListener('click', (event) => {
       event.preventDefault()
-      if (!view.state.readOnly) view.dispatch({ changes: { from: this.from + 1, to: this.from + 2, insert: this.checked ? ' ' : 'x' }, userEvent: 'input.task' })
+      if (!view.state.readOnly && isTaskMarker(view.state, this.from)) {
+        const checked = view.state.doc.sliceString(this.from + 1, this.from + 2) !== ' '
+        view.dispatch({ changes: { from: this.from + 1, to: this.from + 2, insert: checked ? ' ' : 'x' }, annotations: isolateHistory.of('full'), userEvent: 'input.task' })
+      }
     })
     return input
   }
@@ -50,6 +56,7 @@ class TaskWidget extends WidgetType {
 function decorations(state: EditorState, options: HybridOptions): DecorationSet {
   if (!supportsPreview(state)) return Decoration.none
   const settings = state.facet(markdownOptionsFacet)
+  const tree = syntaxTree(state)
   const model = markdownDocumentModel(state)
   options = { ...options, markdownOptions: settings, mathExpressions: model.mathExpressions, mathKey: model.mathKey }
   const ranges: Range<Decoration>[] = []
@@ -57,6 +64,7 @@ function decorations(state: EditorState, options: HybridOptions): DecorationSet 
   const editing = state.field(liveEditingBlock) ?? (options.readOnly ? null : focusedHeadingEditRange(state))
   const isEditing = (from: number, to: number): boolean => Boolean(editing && from >= editing.from && to <= editing.to)
   const codeBlocks = liveCodeBlocks(state).filter(block => !isEditing(block.from, block.to))
+  const focused = options.focusMode ? focusedParagraphLines(state) : null
   const excluded = blocks.filter((block) => !isEditing(block.from, block.to))
   const mediaRanges: { from: number; to: number }[] = []
   syntaxTree(state).iterate({ enter: (node) => {
@@ -71,7 +79,11 @@ function decorations(state: EditorState, options: HybridOptions): DecorationSet 
   for (const block of blocks) {
     if (isEditing(block.from, block.to)) {
       for (let line = block.firstLine; line <= block.lastLine; line++) ranges.push(Decoration.line({ class: 'cm-live-edit-block' }).range(state.doc.line(line).from))
-    } else ranges.push(Decoration.replace({ widget: block.kind === 'table' ? new LiveTableWidget(block, options) : new LiveBlockWidget(block, options), block: true }).range(block.from, block.to))
+    } else {
+      const head = state.selection.main.head
+      const muted = options.focusMode && (block.kind === 'math' || block.kind === 'image') && (head < block.from || head > block.to)
+      ranges.push(Decoration.replace({ widget: block.kind === 'table' ? new LiveTableWidget(block, options) : new LiveBlockWidget(block, options, muted), block: true }).range(block.from, block.to))
+    }
   }
   for (const span of inlinePreviewSpans(state, [...excluded, ...mediaRanges, ...codeBlocks, ...(editing ? [editing] : [])])) {
     if (span.line) ranges.push(Decoration.line({ class: span.className }).range(span.from))
@@ -88,17 +100,17 @@ function decorations(state: EditorState, options: HybridOptions): DecorationSet 
       continue
     }
     const task = line.text.match(/^(\s*(?:>\s*)*(?:[-+*]|\d+[.)])\s+)\[([ xX])\]/)
-    if (task && !settings.strictMode) ranges.push(Decoration.replace({ widget: new TaskWidget(line.from + task[1].length, task[2] !== ' ', options.readOnly, options.locale) }).range(line.from + task[1].length, line.from + task[1].length + 3))
-    if (settings.inlineMath) for (const match of line.text.matchAll(/(?<!\\)\$(?!\$)(\S(?:[^$\n]*?\S)?)\$(?!\$)/g)) {
+    if (task && isTaskMarker(state, line.from + task[1].length)) ranges.push(Decoration.replace({ widget: new TaskWidget(line.from + task[1].length, task[2] !== ' ', options.readOnly, options.locale) }).range(line.from + task[1].length, line.from + task[1].length + 3))
+    if (settings.inlineMath && (line.to < tree.length || (line.to === tree.length && tree.length === state.doc.length))) for (const match of line.text.matchAll(/(?<!\\)\$(?!\$)(\S(?:[^$\n]*?\S)?)\$(?!\$)/g)) {
       const from = line.from + match.index
       const to = from + match[0].length
       if (isEditing(from, to) || mediaRanges.some((range) => from >= range.from && to <= range.to) || /\d/.test(line.text[match.index + match[0].length] || '')) continue
-      let node = syntaxTree(state).resolveInner(from, 1)
+      let node = tree.resolveInner(from, 1)
       let inCode = false
       while (node.parent) { if (node.name === 'InlineCode' || node.name === 'FencedCode' || node.name === 'CodeBlock') inCode = true; node = node.parent }
       if (!inCode) ranges.push(Decoration.replace({ widget: new LiveMediaWidget(from, to, number, match[0], 'math', options) }).range(from, to))
     }
-    if (options.focusMode && state.doc.lineAt(state.selection.main.head).number !== number) ranges.push(Decoration.line({ class: 'cm-focus-muted' }).range(line.from))
+    if (focused && (number < focused.first || number > focused.last)) ranges.push(Decoration.line({ class: 'cm-focus-muted' }).range(line.from))
   }
   return Decoration.set(ranges, true)
 }
@@ -106,7 +118,7 @@ function decorations(state: EditorState, options: HybridOptions): DecorationSet 
 export function hybridExtension(options: HybridOptions): Extension {
   const previews = StateField.define<DecorationSet>({
     create: (state) => decorations(state, options),
-    update: (value, transaction) => transaction.docChanged || transaction.reconfigured || transaction.selection || transaction.effects.some((effect) => effect.is(editLiveBlock)) ? decorations(transaction.state, options) : value,
+    update: (value, transaction) => transaction.docChanged || transaction.reconfigured || transaction.selection || syntaxTree(transaction.startState) !== syntaxTree(transaction.state) || transaction.effects.some((effect) => effect.is(editLiveBlock)) ? decorations(transaction.state, options) : value,
     provide: (field) => EditorView.decorations.from(field),
   })
   return [liveEditingBlock, headingInputPreview, Prec.highest(keymap.of([{ key: 'Escape', run: view => {
@@ -114,7 +126,7 @@ export function hybridExtension(options: HybridOptions): Extension {
     closeCompletion(view)
     view.dispatch({ effects: editLiveBlock.of(null) })
     return true
-  } }])), liveCodeExtension(), previews, resourceFitExtension, liveSourceEditExtension, EditorView.domEventHandlers({
+  } }])), liveCodeExtension(options.focusMode), previews, resourceFitExtension, liveSourceEditExtension, EditorView.domEventHandlers({
     mousedown: (event) => {
       const link = event.target instanceof Element ? event.target.closest<HTMLElement>('.cm-live-link[data-href]') : null
       if (!link || !(link.classList.contains('cm-live-footnote') || event.ctrlKey || event.metaKey)) return false

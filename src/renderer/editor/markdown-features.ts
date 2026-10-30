@@ -94,7 +94,7 @@ export function installDocumentFeatures(parser: MarkdownIt, options: MarkdownOpt
     parser.block.ruler.before('paragraph', 'table_of_contents', (state, start, _end, silent) => {
       if (state.blkIndent !== 0 || state.level !== 0) return false
       const line = state.src.slice(state.bMarks[start] + state.tShift[start], state.eMarks[start])
-      if (!/^\[toc\]\s*$/i.test(line)) return false
+      if (!/^(?:\[toc\]|\{:toc\})\s*$/i.test(line) && !/^\[\[_TOC_\]\]\s*$/.test(line)) return false
       if (silent) return true
       const token = state.push('table_of_contents', 'nav', 0)
       token.block = true

@@ -7,6 +7,7 @@ import { validateSnapshot } from './documents'
 import { DesktopError, invalid, object, string } from './errors'
 import { atomicWriteNew, canonicalPath, hashBytes, IMAGE_MIME, MAX_DOCUMENT_BYTES, safeName, serialized } from './files'
 import { markdownImageSources } from './image-paths'
+import { readFileSnapshot } from './file-snapshot'
 import type { ResourceRegistry } from './resources'
 
 export interface ImageDialogs {
@@ -27,11 +28,10 @@ function documentSource(destination: string, documentPath: string | null): strin
   return path.isAbsolute(relative) ? pathToFileURL(destination).href : relative.split(path.sep).map(encodeURIComponent).join('/')
 }
 
-async function imageBytes(source: string): Promise<Buffer> {
-  const stat = await fs.lstat(source)
-  if (!stat.isFile() || stat.isSymbolicLink() || stat.size > MAX_DOCUMENT_BYTES) throw new DesktopError('UNSUPPORTED', '图片不是普通文件或超过 16 MB。')
-  const bytes = await fs.readFile(source)
-  if (bytes.length > MAX_DOCUMENT_BYTES) throw new DesktopError('UNSUPPORTED', '图片超过 16 MB。')
+async function imageBytes(source: string, documents: DocumentSession): Promise<Buffer> {
+  if (await documents.authorize(source) !== source) throw new DesktopError('PERMISSION_DENIED', '图片路径已改变，请重试。')
+  const { bytes } = await readFileSnapshot(source, MAX_DOCUMENT_BYTES)
+  if (await documents.authorize(source) !== source) throw new DesktopError('PERMISSION_DENIED', '图片路径已改变，请重试。')
   return bytes
 }
 
@@ -56,10 +56,10 @@ export async function operateImage(request: ImageOperationRequest, documents: Do
   }
   if (!referenced) throw new DesktopError('PERMISSION_DENIED', '图片必须是当前文档的实际引用。请同步当前文档后重试。')
   return serialized(`image-operation:${source.toLowerCase()}`, async () => {
-    const original = await imageBytes(source)
+    const original = await imageBytes(source, documents)
     const expected = hashBytes(original)
     const unchanged = async (): Promise<void> => {
-      if (hashBytes(await imageBytes(source)) !== expected) throw new DesktopError('CONFLICT', '原图片已被其他程序修改，未执行移动或删除。')
+      if (hashBytes(await imageBytes(source, documents)) !== expected) throw new DesktopError('CONFLICT', '原图片已被其他程序修改，未执行移动或删除。')
     }
     if (request.action === 'delete') {
       if (!await dialogs.confirm(source, 'delete')) return null

@@ -1,5 +1,5 @@
 import { useEffect, useLayoutEffect, useRef, useState, useCallback } from 'react'
-import { Annotation, Compartment, EditorSelection, EditorState, type Extension } from '@codemirror/state'
+import { Annotation, Compartment, EditorSelection, EditorState, Prec, type Extension } from '@codemirror/state'
 import { drawSelection, EditorView, highlightActiveLine, highlightActiveLineGutter, keymap, lineNumbers } from '@codemirror/view'
 import { history, historyKeymap, indentWithTab, redo, selectAll, undo } from '@codemirror/commands'
 import { bracketMatching, defaultHighlightStyle, HighlightStyle, indentOnInput, syntaxHighlighting } from '@codemirror/language'
@@ -8,24 +8,57 @@ import { closeBrackets, closeBracketsKeymap } from '@codemirror/autocomplete'
 import { indentUnit } from '@codemirror/language'
 import { markdownCompletionExtension } from './markdown-completion'
 import { markdownInputExtension } from './markdown-input'
+import { smartDashInputExtension } from './smart-dash-input'
 import { markdownOptionsFacet } from './markdown-config'
 import { organizeDocumentImages, uploadDocumentImages } from './image-upload'
 import { clipboardImportExtension } from './clipboard-import'
+import { chooseAndInsertImages } from './choose-image'
+import { pasteTableImages } from './table-image-paste'
+import { pasteTableInlineHtml } from './table-html-paste'
+import { createSelectionCopy } from './selection-copy'
 import { richClipboardExtension } from './rich-clipboard'
 import { markdown, markdownLanguage } from '@codemirror/lang-markdown'
 import { codeLanguageForInfo } from './code-languages'
-import { openSearchPanel, search, searchKeymap } from '@codemirror/search'
+import { findNext, findPrevious, openSearchPanel, replaceNext, search, searchKeymap } from '@codemirror/search'
 import { createTextEdit } from './commands'
+import { headingLevelEdit } from './heading-level'
+import { insertAdjacentParagraph } from './paragraph-insert'
+import { paragraphBreak } from './paragraph-break'
+import { guardParagraphBreak } from './paragraph-break-guard'
+import { quoteSoftBreak } from './quote-soft-break'
+import { listSoftBreak } from './list-soft-break'
+import { selectCurrentBlock, deleteCurrentBlock } from './block-range'
+import { taskStatusEdit } from './task-status'
+import { selectLineSentence, deleteLineSentence } from './line-sentence'
+import { deleteCurrentWord } from './word-delete'
+import { deleteCurrentStyle } from './style-delete'
+import { insertTableOfContents } from './toc-insert'
+import { insertYamlFrontMatter } from './yaml-insert'
+import { insertAlert } from './alert-insert'
+import { insertFootnote } from './footnote-insert'
+import { toggleUnderline } from './underline'
+import { toggleExtendedInline } from './extended-inline'
+import { toggleInlineMath } from './inline-math-insert'
+import { toggleHtmlComment } from './html-comment'
+import { underlineMultiline } from './underline-multiline'
 import { hybridExtension } from './hybrid'
 import { ReadingView, type ReadingViewHandle } from './ReadingView'
 import { readReadingAnchor, readSourceAnchor, restoreReadingAnchor, type SemanticScrollAnchor } from './semantic-scroll'
 import { styleScope } from './live-inline'
-import { focusLiveTableSelection, selectLiveTableCell } from './live-table'
+import { focusLiveTableSelection, selectLiveTableCell, prepareLiveTablesForClose, captureLiveTableFocus, restoreLiveTableFocus } from './live-table'
+import { CloseGuard, type EditorCloseHandle } from './close-guard'
 import { editorDefaultKeymap } from './editor-keymap'
 import { editorText } from './editor-i18n'
 import { autoIndentSelectedCode, codeBlockDisplay, editorLocale, selectLiveCode } from './live-code'
 import { preserveHeadingPreview } from './live-source-edit'
 import { folderSearchHighlight, setFolderSearch } from './folder-search-highlight'
+import { paragraphIndent } from './paragraph-indent'
+import { clearFormatTransaction } from './clear-format'
+import { canFormatSelectedLines } from './line-format-guard'
+import { canFormatInlineSelection } from './inline-format-guard'
+import { inlineCodeTransaction } from './inline-code-format'
+import { linkFormatTransaction } from './link-format'
+import { emphasisTransaction } from './emphasis-format'
 
 import { installEditorContext } from './editor-context'
 import { ResourceViewer } from './ResourceViewer'
@@ -49,9 +82,47 @@ const EXTERNAL_UPDATE = Annotation.define<boolean>()
 
 function applyAction(view: EditorView, action: EditorAction, value?: string): boolean {
   if (action === 'focus-editor') { view.focus(); return true }
+  if (action === 'select-line' || action === 'delete-line') {
+    if (view.compositionStarted) return false
+    const mode = view.contentDOM.getAttribute('data-mode') === 'source' ? 'source' : 'hybrid'
+    const edit = action === 'select-line' ? selectLineSentence(view.state, mode) : deleteLineSentence(view.state, mode)
+    if (!edit) return false
+    view.dispatch(edit); view.focus(); return true
+  }
+  if (action === 'jump-start' || action === 'jump-end' || action === 'jump-line-start' || action === 'jump-line-end' || action === 'jump-selection') {
+    if (action === 'jump-selection' && view.compositionStarted) return false
+    const selection = view.state.selection.main
+    const line = view.state.doc.lineAt(selection.head)
+    const position = action === 'jump-start' ? 0 : action === 'jump-end' ? view.state.doc.length : action === 'jump-line-start' ? line.from : action === 'jump-line-end' ? line.to : selection.head
+    view.dispatch({ ...(action === 'jump-selection' ? {} : { selection: { anchor: position } }), effects: EditorView.scrollIntoView(position, { y: 'center' }), userEvent: 'select.jump' })
+    view.focus(); return true
+  }
+  if (action === 'select-block' || action === 'delete-block') {
+    const edit = action === 'select-block' ? selectCurrentBlock(view.state) : deleteCurrentBlock(view.state)
+    if (!edit) return false
+    view.dispatch(edit); view.focus(); return true
+  }
+  if (action === 'delete-style') {
+    const edit = deleteCurrentStyle(view.state)
+    if (!edit) return false
+    view.dispatch(edit); view.focus(); return true
+  }
+  if (action === 'delete-word') {
+    if (view.compositionStarted) return false
+    const edit = deleteCurrentWord(view.state)
+    if (!edit) return false
+    view.dispatch(edit); view.focus(); return true
+  }
+  if (action === 'select-word') {
+    const word = view.state.wordAt(view.state.selection.main.head)
+    if (!word) return false
+    view.dispatch({ selection: EditorSelection.range(word.from, word.to), userEvent: 'select.word' })
+    view.focus(); return true
+  }
   if (action === 'select-scope') {
     if (selectLiveTableCell(view)) return true
     const scope = styleScope(view.state)
+    if (!scope) return false
     view.dispatch({ selection: EditorSelection.range(scope.from, scope.to), userEvent: 'select.scope' })
     view.focus(); return true
   }
@@ -60,8 +131,90 @@ function applyAction(view: EditorView, action: EditorAction, value?: string): bo
     if (action === 'replace') queueMicrotask(() => view.dom.querySelector<HTMLInputElement>('.cm-search input[name=replace]')?.focus())
     return result
   }
+  if (action === 'find-next' || action === 'find-previous') return action === 'find-next' ? findNext(view) : findPrevious(view)
+  if (action === 'replace-next') return replaceNext(view)
   if (action === 'select-all') { const result = selectLiveCode(view) || selectAll(view); view.focus(); return result }
+  if ((action === 'ordered-list' || action === 'bullet-list' || action === 'code') && view.compositionStarted) return false
   if (view.state.readOnly) return false
+  if ((action === 'bold' || action === 'italic' || action === 'strike' || action === 'inline-code' || action === 'link') && (view.compositionStarted || !canFormatInlineSelection(view.state))) return false
+  if (action === 'bold' || action === 'italic' || action === 'strike') {
+    const edit = emphasisTransaction(view.state, action)
+    if (!edit) return false
+    view.dispatch(edit); view.focus(); return true
+  }
+  if (action === 'inline-code') {
+    const edit = inlineCodeTransaction(view.state)
+    if (!edit) return false
+    view.dispatch(edit); view.focus(); return true
+  }
+  if (action === 'link') {
+    const edit = linkFormatTransaction(view.state, value)
+    if (!edit) return false
+    view.dispatch(edit); view.focus(); return true
+  }
+  if ((action === 'paragraph' || action === 'quote' || action === 'bullet-list' || action === 'ordered-list' || action === 'task-list' || /^heading-[1-6]$/.test(action)) && (view.compositionStarted || !canFormatSelectedLines(view.state))) return false
+  if (action === 'clear-format') {
+    if (view.compositionStarted) return false
+    const edit = clearFormatTransaction(view.state)
+    if (!edit) return false
+    view.dispatch(edit); view.focus(); return true
+  }
+  if (action === 'task-check' || action === 'task-uncheck' || action === 'task-toggle') {
+    const edit = taskStatusEdit(view.state, action === 'task-check' ? 'checked' : action === 'task-uncheck' ? 'unchecked' : 'toggle')
+    if (!edit) return false
+    view.dispatch(edit); view.focus(); return true
+  }
+  if (action === 'underline') {
+    const edit = toggleUnderline(view.state) ?? underlineMultiline(view.state)
+    if (!edit) return false
+    view.dispatch(edit); view.focus(); return true
+  }
+  if (action === 'highlight' || action === 'superscript' || action === 'subscript') {
+    const edit = toggleExtendedInline(view.state, action)
+    if (!edit) return false
+    view.dispatch(edit); view.focus(); return true
+  }
+  if (action === 'inline-math') {
+    const edit = toggleInlineMath(view.state)
+    if (!edit) return false
+    view.dispatch(edit); view.focus(); return true
+  }
+  if (action === 'html-comment') {
+    const edit = toggleHtmlComment(view.state)
+    if (!edit) return false
+    view.dispatch(edit); view.focus(); return true
+  }
+  if (action === 'insert-footnote') {
+    const edit = insertFootnote(view.state)
+    if (!edit) return false
+    view.dispatch(edit); view.focus(); return true
+  }
+  if (action === 'insert-toc') {
+    const edit = insertTableOfContents(view.state)
+    if (!edit) return false
+    view.dispatch(edit); view.focus(); return true
+  }
+  if (action === 'insert-yaml') {
+    const edit = insertYamlFrontMatter(view.state)
+    if (!edit) return false
+    view.dispatch(edit); view.focus(); return true
+  }
+  if (action === 'insert-alert-note' || action === 'insert-alert-tip' || action === 'insert-alert-important' || action === 'insert-alert-warning' || action === 'insert-alert-caution') {
+    const kind = action.slice('insert-alert-'.length) as Parameters<typeof insertAlert>[1]
+    const edit = insertAlert(view.state, kind)
+    if (!edit) return false
+    view.dispatch(edit); view.focus(); return true
+  }
+  if (action === 'paragraph-before' || action === 'paragraph-after') {
+    const edit = insertAdjacentParagraph(view.state, action === 'paragraph-before' ? 'before' : 'after')
+    if (!edit) return false
+    view.dispatch(edit); view.focus(); return true
+  }
+  if (action === 'heading-promote' || action === 'heading-demote') {
+    const edit = headingLevelEdit(view.state, action === 'heading-promote' ? 'promote' : 'demote')
+    if (!edit) return false
+    view.dispatch(edit); view.focus(); return true
+  }
   if (action === 'undo') { const result = undo(view); if (!focusLiveTableSelection(view)) view.focus(); return result }
   if (action === 'redo') { const result = redo(view); if (!focusLiveTableSelection(view)) view.focus(); return result }
   const { from, to } = view.state.selection.main
@@ -74,9 +227,9 @@ function applyAction(view: EditorView, action: EditorAction, value?: string): bo
   return true
 }
 
-function configuration(props: MarkdownEditorProps, callbacks: Pick<MarkdownEditorProps, 'resolveResource' | 'onLinkOpen'>): Extension[] {
+function configuration(props: MarkdownEditorProps, callbacks: Pick<MarkdownEditorProps, 'resolveResource' | 'onLinkOpen'> & Pick<import('./live-types').LiveOptions, 'onError' | 'onTableImagePaste' | 'onTableHtmlPaste'>): Extension[] {
   const extensions: Extension[] = [
-    markdownOptionsFacet.of(props.markdownOptions), editorLocale.of(props.locale ?? 'zh-CN'), markdownCompletionExtension, markdownInputExtension, indentUnit.of(' '.repeat(props.markdownOptions.codeIndentSize)),
+    markdownOptionsFacet.of(props.markdownOptions), editorLocale.of(props.locale ?? 'zh-CN'), markdownCompletionExtension, markdownInputExtension, smartDashInputExtension, indentUnit.of(' '.repeat(props.markdownOptions.codeIndentSize)),
     EditorState.readOnly.of(props.readOnly), EditorView.editable.of(!props.readOnly),
     syntaxHighlighting(props.theme === 'dark' ? darkEditorHighlightStyle : editorHighlightStyle),
     EditorView.contentAttributes.of({ 'aria-label': editorText(props.locale, 'Markdown 编辑器'), spellcheck: String(props.spellcheck), 'data-mode': props.mode }),
@@ -95,19 +248,25 @@ function configuration(props: MarkdownEditorProps, callbacks: Pick<MarkdownEdito
   if (props.wrapLines) extensions.push(EditorView.lineWrapping)
   if (props.lineNumbers && props.mode === 'source') extensions.push(lineNumbers(), highlightActiveLineGutter())
   if (props.mode === 'hybrid') extensions.push(hybridExtension({ locale: props.locale, theme: props.theme, focusMode: props.focusMode, readOnly: props.readOnly, markdownOptions: props.markdownOptions, ...callbacks }))
+  if (props.mode === 'hybrid' && props.indentFirstLine) extensions.push(paragraphIndent)
   return extensions
 }
 
 export function MarkdownEditor(props: MarkdownEditorProps): React.JSX.Element {
   const mountRef = useRef<HTMLDivElement>(null)
+  const rootRef = useRef<HTMLDivElement>(null)
+  const guardRef = useRef<CloseGuard | null>(null)
+  if (!guardRef.current) guardRef.current = new CloseGuard(() => setContextError('关闭期间文档发生变化，请重试。'))
   const [contextError, setContextError] = useState('')
   const [resource, setResource] = useState<ViewedResource | null>(null)
   const viewRef = useRef<EditorView | null>(null)
+  const pendingResourceFocusRef = useRef<string | null>(null)
   const propsRef = useRef(props)
   const activeDocumentRef = useRef(props.documentId)
   const cacheRef = useRef(new Map<string, EditorState>())
   const compartmentRef = useRef(new Compartment())
   const pendingExternalRef = useRef<string | null>(null)
+  const externalTimersRef = useRef(new Map<number, () => void>())
   const modeRef = useRef(props.mode)
   const emittedValuesRef = useRef(new Set<string>())
   const readingRef = useRef<ReadingViewHandle>(null)
@@ -134,21 +293,43 @@ export function MarkdownEditor(props: MarkdownEditorProps): React.JSX.Element {
   const callbacksRef = useRef({
     resolveResource: (source: string) => propsRef.current.resolveResource(source),
     onLinkOpen: (target: string) => propsRef.current.onLinkOpen(target),
+    onError: (message: string) => setContextError(message),
+    onTableImagePaste: (view: EditorView, files: File[], range: { from: number; to: number }, isCurrent: () => boolean, virtualCell?: { tableFrom: number; tableTo: number; row: number; column: number; prefix: string }) => { void pasteTableImages(view, () => propsRef.current, files, range, isCurrent, virtualCell).catch((error: unknown) => setContextError(error instanceof Error ? error.message : '图片粘贴失败。')) },
+    onTableHtmlPaste: (view: EditorView, html: string, target: import('./live-table').LiveTableImageTarget) => { try { pasteTableInlineHtml(view, propsRef.current, html, target) } catch (error) { setContextError(error instanceof Error ? error.message : 'HTML 粘贴失败。') } },
   })
 
   function editorConfiguration(current: MarkdownEditorProps): Extension[] {
     return configuration({ ...current, mode: current.mode === 'reading' ? 'source' : current.mode, readOnly: current.readOnly || current.mode === 'reading' }, callbacksRef.current)
   }
 
+  function schedulePendingExternal(view: EditorView): void {
+    const pending = pendingExternalRef.current
+    if (pending === null) return
+    const finish = propsRef.current.closeCoordinator.start()
+    if (!finish) return
+    const documentId = propsRef.current.documentId
+    pendingExternalRef.current = null
+    const timer = window.setTimeout(() => {
+      externalTimersRef.current.delete(timer)
+      try {
+        if (viewRef.current === view && propsRef.current.documentId === documentId && propsRef.current.value === pending && pending !== view.state.doc.toString()) {
+          view.dispatch({ changes: { from: 0, to: view.state.doc.length, insert: pending }, annotations: EXTERNAL_UPDATE.of(true) })
+        }
+      } finally { finish() }
+    }, 0)
+    externalTimersRef.current.set(timer, finish)
+  }
+
   function createState(current: MarkdownEditorProps): EditorState {
     return EditorState.create({
       doc: current.value,
       extensions: [
-        history(), drawSelection(), indentOnInput(), bracketMatching(), codeBlockDisplay,
-        clipboardImportExtension(() => ({ snapshot: { id: propsRef.current.documentId, content: viewRef.current?.state.doc.toString() ?? propsRef.current.value, revision: propsRef.current.revision }, mode: propsRef.current.mode, readOnly: propsRef.current.readOnly, imageOptions: propsRef.current.imageOptions, readClipboardText: () => propsRef.current.desktopApi.readClipboardText(), importImages: request => propsRef.current.desktopApi.importImages(request), onError: setContextError })),
-        richClipboardExtension(() => ({ mode: propsRef.current.mode, api: propsRef.current.desktopApi, onError: setContextError })),
+        guardRef.current!.extension, history(), drawSelection(), indentOnInput(), bracketMatching(), codeBlockDisplay,
+        clipboardImportExtension(() => ({ closeCoordinator: propsRef.current.closeCoordinator, snapshot: { id: propsRef.current.documentId, content: viewRef.current?.state.doc.toString() ?? propsRef.current.value, revision: propsRef.current.revision }, mode: propsRef.current.mode, encoding: propsRef.current.encoding, lineEnding: propsRef.current.lineEnding, readOnly: propsRef.current.readOnly, imageOptions: propsRef.current.imageOptions, readClipboardText: () => propsRef.current.desktopApi.readClipboardText(), importImages: request => propsRef.current.desktopApi.importImages(request), onError: setContextError })),
+        richClipboardExtension(() => ({ mode: propsRef.current.mode, api: propsRef.current.desktopApi, documentId: propsRef.current.documentId, revision: propsRef.current.revision, closeCoordinator: propsRef.current.closeCoordinator, onError: setContextError })),
         markdown({ codeLanguages: codeLanguageForInfo, base: markdownLanguage }),
         highlightActiveLine(), search({ top: true }), folderSearchHighlight,
+        Prec.highest(keymap.of([{ key: 'Enter', run: view => guardParagraphBreak(view, propsRef.current.mode === 'hybrid' ? 'hybrid' : 'source') }])),
         keymap.of([
           { key: 'Mod-b', run: (view) => applyAction(view, 'bold') },
           { key: 'Mod-i', run: (view) => applyAction(view, 'italic') },
@@ -164,6 +345,24 @@ export function MarkdownEditor(props: MarkdownEditorProps): React.JSX.Element {
           { key: 'Mod-Shift-`', run: (view) => applyAction(view, 'inline-code') },
           { key: 'Alt-Shift-5', run: (view) => applyAction(view, 'strike') },
           { key: 'Mod-\\', run: (view) => applyAction(view, 'clear-format') },
+          { key: 'Enter', run: (view) => {
+            if (view.composing) return false
+            const mode = propsRef.current.mode === 'hybrid' ? 'hybrid' : 'source'
+            const edit = paragraphBreak(view.state, mode)
+            if (!edit) return false
+            if (edit === 'blocked') return true
+            view.dispatch(edit)
+            return true
+          } },
+          { key: 'Shift-Enter', run: view => {
+            if (view.compositionStarted) return false
+            const mode = propsRef.current.mode === 'hybrid' ? 'hybrid' : 'source'
+            const edit = quoteSoftBreak(view.state, mode) ?? listSoftBreak(view.state, mode)
+            if (!edit) return false
+            if (edit === 'blocked') return true
+            view.dispatch(edit)
+            return true
+          } },
           { key: 'Shift-Tab', run: autoIndentSelectedCode },
           indentWithTab, ...closeBracketsKeymap, ...editorDefaultKeymap, ...historyKeymap, ...searchKeymap,
         ]),
@@ -191,11 +390,7 @@ export function MarkdownEditor(props: MarkdownEditorProps): React.JSX.Element {
         }),
         EditorView.domEventHandlers({
           compositionend: (_event, view) => {
-            const pending = pendingExternalRef.current
-            pendingExternalRef.current = null
-            if (pending !== null) setTimeout(() => {
-              if (viewRef.current === view && pending !== view.state.doc.toString()) view.dispatch({ changes: { from: 0, to: view.state.doc.length, insert: pending }, annotations: EXTERNAL_UPDATE.of(true) })
-            }, 0)
+            schedulePendingExternal(view)
             return false
           },
         }),
@@ -207,9 +402,58 @@ export function MarkdownEditor(props: MarkdownEditorProps): React.JSX.Element {
     if (!mountRef.current) return
     const view = new EditorView({ state: createState(propsRef.current), parent: mountRef.current })
     viewRef.current = view
+    const guard = guardRef.current!
+    let focusBeforeClose: { documentId: string; element: HTMLElement; table: ReturnType<typeof captureLiveTableFocus> } | null = null
+    const restoreFocus = () => {
+      const snapshot = focusBeforeClose
+      focusBeforeClose = null
+      const root = rootRef.current
+      const doc = view.dom.ownerDocument
+      if (!snapshot || !root?.isConnected || propsRef.current.documentId !== snapshot.documentId || !doc.hasFocus()) return
+      const active = doc.activeElement
+      if (active && active !== doc.body && !root.contains(active)) return
+      if (snapshot.table) { restoreLiveTableFocus(view, snapshot.table); return }
+      if (snapshot.element.isConnected && root.contains(snapshot.element)) snapshot.element.focus()
+    }
+    const handle: EditorCloseHandle = {
+      begin() {
+        if (guard.locked) return 'already-locked'
+        if (view.composing || view.compositionStarted || pendingExternalRef.current !== null) return 'composing'
+        if (!rootRef.current) return 'unavailable'
+        const active = view.dom.ownerDocument.activeElement
+        focusBeforeClose = active instanceof HTMLElement && rootRef.current.contains(active) ? { documentId: propsRef.current.documentId, element: active, table: captureLiveTableFocus(view) } : null
+        try {
+          if (!prepareLiveTablesForClose(view)) { focusBeforeClose = null; return 'composing' }
+          if (focusBeforeClose?.table) focusBeforeClose.table.source = view.state.doc
+          const result = guard.begin(view)
+          if (result !== 'locked') { restoreFocus(); return result }
+          if (rootRef.current) rootRef.current.inert = true
+          return result
+        } catch (error) { guard.end(view); restoreFocus(); throw error }
+      },
+      end() {
+        if (rootRef.current) rootRef.current.inert = false
+        guard.end(view)
+        restoreFocus()
+        const pendingResourceFocus = pendingResourceFocusRef.current
+        pendingResourceFocusRef.current = null
+        if (pendingResourceFocus) queueMicrotask(() => {
+          const doc = view.dom.ownerDocument
+          const active = doc.activeElement
+          if (viewRef.current !== view || propsRef.current.documentId !== pendingResourceFocus || !doc.hasFocus() || !view.dom.isConnected) return
+          if (active && active !== doc.body && active !== view.contentDOM && !(active instanceof Element && active.closest('.editor-resource-viewer'))) return
+          const top = view.scrollDOM.scrollTop
+          view.focus()
+          view.scrollDOM.scrollTop = top
+        })
+        queueMicrotask(() => { if (viewRef.current === view) schedulePendingExternal(view) })
+      },
+      get blocked() { return guard.blocked },
+    }
+    propsRef.current.closeHandleRef.current = handle
     const disposeContext = installEditorContext(view, () => propsRef.current, applyAction, setContextError, setResource)
     if (propsRef.current.mode !== 'reading') view.focus()
-    return () => { disposeContext(); view.destroy(); viewRef.current = null; cacheRef.current.clear() }
+    return () => { if (propsRef.current.closeHandleRef.current === handle) propsRef.current.closeHandleRef.current = null; handle.end(); for (const [timer, finish] of externalTimersRef.current) { clearTimeout(timer); finish() }; externalTimersRef.current.clear(); disposeContext(); view.destroy(); viewRef.current = null; cacheRef.current.clear() }
     // The view persists for this component's lifetime; mutable callbacks read propsRef.
   }, [])
 
@@ -285,13 +529,25 @@ export function MarkdownEditor(props: MarkdownEditorProps): React.JSX.Element {
     if (isReturning) { readingSnapshotRef.current = null; readingReturnAnchorRef.current = null }
     modeScrollAnchorRef.current = null
     modeRef.current = props.mode
-  }, [props.documentId, props.mode, props.theme, props.locale, props.fontSize, props.focusMode, props.typewriterMode, props.readOnly, props.lineNumbers, props.wrapLines, props.spellcheck, props.markdownOptions])
+  }, [props.documentId, props.mode, props.theme, props.locale, props.fontSize, props.focusMode, props.typewriterMode, props.readOnly, props.lineNumbers, props.wrapLines, props.spellcheck, props.markdownOptions, props.indentFirstLine])
 
   useEffect(() => {
-    if (props.mode === 'reading' || !props.command || !viewRef.current) return
-    if (props.command.action === 'organize-images') void organizeDocumentImages(viewRef.current, () => propsRef.current).catch((error: unknown) => setContextError(error instanceof Error ? error.message : '图片整理失败。'))
-    else if (props.command.action === 'upload-images') void uploadDocumentImages(viewRef.current, () => propsRef.current).catch((error: unknown) => setContextError(error instanceof Error ? error.message : '图片上传失败。'))
-    else applyAction(viewRef.current, props.command.action, props.command.value)
+    const command = props.command
+    if (!command) return
+    propsRef.current.onCommandStarted(command.id)
+    const finish = command.releaseCloseTask ?? (() => undefined)
+    const view = viewRef.current
+    if (props.mode === 'reading' || !view) { finish(); return }
+    try {
+      if (command.action === 'copy-markdown' || command.action === 'copy-plain' || command.action === 'copy-html') {
+        if (view.compositionStarted) { finish(); return }
+        const copy = createSelectionCopy(view, () => propsRef.current)
+        void copy(command.action).catch((error: unknown) => setContextError(error instanceof Error ? error.message : '复制失败。')).finally(finish)
+      } else if (command.action === 'choose-image') void chooseAndInsertImages(view, () => propsRef.current).catch((error: unknown) => setContextError(error instanceof Error ? error.message : '图片插入失败。')).finally(finish)
+      else if (command.action === 'organize-images') void organizeDocumentImages(view, () => propsRef.current).catch((error: unknown) => setContextError(error instanceof Error ? error.message : '图片整理失败。')).finally(finish)
+      else if (command.action === 'upload-images') void uploadDocumentImages(view, () => propsRef.current).catch((error: unknown) => setContextError(error instanceof Error ? error.message : '图片上传失败。')).finally(finish)
+      else { applyAction(view, command.action, command.value); finish() }
+    } catch (error) { finish(); throw error }
   }, [props.command?.id])
 
   useEffect(() => {
@@ -309,6 +565,7 @@ export function MarkdownEditor(props: MarkdownEditorProps): React.JSX.Element {
   const closeResource = useCallback((): void => {
     setResource(null)
     const view = viewRef.current
+    if (view && guardRef.current?.locked) { pendingResourceFocusRef.current = propsRef.current.documentId; return }
     if (view) { const top = view.scrollDOM.scrollTop; view.focus(); view.scrollDOM.scrollTop = top }
   }, [])
   useEffect(() => { setContextError(''); setResource(null) }, [props.documentId])
@@ -318,7 +575,7 @@ export function MarkdownEditor(props: MarkdownEditorProps): React.JSX.Element {
     return () => clearTimeout(timeout)
   }, [contextError])
 
-  return <div className={`markdown-editor markdown-editor-${props.mode}${props.focusMode ? ' markdown-editor-focus' : ''}`} data-testid="markdown-editor">
+  return <div ref={rootRef} className={`markdown-editor markdown-editor-${props.mode}${props.focusMode ? ' markdown-editor-focus' : ''}`} data-testid="markdown-editor">
     {contextError ? <div className="editor-context-error" role="alert">{editorText(props.locale, contextError)}<button type="button" aria-label={editorText(props.locale, '关闭提示')} onClick={() => setContextError('')}>×</button></div> : null}
     <div className="editor-mount" ref={mountRef} hidden={props.mode === 'reading'} aria-hidden={props.mode === 'reading'} />
     {props.mode === 'reading' ? <ReadingView markdownOptions={props.markdownOptions} ref={readingRef} platform={props.platform} documentId={props.documentId} content={props.value} theme={props.theme} fontSize={props.fontSize} command={props.command} jumpToLine={props.jumpToLine} onLinkOpen={props.onLinkOpen} resolveResource={props.resolveResource} initialAnchor={readingSnapshotRef.current?.documentId === props.documentId ? readingSnapshotRef.current.anchor : null} /> : null}

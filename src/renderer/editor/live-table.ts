@@ -2,12 +2,13 @@ import { EditorSelection } from '@codemirror/state'
 import { undo, redo, isolateHistory } from '@codemirror/commands'
 import { EditorView, WidgetType } from '@codemirror/view'
 import { hydratePreview, sanitizeMarkdownHtml } from './markdown'
-import { escapeCellInput, parseTableSource, tableCellEdit, type TableCellSource, type TableSource } from './table-model'
+import { escapeCellInput, missingTableCellSource, parseTableSource, tableCellEdit, type TableCellSource, type TableSource } from './table-model'
 import type { LiveBlock, LiveOptions } from './live-types'
 import { fitEditorResources } from './resource-fit'
 import { tableRangeSelection } from './table-range-selection'
 import { clearTableRange, copyTableRange, MAX_TABLE_COLUMNS, MAX_TABLE_ROWS, moveTableColumn, moveTableRow, pasteTableCells, resizeTable, tableOperation, tableRangeContains, type SourcePatch, type TableRange } from './table-operations'
 import { editorText } from './editor-i18n'
+import { resolveTableFocusSelection, type TableFocusState } from './table-focus-state'
 
 interface TableContext {
   block: LiveBlock
@@ -23,6 +24,78 @@ interface TableContext {
 }
 const contexts = new WeakMap<HTMLElement, TableContext>()
 
+export type LiveTableFocusSnapshot = TableFocusState
+
+/** Capture the native cell selection before blur commits the cell. */
+export function captureLiveTableFocus(view: EditorView): LiveTableFocusSnapshot | null {
+  const active = view.dom.ownerDocument.activeElement
+  if (!(active instanceof HTMLElement) || !active.matches('[data-testid="live-table"] th[contenteditable=true],[data-testid="live-table"] td[contenteditable=true]')) return null
+  const selection = view.dom.ownerDocument.getSelection()
+  if (!selection?.anchorNode || !selection.focusNode || !active.contains(selection.anchorNode) || !active.contains(selection.focusNode)) return null
+  const table = active.closest<HTMLElement>('[data-testid="live-table"]')
+  const tableFrom = Number(table?.dataset.sourceFrom), row = Number(active.dataset.row), column = Number(active.dataset.column)
+  if (!table || !Number.isInteger(tableFrom) || !Number.isInteger(row) || !Number.isInteger(column)) return null
+  const offset = (node: Node, at: number) => {
+    const range = view.dom.ownerDocument.createRange()
+    range.selectNodeContents(active)
+    range.setEnd(node, at)
+    return range.toString().length
+  }
+  return { source: view.state.doc, tableFrom, row, column, anchor: offset(selection.anchorNode, selection.anchorOffset), focus: offset(selection.focusNode, selection.focusOffset) }
+}
+
+export interface LiveTableImageTarget {
+  range: { from: number; to: number }
+  isCurrent: () => boolean
+  virtualCell?: { tableFrom: number; tableTo: number; row: number; column: number; prefix: string }
+}
+
+/** Resolve only a focused, single native cell selection with unchanged source. */
+export function captureLiveTableImageTarget(view: EditorView, cell: HTMLElement): LiveTableImageTarget | null {
+  const container = cell.closest<HTMLElement>('[data-testid="live-table"]')
+  const context = container && contexts.get(container)
+  const source = context && cellSource(context, cell), snapshot = captureLiveTableFocus(view)
+  if (!context || context.activeCell !== cell || !source || context.composing || context.range || !snapshot || cell.textContent !== source.content || snapshot.anchor > source.content.length || snapshot.focus > source.content.length || (source.missingPrefix !== undefined && (snapshot.anchor !== 0 || snapshot.focus !== 0))) return null
+  const range = { from: source.from + Math.min(snapshot.anchor, snapshot.focus), to: source.from + Math.max(snapshot.anchor, snapshot.focus) }
+  const isCurrent = () => {
+    const now = captureLiveTableFocus(view)
+    return !context.composing && !context.range && context.activeCell === cell && cell.textContent === source.content && Boolean(now && now.source.eq(snapshot.source) && now.tableFrom === snapshot.tableFrom && now.row === snapshot.row && now.column === snapshot.column && now.anchor === snapshot.anchor && now.focus === snapshot.focus)
+  }
+  const virtualCell = source.missingPrefix === undefined ? undefined : { tableFrom: context.block.from, tableTo: context.block.to, row: source.row, column: source.column, prefix: source.missingPrefix }
+  return { range, isCurrent, ...(virtualCell ? { virtualCell } : {}) }
+}
+
+export function restoreLiveTableFocus(view: EditorView, snapshot: LiveTableFocusSnapshot): boolean {
+  if (!snapshot.source.eq(view.state.doc)) return false
+  const table = Array.from(view.dom.querySelectorAll<HTMLElement>('[data-testid="live-table"]')).find(element => Number(element.dataset.sourceFrom) === snapshot.tableFrom)
+  const cell = table && Array.from(table.querySelectorAll<HTMLElement>('th[contenteditable=true],td[contenteditable=true]')).find(element => Number(element.dataset.row) === snapshot.row && Number(element.dataset.column) === snapshot.column)
+  if (!cell) return false
+  cell.focus()
+  const text = cell.firstChild?.nodeType === Node.TEXT_NODE ? cell.firstChild : null
+  const offsets = resolveTableFocusSelection(snapshot, view.state.doc, text ? (text.textContent?.length ?? 0) : null)
+  if (!offsets) return false
+  const selection = view.dom.ownerDocument.getSelection()
+  if (!selection) return false
+  const target = offsets.target === 'text' ? text : cell
+  if (!target) return false
+  selection.setBaseAndExtent(target, offsets.anchor, target, offsets.focus)
+  return true
+}
+
+/** Commit native cell editing before a document is frozen for closing. */
+export function prepareLiveTablesForClose(view: EditorView): boolean {
+  const tables = Array.from(view.contentDOM.querySelectorAll<HTMLElement>('.cm-live-table'))
+  if (tables.some(table => contexts.get(table)?.composing)) return false
+  for (const table of tables) {
+    const context = contexts.get(table)
+    if (!context?.activeCell) continue
+    const active = context.activeCell
+    commitCell(view, context, active)
+    if (document.activeElement === active) active.blur()
+  }
+  return true
+}
+
 function takeMathSources(container: HTMLElement): Map<HTMLElement, string> {
   const sources = new Map<HTMLElement, string>()
   for (const node of container.querySelectorAll<HTMLElement>('[data-math]')) { sources.set(node, node.textContent || ''); node.replaceChildren() }
@@ -34,7 +107,9 @@ function hydrateCells(container: HTMLElement, sources: Map<HTMLElement, string>,
 }
 
 function cellSource(context: TableContext, element: HTMLElement): TableCellSource | undefined {
-  return context.model.cells.find((cell) => cell.row === Number(element.dataset.row) && cell.column === Number(element.dataset.column))
+  const row = Number(element.dataset.row), column = Number(element.dataset.column)
+  return context.model.cells.find((cell) => cell.row === row && cell.column === column)
+    ?? missingTableCellSource(context.block.source, context.model, row, column, context.block.from, context.block.firstLine)
 }
 
 function domOffset(cell: HTMLElement): number {
@@ -79,7 +154,7 @@ function commitCell(view: EditorView, context: TableContext, cell: HTMLElement):
   if (!edit) return
   context.nativeEditing = true
   try {
-    view.dispatch({ changes: edit, selection: EditorSelection.cursor(edit.from + Math.min(edit.insert.length, caret)), userEvent: 'input.table' })
+    view.dispatch({ changes: edit, selection: EditorSelection.cursor(edit.from + (source.missingPrefix?.length ?? 0) + Math.min(escapeCellInput(content).length, caret)), userEvent: 'input.table' })
   } finally { context.nativeEditing = false }
 }
 
@@ -336,6 +411,28 @@ export class LiveTableWidget extends WidgetType {
       if (!context.activeCell || context.options.readOnly || view.state.readOnly) return
       event.preventDefault()
       const text = event.clipboardData?.getData('text/plain') || ''
+      if (!text && event.clipboardData?.files.length) {
+        event.stopPropagation()
+        const target = captureLiveTableImageTarget(view, context.activeCell)
+        if (!target || !context.options.onTableImagePaste) {
+          context.options.onError?.('无法安全粘贴图片到此表格选区，请使用插入图片。')
+          return
+        }
+        context.options.onTableImagePaste(view, Array.from(event.clipboardData.files), target.range, target.isCurrent, target.virtualCell)
+        return
+      }
+      if (!text) {
+        event.stopPropagation()
+        const html = event.clipboardData?.getData('text/html') || ''
+        if (html) {
+          const target = captureLiveTableImageTarget(view, context.activeCell)
+          if (target && context.options.onTableHtmlPaste) context.options.onTableHtmlPaste(view, html, target)
+          else context.options.onError?.('无法安全粘贴 HTML 到此表格选区。')
+          return
+        }
+        context.options.onError?.('剪贴板没有可粘贴到表格的文本，原内容已保留。')
+        return
+      }
       if (text.includes('\t') || context.range) {
         const row = context.range ? Math.min(context.range.fromRow, context.range.toRow) : context.cursor.row
         const column = context.range ? Math.min(context.range.fromColumn, context.range.toColumn) : context.cursor.column

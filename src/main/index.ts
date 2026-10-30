@@ -2,29 +2,34 @@ import { watch, type FSWatcher } from 'node:fs'
 import * as fs from 'node:fs/promises'
 import path from 'node:path'
 import { pathToFileURL } from 'node:url'
-import { app, BrowserWindow, clipboard, ClipboardItem, dialog, ipcMain, Menu, nativeImage, nativeTheme, protocol, session, shell, type IpcMainInvokeEvent } from 'electron'
-import type { AppCommand, DesktopEvent, ExportRequest, FileAction, FileEntry, Preferences, SaveRequest, SearchRequest, Workspace } from '../shared/contracts'
+import { app, BrowserWindow, clipboard, ClipboardItem, dialog, ipcMain, Menu, nativeImage, nativeTheme, protocol, session, shell, ShareMenu, type IpcMainInvokeEvent } from 'electron'
+import type { AppCommand, CloseSavedDocument, DesktopEvent, DocumentRecord, ExportRequest, FileAction, FileEntry, Preferences, SaveRequest, SearchRequest, Workspace } from '../shared/contracts'
 import { DocumentSession, validateSnapshot } from './documents'
+import { CloseValidation } from './close-validation'
+import { DocumentOperationGate } from './document-operation-gate'
 import { boolean, DesktopError, failure, invalid, object, string } from './errors'
 import { getExportPlan, exportDocument, printDocument } from './exports'
 import { ExportHistory } from './export-history'
 import { welcomeDocument } from './welcome'
 import { translate, translateKnownError } from '../shared/i18n'
+import { setNativeDocumentState } from './native-document-state'
+import { showNativeShare } from './native-share'
+import { createNativeTab } from './native-tabs'
+import { minimizeAllDocumentWindows } from './minimize-all'
 import { importExportPresets, exportExportPresets } from './export-preset-files'
 import { EXPORT_FORMATS, type SavedExportPreset } from '../shared/export-options'
 import { createExportPresetFile, mergeImportedExportPresets } from '../shared/export-preset-file'
 import { normalizeWorkspaceOptions } from '../shared/workspace-options'
-import { organizeImages, importImages, importImageFiles, validateImageImport } from './image-import'
+import { organizeImages, importImages, importImageFiles, readSelectedImageFiles, validateImageImport } from './image-import'
 import { openLinkedFile } from './linked-files'
 import { withEmbeddedImportMedia } from './pandoc-import-media'
 import { PANDOC_IMPORT_FORMATS, runPandoc } from './pandoc'
-import { canonicalInside, canonicalPath, IMAGE_MIME, listDirectory, MARKDOWN_EXTENSIONS, MAX_DOCUMENT_BYTES, safeName, serialized, searchMarkdown } from './files'
+import { canonicalInside, canonicalPath, IMAGE_MIME, listDirectory, MARKDOWN_EXTENSIONS, MAX_DOCUMENT_BYTES, safeName, serialized, searchMarkdownDetailed } from './files'
 import { LocalStore, validatePreferences } from './preferences'
 import { ResourceRegistry } from './resources'
 import { createMenuTemplate } from './menu'
 import { markdownImageSources, missingImagesAfterSaveAs } from './image-paths'
 import { NativeContextMenus, validateContextMenu } from './context-menu'
-import { validateClipboard } from './clipboard'
 import { operateImage, validateImageOperation } from './image-operations'
 import { resourceBytes, validateResourceSave, writeResource } from './resource-save'
 import { mergePreferencePatch } from '../shared/preference-patch'
@@ -36,6 +41,11 @@ import { showThirdPartyNotices } from './notices'
 import { OpenFileQueue } from './open-files'
 import { FileMoveHistory } from './file-history'
 import { readFileSnapshot } from './file-snapshot'
+import { ThemeDirectory } from './theme-directory'
+import { ClipboardArbiter } from './clipboard-arbiter'
+import { ClipboardWriteService } from './clipboard-service'
+import { ThemeRefresh } from './theme-refresh'
+import { toggleAlwaysOnTop } from './always-on-top'
 import { assertNoActiveFileOperations, assertNoOtherActiveFileOperations, isPathWithin, withActiveFileOperation, withWorkspaceStructure } from './workspace-lock'
 import { assertDestinationUnoccupied, assertSourcePathsUnambiguous, relocateWorkspaceState } from './workspace-relocation'
 import { normalizedImageSource, uploadImages, validateUploadImages } from './image-uploader'
@@ -55,6 +65,10 @@ interface WindowContext {
   approvedClose: boolean
   closing: boolean
   closeCheckPending: boolean
+  closeValidation: CloseValidation
+  documentOperations: DocumentOperationGate
+  activeDocumentId: string | null
+  nativeTabsEnabled: boolean
   workspaceWatcher?: FSWatcher
   workspaceTimer?: ReturnType<typeof setTimeout>
 }
@@ -62,8 +76,14 @@ interface WindowContext {
 const windows = new Map<number, WindowContext>()
 const resources = new ResourceRegistry()
 const contextMenus = new NativeContextMenus((template) => Menu.buildFromTemplate(template))
+const clipboardArbiter = new ClipboardArbiter()
+const writeSystemClipboard = async (content: import('../shared/contracts').ClipboardContent) => {
+  await clipboard.write([new ClipboardItem({ 'text/plain': content.text, ...(content.html === undefined ? {} : { 'text/html': content.html }), ...(content.rtf === undefined ? {} : { 'text/rtf': content.rtf }) })])
+}
+const clipboardWrites = new ClipboardWriteService(clipboardArbiter, writeSystemClipboard)
 let store: LocalStore
 let exportHistory: ExportHistory
+let quitRequested = false
 
 function assertNoWorkspaceInside(source: string): void {
   for (const target of windows.values()) {
@@ -96,6 +116,7 @@ const markdownFilters = () => [{ name: localText('Markdown 与文本', 'Markdown
 
 function send(context: WindowContext, event: DesktopEvent): void {
   if (!context.window.isDestroyed() && !context.window.webContents.isDestroyed()) context.window.webContents.send('qtypora:event', event)
+  if (event.type === 'document-changed' || event.type === 'document-renamed') createMenus()
 }
 
 function focused(): WindowContext | undefined {
@@ -117,13 +138,36 @@ function applySpellingPreferences(): void {
 }
 
 function createMenus(): void {
+  const current = focused()
+  let canRevealCurrentFile = false
+  let lineEnding: DocumentRecord['lineEnding'] | undefined
+  let canChangeLineEnding = false
+  if (current?.activeDocumentId) {
+    try {
+      const state = current.documents.get(current.activeDocumentId)
+      canRevealCurrentFile = Boolean(state.record.path && !state.fileMissing)
+      lineEnding = state.pendingLineEnding ?? state.record.lineEnding
+      canChangeLineEnding = !state.record.readOnly && !current.closing && !current.closeCheckPending && !current.approvedClose
+    }
+    catch { /* The document may have closed while its UI state is being refreshed. */ }
+  }
   const template = createMenuTemplate(process.platform, app.isPackaged, store.recentFiles, {
     command,
+    toggleSpellcheck: () => { createMenus(); command('toggle-spellcheck') },
+    toggleSoftBreaks: () => { createMenus(); command('toggle-soft-breaks') },
+    pastePlain: () => focused()?.window.webContents.pasteAndMatchStyle(),
+    showEmojiPanel: () => app.showEmojiPanel(),
     openRecent: (filePath) => {
       const context = focused()
       if (context) void context.documents.open(filePath).then((document) => send(context, { type: 'open-document', document })).catch((error: unknown) => showFailure(context, error))
     },
     exit: () => focused()?.window.close(),
+    minimizeAll: () => {
+      const owner = focused()
+      const candidates = [...windows.values()].filter(context => !context.closing && !context.closeCheckPending && !context.approvedClose).map(context => context.window)
+      const result = minimizeAllDocumentWindows(candidates)
+      if (result.failed && owner) void showFailure(owner, new DesktopError('IO_ERROR', '部分窗口无法最小化。'))
+    },
     thirdPartyNotices: () => { const context = focused(); if (context) void showThirdPartyNotices(context.window, path.join(__dirname, '../renderer/third-party-notices.txt')).catch(error => showFailure(context, error)) },
     checkUpdates: () => { void shell.openExternal('https://github.com/sleepdecidehair/qtypora/releases') },
     help: () => { const context = focused(); if (context) void dialog.showMessageBox(context.window, { type: 'info', title: translate(store.preferences.locale, 'QTypora 使用帮助'), message: translate(store.preferences.locale, '本地 Markdown 编辑器'), detail: helpText(process.platform, store.preferences.locale) }) },
@@ -132,7 +176,7 @@ function createMenus(): void {
       const window = focused()?.window
       if (window) void dialog.showMessageBox(window, { type: 'info', title: translate(store.preferences.locale, '关于 QTypora'), message: translate(store.preferences.locale, app.isPackaged ? 'QTypora 内测版' : 'QTypora 开发版'), icon: appIconPath, detail: `${translate(store.preferences.locale, '版本')} ${app.getVersion()}\n${translate(store.preferences.locale, '本地 Markdown 桌面编辑器')}\nElectron ${process.versions.electron}` })
     },
-  }, { shortcuts: store.preferences.shortcuts, locale: store.preferences.locale })
+  }, { shortcuts: store.preferences.shortcuts, locale: store.preferences.locale, alwaysOnTop: current?.window.isAlwaysOnTop() ?? false, indentFirstLine: store.preferences.indentFirstLine, softBreaks: store.preferences.markdown.softBreaks, canRevealCurrentFile, spellcheck: store.preferences.spellcheck, lineEnding, canChangeLineEnding, nativeTabsEnabled: Boolean(current?.nativeTabsEnabled && !current.closing && !current.closeCheckPending && !current.approvedClose) })
   Menu.setApplicationMenu(Menu.buildFromTemplate(template))
 }
 
@@ -153,7 +197,7 @@ async function openSystemFile(filePath: string): Promise<void> {
 async function openSystemFileActive(filePath: string): Promise<void> {
   if (!MARKDOWN_EXTENSIONS.has(path.extname(filePath).toLowerCase())) throw new DesktopError('UNSUPPORTED', '仅支持打开 Markdown 或 UTF-8 文本文件。')
   const context = focused()
-  if (!context) { await createWindow(filePath); return }
+  if (!context || context.closing || context.closeCheckPending || context.approvedClose) { await createWindow(filePath); return }
   const document = await context.documents.open(filePath, true)
   createMenus()
   send(context, { type: 'open-document', document })
@@ -162,80 +206,128 @@ async function openSystemFileActive(filePath: string): Promise<void> {
   context.window.focus()
 }
 
-async function createWindow(openPath?: string): Promise<void> {
+async function createWindow(openPath?: string, options: { nativeTab?: boolean } = {}): Promise<BrowserWindow> {
+  // A window created after the quit request was not part of its close checks.
+  // Treat opening it as cancellation so a later ordinary close cannot exit the app.
+  quitRequested = false
+  const nativeTabsEnabled = process.platform === 'darwin' && (options.nativeTab === true || store.preferences.macNativeTabs)
   const window = new BrowserWindow({ width: 1220, height: 860, minWidth: 760, minHeight: 560, show: false,
     title: 'QTypora', icon: appIconPath, backgroundColor: '#ffffff', autoHideMenuBar: false,
-    ...(process.platform === 'darwin' ? { titleBarStyle: 'hiddenInset' as const } : {}),
+    ...(process.platform === 'darwin' ? (nativeTabsEnabled ? { tabbingIdentifier: 'com.qtypora.document' } : { titleBarStyle: 'hiddenInset' as const }) : {}),
     webPreferences: { preload: path.join(__dirname, '../preload/index.js'), sandbox: true, contextIsolation: true,
       nodeIntegration: false, webSecurity: true, spellcheck: store.preferences.spellcheck, allowRunningInsecureContent: false },
   })
   const owner = window.webContents.id
-  let context: WindowContext
-  const documents = new DocumentSession(store, {
-    chooseSave: async (record) => {
-      const selected = await dialog.showSaveDialog(window, { title: localText('保存 Markdown', 'Save Markdown'), defaultPath: record.path ?? record.name, filters: markdownFilters(),
-        properties: ['showOverwriteConfirmation', 'createDirectory'] })
-      if (selected.canceled || !selected.filePath) return null
-      if (!MARKDOWN_EXTENSIONS.has(path.extname(selected.filePath).toLowerCase())) throw new DesktopError('UNSUPPORTED', '请使用 .md、.markdown 或 .txt 扩展名。')
-      const missingImages = await missingImagesAfterSaveAs(record.content, record.path, selected.filePath)
-      if (missingImages.length) {
-        const answer = await dialog.showMessageBox(window, { type: 'warning', title: localText('另存为后的图片路径', 'Image paths after Save As'),
-          message: localText(`另存后有 ${missingImages.length} 张相对路径图片在目标目录中找不到。`, `${missingImages.length} relative image paths will not exist in the destination folder.`),
-          detail: localText(`以下引用仍按原文保留：\n${missingImages.slice(0, 5).join('\n')}\n\n继续后请将图片复制到目标目录中的相同位置，或修改图片引用。原图片不会移动或删除。`, `These references remain unchanged:\n${missingImages.slice(0, 5).join('\n')}\n\nCopy the images to the same relative locations or update the references. Original images are not moved or deleted.`),
-          buttons: [localText('继续另存', 'Save anyway'), localText('取消', 'Cancel')], defaultId: 1, cancelId: 1, noLink: true })
-        if (answer.response !== 0) return null
+  let context: WindowContext | undefined
+  try {
+    const documents = new DocumentSession(store, {
+      chooseSave: async (record) => {
+        const selected = await dialog.showSaveDialog(window, { title: localText('保存 Markdown', 'Save Markdown'), defaultPath: record.path ?? record.name, filters: markdownFilters(),
+          properties: ['showOverwriteConfirmation', 'createDirectory'] })
+        if (selected.canceled || !selected.filePath) return null
+        if (!MARKDOWN_EXTENSIONS.has(path.extname(selected.filePath).toLowerCase())) throw new DesktopError('UNSUPPORTED', '请使用 .md、.markdown 或 .txt 扩展名。')
+        const missingImages = await missingImagesAfterSaveAs(record.content, record.path, selected.filePath)
+        if (missingImages.length) {
+          const answer = await dialog.showMessageBox(window, { type: 'warning', title: localText('另存为后的图片路径', 'Image paths after Save As'),
+            message: localText(`另存后有 ${missingImages.length} 张相对路径图片在目标目录中找不到。`, `${missingImages.length} relative image paths will not exist in the destination folder.`),
+            detail: localText(`以下引用仍按原文保留：\n${missingImages.slice(0, 5).join('\n')}\n\n继续后请将图片复制到目标目录中的相同位置，或修改图片引用。原图片不会移动或删除。`, `These references remain unchanged:\n${missingImages.slice(0, 5).join('\n')}\n\nCopy the images to the same relative locations or update the references. Original images are not moved or deleted.`),
+            buttons: [localText('继续另存', 'Save anyway'), localText('取消', 'Cancel')], defaultId: 1, cancelId: 1, noLink: true })
+          if (answer.response !== 0) return null
+        }
+        return selected.filePath
+      },
+      confirmClose: async (record) => {
+        const answer = await dialog.showMessageBox(window, { type: 'question', title: localText('保存修改', 'Save changes'), message: localText(`是否保存“${record.name}”的修改？`, `Save changes to “${record.name}”?`),
+          detail: localText('保存后关闭；选择“不保存”将丢弃本次修改。', 'Save and close, or discard the changes.'), buttons: [localText('保存', 'Save'), localText('不保存', 'Discard'), localText('取消', 'Cancel')], defaultId: 0, cancelId: 2, noLink: true })
+        return answer.response === 0 ? 'save' : answer.response === 1 ? 'discard' : 'cancel'
+      },
+    }, (event) => { if (context) send(context, event) })
+    const fileMoves = new FileMoveHistory({
+      withDocumentLocks: (source, operation, destination) => withWorkspaceStructure(async () => {
+        assertNoActiveFileOperations()
+        assertNoWorkspaceInside(source)
+        const sessions = [...windows.values()].map(target => target.documents)
+        await assertSourcePathsUnambiguous(source, sessions, store, resources)
+        if (destination) assertDestinationUnoccupied(destination, sessions, store, resources)
+        return withAllDocumentPathLocks(source, operation)
+      }),
+      updatePaths: async (source, destination) => {
+        try { await relocateWorkspaceState(source, destination, [...windows.values()].map(target => target.documents), store, resources) }
+        finally { for (const target of windows.values()) if (target.documents.workspace) send(target, { type: 'workspace-changed', path: target.documents.workspace }) }
+      },
+    })
+    const closeValidation = new CloseValidation((requestId, snapshots) => {
+      if (context) send(context, { type: 'validate-close', requestId, snapshots })
+    })
+    const windowContext: WindowContext = { window, documents, fileMoves, closeValidation, documentOperations: new DocumentOperationGate(), approvedClose: false, closing: false, closeCheckPending: false, activeDocumentId: null, nativeTabsEnabled }
+    context = windowContext
+    windows.set(owner, windowContext)
+    if (openPath) {
+      try {
+        if ((await fs.stat(openPath)).isDirectory()) await openWorkspace(windowContext, openPath, true)
+        else await windowContext.documents.open(openPath, true)
       }
-      return selected.filePath
-    },
-    confirmClose: async (record) => {
-      const answer = await dialog.showMessageBox(window, { type: 'question', title: localText('保存修改', 'Save changes'), message: localText(`是否保存“${record.name}”的修改？`, `Save changes to “${record.name}”?`),
-        detail: localText('保存后关闭；选择“不保存”将丢弃本次修改。', 'Save and close, or discard the changes.'), buttons: [localText('保存', 'Save'), localText('不保存', 'Discard'), localText('取消', 'Cancel')], defaultId: 0, cancelId: 2, noLink: true })
-      return answer.response === 0 ? 'save' : answer.response === 1 ? 'discard' : 'cancel'
-    },
-  }, (event) => send(context, event))
-  const fileMoves = new FileMoveHistory({
-    withDocumentLocks: (source, operation, destination) => withWorkspaceStructure(async () => {
-      assertNoActiveFileOperations()
-      assertNoWorkspaceInside(source)
-      const sessions = [...windows.values()].map(target => target.documents)
-      await assertSourcePathsUnambiguous(source, sessions, store, resources)
-      if (destination) assertDestinationUnoccupied(destination, sessions, store, resources)
-      return withAllDocumentPathLocks(source, operation)
-    }),
-    updatePaths: async (source, destination) => {
-      try { await relocateWorkspaceState(source, destination, [...windows.values()].map(target => target.documents), store, resources) }
-      finally { for (const target of windows.values()) if (target.documents.workspace) send(target, { type: 'workspace-changed', path: target.documents.workspace }) }
-    },
-  })
-  context = { window, documents, fileMoves, approvedClose: false, closing: false, closeCheckPending: false }
-  windows.set(owner, context)
-  if (openPath) {
-    try {
-      if ((await fs.stat(openPath)).isDirectory()) await openWorkspace(context, openPath, true)
-      else await context.documents.open(openPath, true)
+      catch (error) { console.error('[app] Command-line file could not be opened'); await showFailure(windowContext, error) }
     }
-    catch (error) { console.error('[app] Command-line file could not be opened'); await showFailure(context, error) }
+    if (!windowContext.documents.records().length) windowContext.documents.create(options.nativeTab ? '' : welcomeDocument(store.preferences.locale, process.platform))
+    if (nativeTabsEnabled) window.on('new-window-for-tab', () => {
+      void openNativeTab(windowContext).catch((error: unknown) => { if (!window.isDestroyed()) void showFailure(windowContext, error) })
+    })
+    window.webContents.setWindowOpenHandler(() => ({ action: 'deny' }))
+    window.webContents.on('did-start-navigation', (_event, _url, isInPlace, isMainFrame) => {
+      if (isMainFrame && !isInPlace) clipboardArbiter.ownerTerminated(owner)
+    })
+    window.webContents.on('render-process-gone', () => clipboardArbiter.ownerTerminated(owner))
+    window.webContents.on('did-finish-load', () => { if (!window.isDestroyed() && windows.get(owner) === windowContext) clipboardArbiter.ownerActive(owner) })
+    window.webContents.on('will-navigate', (event) => event.preventDefault())
+    window.webContents.on('will-attach-webview', (event) => event.preventDefault())
+    window.webContents.on('will-prevent-unload', () => {
+      if (!windowContext.approvedClose) return
+      quitRequested = false
+      windowContext.approvedClose = false
+      windowContext.closing = false
+      createMenus()
+      void windowContext.documents.restoreAfterPreventedWindowClose().then(
+        () => send(windowContext, { type: 'window-close-prevented' }),
+        (error: unknown) => send(windowContext, { type: 'window-close-prevented', error: error instanceof Error ? error.message : '恢复草稿失败。' }),
+      )
+    })
+    window.on('close', (event) => {
+      if (windowContext.approvedClose) return
+      event.preventDefault()
+      if (!windowContext.closing) { windowContext.closing = true; createMenus(); send(windowContext, { type: 'command', command: 'request-window-close' }) }
+    })
+    window.on('focus', () => createMenus())
+    window.on('closed', () => {
+      clipboardArbiter.ownerTerminated(owner)
+      windowContext.closeValidation.dispose()
+      contextMenus.cancel(window)
+      windowContext.documents.dispose()
+      windowContext.workspaceWatcher?.close()
+      if (windowContext.workspaceTimer) clearTimeout(windowContext.workspaceTimer)
+      resources.dispose(owner)
+      windows.delete(owner)
+    })
+    window.once('ready-to-show', () => { window.webContents.setZoomFactor(store.preferences.zoomFactor); if (!options.nativeTab) window.show() })
+    if (process.env.ELECTRON_RENDERER_URL) await window.loadURL(rendererUrl)
+    else await window.loadFile(rendererPath)
+    return window
+  } catch (error) {
+    if (!window.isDestroyed()) window.destroy()
+    if (windows.has(owner)) {
+      context?.documents.dispose()
+      context?.workspaceWatcher?.close()
+      if (context?.workspaceTimer) clearTimeout(context.workspaceTimer)
+      resources.dispose(owner)
+      windows.delete(owner)
+    }
+    throw error
   }
-  if (!context.documents.records().length) context.documents.create(welcomeDocument(store.preferences.locale, process.platform))
-  window.webContents.setWindowOpenHandler(() => ({ action: 'deny' }))
-  window.webContents.on('will-navigate', (event) => event.preventDefault())
-  window.webContents.on('will-attach-webview', (event) => event.preventDefault())
-  window.on('close', (event) => {
-    if (context.approvedClose) return
-    event.preventDefault()
-    if (!context.closing) { context.closing = true; send(context, { type: 'command', command: 'request-window-close' }) }
-  })
-  window.on('closed', () => {
-    contextMenus.cancel(window)
-    context.documents.dispose()
-    context.workspaceWatcher?.close()
-    if (context.workspaceTimer) clearTimeout(context.workspaceTimer)
-    resources.dispose(owner)
-    windows.delete(owner)
-  })
-  window.once('ready-to-show', () => { window.webContents.setZoomFactor(store.preferences.zoomFactor); window.show() })
-  if (process.env.ELECTRON_RENDERER_URL) await window.loadURL(rendererUrl)
-  else await window.loadFile(rendererPath)
+}
+
+async function openNativeTab(context: WindowContext): Promise<void> {
+  if (process.platform === 'darwin' && !context.nativeTabsEnabled) throw new DesktopError('UNSUPPORTED', '请在偏好设置开启 macOS 原生标签页，再新建窗口后使用。')
+  await withActiveFileOperation(() => createNativeTab(process.platform, context.window, () => !context.closing && !context.approvedClose, () => createWindow(undefined, { nativeTab: true })))
 }
 
 function trustedContext(event: IpcMainInvokeEvent): WindowContext {
@@ -250,6 +342,14 @@ function trustedContext(event: IpcMainInvokeEvent): WindowContext {
 function handle(name: string, operation: (context: WindowContext, ...args: unknown[]) => Promise<unknown> | unknown): void {
   ipcMain.handle(`qtypora:${name}`, async (event, ...args: unknown[]) => {
     try { return { ok: true, data: await operation(trustedContext(event), ...args) } }
+    catch (error) { return localizedFailure(error) }
+  })
+}
+
+/** Operations with partial results return their own Result without losing errors. */
+function handleResult(name: string, operation: (context: WindowContext, ...args: unknown[]) => Promise<unknown>): void {
+  ipcMain.handle(`qtypora:${name}`, async (event, ...args: unknown[]) => {
+    try { return await operation(trustedContext(event), ...args) }
     catch (error) { return localizedFailure(error) }
   })
 }
@@ -333,9 +433,31 @@ async function runFileAction(context: WindowContext, action: FileAction): Promis
 }
 
 function registerIpc(): void {
+  const themeDirectoryPath = path.join(app.getPath('userData'), 'themes')
+  const themeDirectory = new ThemeDirectory(themeDirectoryPath)
+  const themeRefresh = new ThemeRefresh(revision => {
+    for (const target of windows.values()) {
+      try { send(target, { type: 'user-themes-changed', revision }) }
+      catch { console.error('[theme] Could not notify a window of a theme refresh') }
+    }
+  })
+  const prepareThemeDirectory = async (): Promise<void> => {
+    try { await fs.mkdir(themeDirectoryPath) }
+    catch (error) {
+      if (!(error && typeof error === 'object' && 'code' in error && error.code === 'EEXIST')) throw error
+    }
+  }
+  handle('listUserThemes', async () => { await prepareThemeDirectory(); return themeRefresh.list(() => themeDirectory.list()) })
+  handle('readUserTheme', async (_context, id) => { await prepareThemeDirectory(); return themeDirectory.read(string(id, '主题名称', 120)) })
+  handle('revealUserThemes', async () => {
+    await prepareThemeDirectory()
+    const directory = await fs.lstat(themeDirectoryPath)
+    if (!directory.isDirectory() || directory.isSymbolicLink()) throw new DesktopError('CONFLICT', '主题目录不可用或已被替换。')
+    shell.showItemInFolder(themeDirectoryPath)
+  })
   handle('bootstrap', async (context) => ({ preferences: store.preferences, preferencesVersion, recentFiles: store.recentFiles, recentFolders: store.recentFolders, documents: context.documents.records(),
     drafts: [...store.drafts.values()].filter((draft) => ![...windows.values()].some((window) => window.documents.records().some((record) => record.id === draft.id))),
-    version: app.getVersion(), platform: process.platform,
+    version: app.getVersion(), platform: process.platform, nativeTabsEnabled: context.nativeTabsEnabled,
     workspace: context.documents.workspace ? { path: context.documents.workspace, name: path.basename(context.documents.workspace), entries: await listDirectory(context.documents.workspace, store.preferences.workspace) } : null }))
   handle('createDocument', (context) => context.documents.create())
   handle('openFile', (context, input) => withActiveFileOperation(async () => {
@@ -371,30 +493,86 @@ function registerIpc(): void {
     try { workspaceOptions = normalizeWorkspaceOptions(options) } catch (error) { invalid(error instanceof Error ? error.message : '文件显示设置无效。') }
     return listDirectory(await context.documents.authorize(string(input, '文件夹路径')), workspaceOptions)
   })
-  handle('syncDocument', async (context, input) => context.documents.sync(validateSnapshot(input)))
-  handle('saveDocument', (context, input) => withActiveFileOperation(async () => {
+  handle('syncDocument', async (context, input) => {
+    try { return await context.documents.sync(validateSnapshot(input)) }
+    finally { createMenus() }
+  })
+  handle('listSystemVersions', (context, input) => context.documents.listSystemVersions(validateSnapshot(input)))
+  handle('readSystemVersion', async (context, input) => {
+    const request = object(input)
+    const bytes = await context.documents.readSystemVersion(validateSnapshot(request.snapshot), string(request.token, '版本令牌', 100))
+    const hasBom = bytes.length >= 3 && bytes[0] === 0xef && bytes[1] === 0xbb && bytes[2] === 0xbf
+    return { content: bytes.subarray(hasBom ? 3 : 0).toString('utf8'), encoding: hasBom ? 'utf8-bom' : 'utf8' }
+  })
+  handleResult('saveDocument', async (context, input) => {
     const value = object(input)
     const request: SaveRequest = { ...validateSnapshot(input), saveAs: value.saveAs === undefined ? undefined : boolean(value.saveAs, '另存为') }
-    const result = await context.documents.save(request)
-    if (result?.path) rememberSystemDocument(app, process.platform, app.isPackaged, result.path)
-    createMenus()
-    return result
+    const release = context.documentOperations.begin(request.id)
+    try { return await withActiveFileOperation(async () => {
+    let committed: DocumentRecord | undefined
+    try {
+      const result = await context.documents.save(request, document => { committed = document })
+      if (result?.path) rememberSystemDocument(app, process.platform, app.isPackaged, result.path)
+      createMenus()
+      return { ok: true, data: result }
+    } catch (error) {
+      const result = localizedFailure(error)
+      if (result.ok) throw error
+      return { ok: false, error: result.error, ...(committed ? { document: committed } : {}) }
+    }
+    }) } finally { release() }
+  })
+  handle('reopenClosedFile', context => context.documents.reopenClosed())
+  handleResult('closeDocument', (context, input) => withActiveFileOperation(async () => {
+    const saved: CloseSavedDocument[] = []
+    try {
+      const closed = await context.documents.close(validateSnapshot(input), snapshots => context.closeValidation.request(snapshots), (document, revision) => saved.push({ document, revision }))
+      return { ok: true, data: { closed, saved } }
+    } catch (error) {
+      const result = localizedFailure(error)
+      if (result.ok) throw error
+      return { ok: false, error: result.error, saved }
+    }
   }))
-  handle('closeDocument', (context, input) => withActiveFileOperation(() => context.documents.close(validateSnapshot(input))))
-  handle('requestWindowClose', (context, input) => withActiveFileOperation(async () => {
-    if (context.closeCheckPending) return false
+  handleResult('restoreClosedEdit', (context, input) => withActiveFileOperation(async () => {
+    const snapshot = validateSnapshot(input)
+    try { return { ok: true, data: await context.documents.restoreClosedEdit(snapshot) } }
+    catch (error) {
+      const document = context.documents.records().find(record => record.id === snapshot.id)
+      if (!document) throw error
+      const result = localizedFailure(error)
+      if (result.ok) throw error
+      return { ok: false, error: result.error, document }
+    }
+  }))
+  handle('resolveCloseValidation', (context, id, valid) => context.closeValidation.resolve(string(id, '关闭校验 ID', 100), boolean(valid, '关闭校验结果')))
+  handle('cancelWindowCloseRequest', context => { quitRequested = false; if (!context.closeCheckPending) context.closing = false; createMenus() })
+  handleResult('requestWindowClose', (context, input) => withActiveFileOperation(async () => {
+    if (context.closeCheckPending) return { ok: true, data: { closed: false, saved: [] } }
     context.closeCheckPending = true
+    createMenus()
+    const saved: CloseSavedDocument[] = []
     try {
       if (!Array.isArray(input) || input.length > 200) invalid('关闭窗口的文档列表无效。')
-      const approved = await context.documents.canCloseWindow(input.map(validateSnapshot))
+      const approved = await context.documents.canCloseWindow(input.map(validateSnapshot), snapshots => context.closeValidation.request(snapshots), (document, revision) => saved.push({ document, revision }))
       if (approved) {
+        context.documents.sealForWindowClose()
         context.approvedClose = true
         setImmediate(() => { if (!context.window.isDestroyed()) context.window.close() })
-      }
-      return approved
-    } finally { context.closeCheckPending = false; context.closing = false }
+      } else quitRequested = false
+      return { ok: true, data: { closed: approved, saved } }
+    } catch (error) {
+      quitRequested = false
+      const result = localizedFailure(error)
+      if (result.ok) throw error
+      return { ok: false, error: result.error, saved }
+    } finally { context.closeCheckPending = false; context.closing = false; createMenus() }
   }))
-  handle('reloadDocument', (context, input) => context.documents.reload(string(input, '文档 ID', 100)))
+  handle('reloadDocument', async (context, input) => {
+    const id = string(input, '文档 ID', 100)
+    const release = context.documentOperations.begin(id)
+    try { return await context.documents.reload(id) } finally { release() }
+  })
   handle('recoverDraft', (context, input) => withWorkspaceStructure(async () => {
     const id = string(input, '草稿 ID', 100)
     if ([...windows.values()].some((window) => window !== context && window.documents.records().some((record) => record.id === id))) throw new DesktopError('CONFLICT', '该草稿正在其他窗口编辑。')
@@ -503,9 +681,9 @@ function registerIpc(): void {
     if (Buffer.byteLength(text, 'utf8') > MAX_DOCUMENT_BYTES) throw new DesktopError('UNSUPPORTED', '剪贴板文本超过 16 MB。')
     return text
   })
-  handle('writeClipboard', async (_context, input) => {
-    const content = validateClipboard(input)
-    await clipboard.write([new ClipboardItem({ 'text/plain': content.text, ...(content.html === undefined ? {} : { 'text/html': content.html }), ...(content.rtf === undefined ? {} : { 'text/rtf': content.rtf }) })])
+  handle('writeClipboard', (context, input) => {
+    const owner = context.window.webContents.id
+    return clipboardWrites.writeFor(owner, input, () => !context.window.isDestroyed() && windows.get(owner) === context)
   })
   handle('imageOperation', (context, input) => withActiveFileOperation(() => operateImage(validateImageOperation(input), context.documents, resources, context.window.webContents.id, {
     destination: async (source, action) => {
@@ -543,7 +721,7 @@ function registerIpc(): void {
     const requested = await canonicalInside(string(value.root, '搜索目录'), root)
     if (value.excludeDirectories !== undefined && (typeof value.excludeDirectories !== 'string' || value.excludeDirectories.length > 256)) invalid('排除目录无效。')
     const request: SearchRequest = { root: requested, query: string(value.query, '搜索关键字', 256), excludeDirectories: value.excludeDirectories as string | undefined, caseSensitive: value.caseSensitive === undefined ? false : boolean(value.caseSensitive, '区分大小写'), wholeWord: value.wholeWord === undefined ? false : boolean(value.wholeWord, '全词匹配'), regex: value.regex === undefined ? false : boolean(value.regex, '正则表达式') }
-    return searchMarkdown(request)
+    return searchMarkdownDetailed(request)
   })
   const exportRequest = (input: unknown): ExportRequest => {
     const value = object(input)
@@ -571,6 +749,10 @@ function registerIpc(): void {
   }
   handle('organizeImages', (context, input) => withActiveFileOperation(() => organizeImages(validateUploadImages(input), context.documents, resources, context.window.webContents.id, store.preferences.image, () => chooseImageDirectory(context))))
   handle('importImages', (context, input) => withActiveFileOperation(() => importImages(validateImageImport(input), context.documents, store.preferences.image, () => chooseImageDirectory(context))))
+  handle('chooseImages', (context) => withActiveFileOperation(async () => {
+    const response = await dialog.showOpenDialog(context.window, { title: localText('插入图片', 'Insert image'), properties: ['openFile', 'multiSelections'], filters: [{ name: localText('图片', 'Images'), extensions: Object.keys(IMAGE_MIME).map(extension => extension.slice(1)) }] })
+    return response.canceled || !response.filePaths.length ? null : readSelectedImageFiles(response.filePaths)
+  }))
   handle('insertImage', (context, input) => withActiveFileOperation(async () => {
     const state = context.documents.get(string(input, '文档 ID', 100))
     const snapshot = { id: state.record.id, content: state.currentContent, revision: state.revision }
@@ -591,6 +773,12 @@ function registerIpc(): void {
     const record = await context.documents.createImported(bytes.toString('utf8'))
     return record
   }))
+  handle('showNativeShare', (context, input) => showNativeShare(process.platform, context.documents, validateSnapshot(input), id => context.activeDocumentId === id, filePath => new ShareMenu({ filePaths: [filePath] }).popup({ window: context.window })))
+  handle('setNativeDocumentState', (context, id, edited) => {
+    setNativeDocumentState(process.platform, context.window, context.documents, id, edited)
+    context.activeDocumentId = id === null ? null : string(id, '文档 ID', 100)
+    createMenus()
+  })
   handle('setZoomFactor', (context, input) => {
     if (typeof input !== 'number' || !Number.isFinite(input) || input < 0.5 || input > 2) invalid('缩放比例无效。')
     context.window.webContents.setZoomFactor(input)
@@ -604,13 +792,21 @@ function registerIpc(): void {
     await shell.openExternal(url.href)
   })
   handle('revealFile', async (context, input) => shell.showItemInFolder(await context.documents.authorize(string(input, '文件路径'))))
-  handle('setAlwaysOnTop', (context, input) => context.window.setAlwaysOnTop(boolean(input, '窗口置顶')))
+  handle('setAlwaysOnTop', (context, input) => {
+    try { context.window.setAlwaysOnTop(boolean(input, '窗口置顶')) }
+    finally { createMenus() }
+  })
+  handle('toggleAlwaysOnTop', context => {
+    try { return toggleAlwaysOnTop(context.window) }
+    finally { createMenus() }
+  })
+  handle('newNativeTab', context => openNativeTab(context))
   handle('newWindow', (context, input) => withActiveFileOperation(async () => {
-    if (input === undefined) return createWindow()
+    if (input === undefined) { await createWindow(); return }
     const authorized = await context.documents.authorize(string(input, '新窗口路径'))
     const stat = await fs.lstat(authorized)
     if (!stat.isDirectory() && (!stat.isFile() || !MARKDOWN_EXTENSIONS.has(path.extname(authorized).toLowerCase()))) throw new DesktopError('UNSUPPORTED', '新窗口只能打开已授权的文件夹、Markdown 或文本文件。')
-    return createWindow(authorized)
+    await createWindow(authorized)
   }))
 }
 
@@ -639,4 +835,5 @@ app.whenReady().then(async () => {
   app.quit()
 })
 
-app.on('window-all-closed', () => { if (process.platform !== 'darwin') app.quit() })
+app.on('before-quit', () => { quitRequested = true })
+app.on('window-all-closed', () => { if (process.platform !== 'darwin' || quitRequested) app.quit() })

@@ -8,6 +8,7 @@ export const SHORTCUT_DEFINITIONS = [
   { command: 'save', label: '保存', shortcut: 'CmdOrCtrl+S' },
   { command: 'save-as', label: '另存为', shortcut: 'CmdOrCtrl+Shift+S' },
   { command: 'save-all', label: '保存全部', shortcut: '' },
+  { command: 'reopen-closed', label: '重新打开关闭的文件', shortcut: 'CmdOrCtrl+Shift+T' },
   { command: 'close-document', label: '关闭文档', shortcut: 'CmdOrCtrl+W' },
   { command: 'export-html', label: '导出 HTML', shortcut: '' },
   { command: 'export-pdf', label: '导出 PDF', shortcut: '' },
@@ -15,9 +16,15 @@ export const SHORTCUT_DEFINITIONS = [
   { command: 'export-previous', label: '使用上次导出设置', shortcut: '' },
   { command: 'export-overwrite', label: '覆盖上次导出文件', shortcut: '' },
   { command: 'import', label: '导入文档', shortcut: '' },
+  { command: 'page-setup', label: '页面设置', shortcut: '' },
   { command: 'print', label: '打印', shortcut: 'CmdOrCtrl+Shift+P' },
   { command: 'recover-drafts', label: '恢复草稿', shortcut: '' },
   { command: 'select-scope', label: '选中格式范围', shortcut: 'CmdOrCtrl+E' },
+  { command: 'select-line', label: '选中当前行或句', shortcut: 'CmdOrCtrl+L' },
+  { command: 'copy-markdown', label: '复制为 Markdown', shortcut: 'CmdOrCtrl+Shift+C' },
+  { command: 'delete-word', label: '删除当前词', shortcut: 'CmdOrCtrl+Shift+D' },
+  { command: 'delete-line', label: '删除当前行或句', shortcut: 'CmdOrCtrl+Shift+Backspace' },
+  { command: 'jump-selection', label: '跳转到所选内容', shortcut: 'CmdOrCtrl+J' },
   { command: 'insert-image', label: '插入图片', shortcut: 'CmdOrCtrl+Shift+I' },
   { command: 'upload-images', label: '上传文档图片', shortcut: '' },
   { command: 'organize-images', label: '整理本地图片', shortcut: '' },
@@ -28,6 +35,7 @@ export const SHORTCUT_DEFINITIONS = [
   { command: 'source', label: '源码模式', shortcut: 'CmdOrCtrl+/' },
   { command: 'sidebar', label: '显示侧栏', shortcut: 'CmdOrCtrl+Shift+L' },
   { command: 'outline', label: '大纲', shortcut: 'Ctrl+Shift+1', mac: 'Cmd+Ctrl+1' },
+  { command: 'article-list', label: '文档列表', shortcut: '', mac: 'Cmd+Ctrl+2' },
   { command: 'files', label: '文件树', shortcut: 'Ctrl+Shift+3', mac: 'Cmd+Ctrl+3' },
   { command: 'toolbar', label: '显示工具栏', shortcut: '' },
   { command: 'statistics', label: '字数统计', shortcut: '' },
@@ -72,7 +80,11 @@ export function defaultShortcut(command: AppCommand, platform: string): string |
 }
 
 export function shortcutForCommand(command: AppCommand, platform: string, overrides: ShortcutOverrides): string | undefined {
-  return Object.hasOwn(overrides, command) ? overrides[command as ShortcutCommand] || undefined : defaultShortcut(command, platform)
+  if (Object.hasOwn(overrides, command)) return overrides[command as ShortcutCommand] || undefined
+  const fallback = defaultShortcut(command, platform)
+  // Older configurations may already assign the newly introduced default to another command.
+  if ((command === 'article-list' || command === 'select-line' || command === 'copy-markdown' || command === 'delete-word' || command === 'delete-line' || command === 'jump-selection') && fallback && Object.entries(overrides).some(([other, shortcut]) => other !== command && shortcut && signature(shortcut, platform) === signature(fallback, platform))) return undefined
+  return fallback
 }
 
 function reservedShortcuts(platform: string): Map<string, string> {
@@ -118,6 +130,13 @@ export function normalizeShortcutOverrides(input: unknown = {}, platform = 'win3
 }
 
 export interface ShortcutKeyboardEvent { key: string; code?: string; ctrlKey: boolean; metaKey: boolean; altKey: boolean; shiftKey: boolean }
+/** Typora's macOS editor aliases, with configured shortcuts taking precedence. */
+export function macTyporaShortcut(event: ShortcutKeyboardEvent, platform: string, overrides: ShortcutOverrides): ShortcutCommand | 'ordered-list' | 'bullet-list' | 'code' | null {
+  if (platform !== 'darwin' || !event.metaKey || !event.altKey || event.ctrlKey || event.shiftKey || !['KeyO', 'KeyU', 'KeyC'].includes(event.code ?? '')) return null
+  const key = event.code === 'KeyO' ? 'o' : event.code === 'KeyU' ? 'u' : 'c'
+  return shortcutCommandForEvent({ ...event, key }, platform, overrides) ?? (key === 'o' ? 'ordered-list' : key === 'u' ? 'bullet-list' : 'code')
+}
+
 export function shortcutCommandForEvent(event: ShortcutKeyboardEvent, platform: string, overrides: ShortcutOverrides): ShortcutCommand | null {
   const punctuation: Record<string, string> = { Slash: '/', Backslash: '\\', BracketLeft: '[', BracketRight: ']', Backquote: '`', Equal: '=', Minus: '-', Comma: ',', Period: '.', Semicolon: ';' }
   const raw = punctuation[event.code ?? ''] ?? (event.key === ' ' ? 'Space' : event.key)

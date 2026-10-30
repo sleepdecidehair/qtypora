@@ -33,6 +33,28 @@ describe('Local resource privileges', () => {
     await expect(registry.toDataUrl(token, 11)).rejects.toMatchObject({ code: 'PERMISSION_DENIED' })
   })
 
+  it('refuses token reads after the file or its parent is replaced with an outside symlink', async () => {
+    const folder = path.join(directory, 'assets'), external = await fs.mkdtemp(path.join(os.tmpdir(), 'qtypora-external-'))
+    try {
+      await fs.mkdir(folder)
+      const image = path.join(folder, 'image.png'), outside = path.join(external, 'image.png')
+      await fs.writeFile(image, 'original'); await fs.writeFile(outside, 'outside data')
+      const registry = new ResourceRegistry(), token = await registry.resolve('assets/image.png', documentPath, session, 11)
+      let serve: ((request: Request) => Response | Promise<Response>) | undefined
+      registry.register({ handle: (_scheme, handler) => { serve = handler } })
+      if (!serve) throw new Error('Protocol handler missing')
+      await fs.unlink(image); await fs.symlink(outside, image)
+      await expect(registry.toDataUrl(token, 11)).rejects.toThrow()
+      expect((await serve(new Request(token))).status).toBe(404)
+      await fs.unlink(image); await fs.writeFile(image, 'updated')
+      expect(await registry.toDataUrl(token, 11)).toBe('data:image/png;base64,' + Buffer.from('updated').toString('base64'))
+      const response = await serve(new Request(token)); expect(await response.text()).toBe('updated')
+      await fs.rename(folder, folder + '-old'); await fs.symlink(external, folder, 'dir')
+      await expect(registry.toDataUrl(token, 11)).rejects.toThrow()
+      expect((await serve(new Request(token))).status).toBe(404)
+    } finally { await fs.rm(external, { recursive: true, force: true }) }
+  })
+
   it('rejects scripts, non-picture local resources, and unrelated document paths', async () => {
     const registry = new ResourceRegistry()
     await expect(registry.resolve('javascript:alert(1)', documentPath, session, 11)).rejects.toMatchObject({ code: 'INVALID_INPUT' })

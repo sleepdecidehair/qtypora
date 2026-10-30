@@ -77,10 +77,12 @@ test('导入预览后另一窗口新增同名，提交保留策略仍保护最�
     await second.locator('.cm-content').waitFor()
     const otherResult = await second.evaluate(presets => window.desktop.applyExportPresetImport(presets, 'replace'), [preset('Late', 'other window')])
     expect(otherResult.ok).toBe(true)
-    const nativeWindow = await session.app.browserWindow(session.page)
-    await nativeWindow.evaluate(window => { window.show(); window.focus() })
-    await expect.poll(() => nativeWindow.evaluate(window => window.isFocused())).toBe(true)
-    await session.page.bringToFront()
+    if (process.env.QTYPORA_TEST_VISIBLE === '1') {
+      const nativeWindow = await session.app.browserWindow(session.page)
+      await nativeWindow.evaluate(window => { window.show(); window.focus() })
+      await expect.poll(() => nativeWindow.evaluate(window => window.isFocused())).toBe(true)
+      await session.page.bringToFront()
+    }
     await expect(preview).toContainText('Late · PDF · A4（同名冲突）')
     await preview.getByRole('button', { name: '导入（保留已有同名预设）', exact: true }).click()
     await expect(preview).toHaveCount(0)

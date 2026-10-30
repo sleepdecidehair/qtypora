@@ -8,6 +8,7 @@ import { normalizeMarkdownOptions } from '../shared/markdown-options'
 import { normalizeWorkspaceOptions } from '../shared/workspace-options'
 import { normalizeShortcutOverrides } from '../shared/shortcuts'
 import { normalizeImageOptions } from '../shared/image-options'
+import { validThemeId } from './theme-directory'
 
 export function validatePreferences(input: unknown): Preferences {
   const value = object(input)
@@ -39,6 +40,8 @@ export function validatePreferences(input: unknown): Preferences {
   }
   const lightTheme = value.lightTheme ?? 'paper'
   const darkTheme = value.darkTheme ?? 'night'
+  const typoraThemeId = value.typoraThemeId === undefined ? '' : value.typoraThemeId
+  if (typeof typoraThemeId !== 'string' || (typoraThemeId !== '' && !validThemeId(typoraThemeId))) invalid('主题名称无效。')
   const startup = value.startup ?? 'new'
   if (!['paper', 'sepia', 'blue'].includes(typeof lightTheme === 'string' ? lightTheme : '') || !['night', 'charcoal'].includes(typeof darkTheme === 'string' ? darkTheme : '')) invalid('配色无效。')
   if (!['new', 'last-file', 'last-folder', 'custom-folder'].includes(typeof startup === 'string' ? startup : '')) invalid('启动方式无效。')
@@ -52,17 +55,21 @@ export function validatePreferences(input: unknown): Preferences {
   return {
     ...extensions, locale,
     theme: value.theme as Preferences['theme'], sidebarMode: value.sidebarMode as Preferences['sidebarMode'],
+    outlineFlat: value.outlineFlat === undefined ? false : boolean(value.outlineFlat, '大纲视图'),
+    indentFirstLine: value.indentFirstLine === undefined ? false : boolean(value.indentFirstLine, '段落首行缩进'),
     lineEnding: value.lineEnding as Preferences['lineEnding'], fontSize: number('fontSize', 12, 32),
     contentWidth, contentWidthMode, autoSaveSeconds: number('autoSaveSeconds', 5, 3600),
     showSidebar: boolean(value.showSidebar, '侧栏'), showToolbar: boolean(value.showToolbar, '工具栏'),
+    showStatusBar: value.showStatusBar === undefined ? true : boolean(value.showStatusBar, '状态栏'),
     sourceMode: boolean(value.sourceMode, '源码模式'), focusMode: boolean(value.focusMode, '专注模式'),
+    macNativeTabs: value.macNativeTabs === undefined ? false : boolean(value.macNativeTabs, 'macOS 原生标签页'),
     readingMode: false, floatingToolbar: value.floatingToolbar === undefined ? true : boolean(value.floatingToolbar, '浮动工具栏'),
     typewriterMode: boolean(value.typewriterMode, '打字机模式'), autoSave: boolean(value.autoSave, '自动保存'),
     spellcheck: boolean(value.spellcheck, '拼写检查'), showLineNumbers: boolean(value.showLineNumbers, '行号'),
     wrapLines: boolean(value.wrapLines, '自动折行'),
     readingSpeed: optionalNumber('readingSpeed', 50, 2000), statisticsUnit, lineHeight: optionalNumber('lineHeight', 1, 3), zoomFactor: optionalNumber('zoomFactor', 0.5, 2),
     fontFamily: optionalText('fontFamily', 200), customCss: optionalText('customCss', 40000), startupFolder: optionalText('startupFolder', 4096),
-    lightTheme: lightTheme as Preferences['lightTheme'], darkTheme: darkTheme as Preferences['darkTheme'], startup: startup as Preferences['startup'], spellcheckLanguages,
+    lightTheme: lightTheme as Preferences['lightTheme'], darkTheme: darkTheme as Preferences['darkTheme'], typoraThemeId, startup: startup as Preferences['startup'], spellcheckLanguages,
   }
 }
 
@@ -98,6 +105,9 @@ export class LocalStore {
           content: typeof value.content === 'string' && value.content.length <= 16 * 1024 * 1024 ? value.content : invalid('草稿内容无效。'),
           revision: typeof value.revision === 'number' && Number.isSafeInteger(value.revision) && value.revision >= 0 ? value.revision : invalid('草稿版本无效。'),
           updatedAt: string(value.updatedAt, '时间', 100),
+          ...(value.pendingLineEnding === undefined ? {} : { pendingLineEnding: value.pendingLineEnding === 'LF' || value.pendingLineEnding === 'CRLF' || value.pendingLineEnding === null ? value.pendingLineEnding : invalid('草稿换行格式无效。') }),
+          ...(value.baseVersion === undefined ? {} : { baseVersion: value.baseVersion === null ? null : string(value.baseVersion, '草稿基础版本', 128) }),
+          ...(value.encoding === undefined ? {} : { encoding: value.encoding === 'utf8' || value.encoding === 'utf8-bom' ? value.encoding : invalid('草稿编码无效。') }),
         }
         if (!/^[a-f0-9-]+$/i.test(draft.id) || `${draft.id}.json` !== file) invalid('草稿名称无效。')
         this.drafts.set(draft.id, draft)
@@ -141,10 +151,11 @@ export class LocalStore {
 
   async discardDraft(id: string): Promise<void> {
     if (!/^[a-f0-9-]+$/i.test(id)) invalid('草稿 ID 无效。')
-    this.drafts.delete(id)
+    const previous = this.drafts.get(id)
     await serialized('draft:' + id, async () => {
       try { await fs.unlink(path.join(this.directory, 'drafts', `${id}.json`)) }
       catch (error) { if (!isMissing(error)) throw error }
+      if (this.drafts.get(id) === previous) this.drafts.delete(id)
     })
   }
 }

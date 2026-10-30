@@ -2,7 +2,7 @@ import { supportsPreview } from './preview-budget'
 import { Prec } from '@codemirror/state'
 import { keymap } from '@codemirror/view'
 import { autocompletion, completionKeymap, type CompletionContext, type CompletionResult } from '@codemirror/autocomplete'
-import { syntaxTree } from '@codemirror/language'
+import { ensureSyntaxTree } from '@codemirror/language'
 import emoji from 'markdown-it-emoji/lib/data/full.mjs'
 import { markdownDocumentModel, markdownOptionsFacet } from './markdown-config'
 import { readFrontMatter } from './markdown-features'
@@ -12,7 +12,12 @@ const emojiCompletions = Object.entries(emoji).map(([name, glyph]) => ({ label: 
 
 export function markdownCompletionSource(context: CompletionContext): CompletionResult | null {
   if (context.state.readOnly || !supportsPreview(context.state)) return null
-  let node = syntaxTree(context.state).resolveInner(context.pos, -1)
+  const shortcode = context.matchBefore(/:[\w+-]{1,40}/)
+  const label = context.matchBefore(/\[\^?[^\[\]\n]{0,80}/)
+  if (!shortcode && !label) return null
+  const tree = ensureSyntaxTree(context.state, context.pos, 50)
+  if (!tree) return null
+  let node = tree.resolveInner(context.pos, -1)
   for (;;) {
     if (['FencedCode', 'CodeBlock', 'InlineCode', 'URL', 'Autolink', 'HTMLTag', 'HTMLBlock'].includes(node.name)) return null
     if (!node.parent) break
@@ -23,11 +28,9 @@ export function markdownCompletionSource(context: CompletionContext): Completion
     const matter = readFrontMatter(context.state.doc.toString())
     if (matter && context.state.doc.lineAt(context.pos).number <= matter.endLine) return null
   }
-  const shortcode = context.matchBefore(/:[\w+-]{1,40}/)
   if (options.emoji && shortcode && (shortcode.from === 0 || !/[\w:/\\]/.test(context.state.doc.sliceString(shortcode.from - 1, shortcode.from)))) {
     return { from: shortcode.from, to: context.state.doc.sliceString(context.pos, context.pos + 1) === ':' ? context.pos + 1 : context.pos, options: emojiCompletions, validFor: /^:[\w+-]*:?$/ }
   }
-  const label = context.matchBefore(/\[\^?[^\[\]\n]{0,80}/)
   if (!label) return null
   const isFootnote = label.text.startsWith('[^')
   if (isFootnote && !options.footnotes) return null

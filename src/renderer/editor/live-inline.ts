@@ -2,7 +2,8 @@ import type { EditorState } from '@codemirror/state'
 import { markdownOptionsFacet, markdownDocumentModel } from './markdown-config'
 import type { FootnoteEnvironment } from './markdown-references'
 import { getMarkdownParser } from './markdown-parser'
-import { syntaxTree } from '@codemirror/language'
+import { ensureSyntaxTree, syntaxTree } from '@codemirror/language'
+import { underlineRanges } from './underline'
 
 export interface InlinePreviewSpan { from: number; to: number; className?: string; hidden?: boolean; line?: boolean; href?: string; replacement?: string }
 const INLINE_CLASSES: Record<string, string> = { StrongEmphasis: 'cm-live-strong', Emphasis: 'cm-live-emphasis', Strikethrough: 'cm-live-strike', InlineCode: 'cm-live-code', Link: 'cm-live-link' }
@@ -13,9 +14,13 @@ export function inlinePreviewSpans(state: EditorState, excluded: readonly { from
   const selection = state.selection.main
   const settings = state.facet(markdownOptionsFacet)
   const model = markdownDocumentModel(state)
-  syntaxTree(state).iterate({ enter: (node) => {
+  const tree = syntaxTree(state)
+  tree.iterate({ enter: (node) => {
     if (excluded.some((range) => node.from >= range.from && node.to <= range.to)) return false
     if (settings.strictMode && node.name === 'Strikethrough') return false
+    if (node.name === 'Escape' && state.doc.sliceString(node.from, node.from + 1) === '\\' && !(selection.empty && selection.head > node.from && selection.head < node.to)) {
+      spans.push({ from: node.from, to: node.from + 1, hidden: true })
+    }
     const className = INLINE_CLASSES[node.name]
     if (className) {
       const active = selection.empty && selection.head > node.from && selection.head < node.to
@@ -45,10 +50,16 @@ export function inlinePreviewSpans(state: EditorState, excluded: readonly { from
       spans.push({ from: node.from, to: node.to + (state.doc.sliceString(node.to, node.to + 1) === ' ' ? 1 : 0), hidden: true })
     }
   } })
+  for (const range of underlineRanges(state)) {
+    if (excluded.some(item => range.from < item.to && range.to > item.from)) continue
+    if (range.contentFrom < range.contentTo) spans.push({ from: range.contentFrom, to: range.contentTo, className: 'cm-live-underline' })
+    spans.push({ from: range.from, to: range.contentFrom, hidden: true }, { from: range.contentTo, to: range.to, hidden: true })
+  }
   const blocked = (from: number, to: number): boolean => {
     if (excluded.some(range => from < range.to && to > range.from)) return true
     if (from > 0 && state.doc.sliceString(from - 1, from) === '\\') return true
-    let node = syntaxTree(state).resolveInner(from, 1)
+    if (to > tree.length || (tree.length < state.doc.length && state.doc.lineAt(from).to >= tree.length)) return true
+    let node = tree.resolveInner(from, 1)
     for (;;) {
       if (['InlineCode', 'FencedCode', 'CodeBlock', 'URL', 'Autolink', 'HTMLTag', 'HTMLBlock', 'Image'].includes(node.name)) return true
       if (!node.parent) break
@@ -58,13 +69,54 @@ export function inlinePreviewSpans(state: EditorState, excluded: readonly { from
   }
   const active = (from: number, to: number): boolean => selection.empty && selection.head > from && selection.head < to
   const patterns: { enabled: boolean; expression: RegExp; marker: number; className: string }[] = [
-    { enabled: settings.highlight, expression: /==(?=\S)([^=\n]+?)==/g, marker: 2, className: 'cm-live-highlight' },
-    { enabled: settings.subscript, expression: /(?<!~)~([^~\s]+)~(?!~)/g, marker: 1, className: 'cm-live-subscript' },
-    { enabled: settings.superscript, expression: /\^([^\^\s]+)\^/g, marker: 1, className: 'cm-live-superscript' },
+    { enabled: settings.highlight, expression: /==(?=\S)((?:\\[^\n]|[^=\n\\])+?)==/g, marker: 2, className: 'cm-live-highlight' },
+    { enabled: settings.subscript, expression: /(?<!~)~((?:\\[^\n]|[^~\s\\])+)~(?!~)/g, marker: 1, className: 'cm-live-subscript' },
+    { enabled: settings.superscript, expression: /\^((?:\\[^\n]|[^\^\s\\])+)\^/g, marker: 1, className: 'cm-live-superscript' },
   ]
   const parser = getMarkdownParser(settings)
+  const inlineByLines = new Map<string, string | null>()
+  if (settings.highlight) for (const token of model.tokens) {
+    if (token.type !== 'inline' || !token.map) continue
+    const key = `${token.map[0]}:${token.map[1]}`
+    inlineByLines.set(key, inlineByLines.has(key) ? null : token.content)
+  }
+  if (settings.highlight) tree.iterate({ enter(node) {
+    if (node.name !== 'Paragraph' || (tree.length < state.doc.length && node.to >= tree.length)) return
+    const raw = state.doc.sliceString(node.from, node.to)
+    if (!raw.includes('\n') || !raw.includes('==')) return
+    const first = state.doc.lineAt(node.from).number, last = state.doc.lineAt(node.to).number
+    const source = inlineByLines.get(`${first - 1}:${last}`)
+    if (!source || !source.includes('\n')) return
+    const lines = source.split('\n')
+    if (lines.length !== last - first + 1) return
+    const positions: number[] = []
+    for (let index = 0; index < lines.length; index++) {
+      const line = state.doc.line(first + index), logical = lines[index]
+      if (!line.text.endsWith(logical)) return
+      const start = line.to - logical.length
+      if (index === 0 && start < node.from) return
+      for (let offset = 0; offset < logical.length; offset++) positions.push(start + offset)
+      if (index + 1 < lines.length) positions.push(line.to)
+    }
+    for (const match of source.matchAll(/(?<!\\)==(?=\S)(?:\\[\s\S]|[^=\\])+?==/g)) {
+      if (!match[0].includes('\n')) continue
+      const from = positions[match.index], to = positions[match.index + match[0].length - 1] + 1
+      if (from === undefined || !Number.isFinite(to)) continue
+      if (blocked(from, to) || excluded.some(range => from < range.to && to > range.from)) continue
+      let unsafe = false
+      tree.iterate({ from, to, enter(child) {
+        if (child.from < to && child.to > from && ['InlineCode', 'FencedCode', 'CodeBlock', 'HTMLTag', 'HTMLBlock', 'Image', 'URL', 'Autolink'].includes(child.name)) unsafe = true
+      } })
+      if (unsafe) continue
+      const children = parser.parseInline(match[0], {})[0]?.children
+      if (children?.[0]?.type !== 'mark_open' || children.at(-1)?.type !== 'mark_close') continue
+      spans.push({ from, to, className: 'cm-live-highlight' })
+      if (!active(from, to)) spans.push({ from, to: from + 2, hidden: true }, { from: to - 2, to, hidden: true })
+    }
+  } })
   for (let number = 1; number <= state.doc.lines; number++) {
     const line = state.doc.line(number)
+    if (line.to > tree.length || (tree.length < state.doc.length && line.to >= tree.length)) break
     for (const pattern of patterns) {
       if (!pattern.enabled) continue
       for (const match of line.text.matchAll(pattern.expression)) {
@@ -103,9 +155,12 @@ export function inlinePreviewSpans(state: EditorState, excluded: readonly { from
   return spans
 }
 
-export function styleScope(state: EditorState): { from: number; to: number } {
+export function styleScope(state: EditorState): { from: number; to: number } | null {
   const selection = state.selection.main
-  let node = syntaxTree(state).resolveInner(selection.head, -1)
+  const line = state.doc.lineAt(selection.head)
+  const tree = ensureSyntaxTree(state, state.doc.length, 50)
+  if (!tree) return null
+  let node = tree.resolveInner(selection.head, -1)
   for (; node.parent; node = node.parent) {
     if (state.facet(markdownOptionsFacet).strictMode && node.name === 'Strikethrough') continue
     if (!INLINE_CLASSES[node.name] || node.from > selection.from || node.to < selection.to) continue
@@ -115,7 +170,6 @@ export function styleScope(state: EditorState): { from: number; to: number } {
     const to = node.name === 'Link' ? (node.getChildren('LinkMark')[1]?.from ?? node.to) : last && INLINE_MARKS.has(last.name) ? last.from : node.to
     if (from <= selection.from && to >= selection.to && (from !== selection.from || to !== selection.to)) return { from, to }
   }
-  const line = state.doc.lineAt(selection.head)
   const prefix = line.text.match(/^\s{0,3}#{1,6}\s+/)?.[0].length || 0
   return { from: line.from + prefix, to: line.to }
 }

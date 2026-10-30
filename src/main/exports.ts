@@ -82,6 +82,7 @@ export async function exportDocument(window: BrowserWindow, documents: DocumentS
   if (request.revision !== undefined && request.revision !== state.revision) throw new DesktopError('CONFLICT', '文档已更新，请重新导出。')
   const record = { ...state.record }
   const content = state.currentContent
+  const lineEnding = state.pendingLineEnding ?? record.lineEnding
   const previous = previousExport(window, request, options, record.path, persistent)
   if (request.reusePrevious && !previous) throw new DesktopError('NOT_FOUND', '此文档尚无成功的导出记录。')
   const kind = request.reusePrevious && previous ? previous.kind : request.kind
@@ -116,7 +117,7 @@ export async function exportDocument(window: BrowserWindow, documents: DocumentS
   }
   const expectedVersion = await outputVersion()
   let bytes: Buffer
-  if (kind === 'markdown') bytes = encodedDocument(content, record.encoding, record.lineEnding)
+  if (kind === 'markdown') bytes = encodedDocument(content, record.encoding, lineEnding)
   else if (PANDOC_SOURCE_FORMATS.has(kind)) bytes = await runPandoc(Buffer.from(content, 'utf8'), 'markdown', kind, selectedOptions.pandocPath)
   else if (kind === 'custom' && customPreset?.input === 'markdown') bytes = await runCustomExport(customPreset, content, '')
   else {

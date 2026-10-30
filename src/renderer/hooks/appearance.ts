@@ -31,7 +31,7 @@ export function exportTheme(preferences: Preferences, systemDark: boolean): 'lig
   return preferences.export.theme === 'current' ? preferences.theme === 'dark' || (preferences.theme === 'system' && systemDark) ? 'dark' : 'light' : preferences.export.theme
 }
 
-export function exportAppearance(preferences: Preferences, systemDark: boolean): string {
+export function exportAppearance(preferences: Preferences, systemDark: boolean, themeCss = ''): string {
   const mode = exportTheme(preferences, systemDark)
   const colors = mode === 'dark' ? preferences.darkTheme === 'charcoal' ? ['#171717', '#e0e0e0'] : ['#1e232b', '#dbe2eb']
     : preferences.lightTheme === 'sepia' ? ['#fbf6e9', '#463c2e'] : preferences.lightTheme === 'blue' ? ['#f7fbff', '#293d52'] : ['#ffffff', '#262b32']
@@ -40,5 +40,5 @@ export function exportAppearance(preferences: Preferences, systemDark: boolean):
   style.lineHeight = String(preferences.lineHeight)
   if (preferences.fontFamily) style.fontFamily = preferences.fontFamily
   style.color = colors[1]; style.backgroundColor = colors[0]
-  return `body{${style.cssText}}${mode === 'dark' ? 'pre,code{background:#282f39}th,td{border-color:#576170}a{color:#8bbceb}' : ''}\n${scopedCss(preferences.customCss, ['body'])}`
+  return `body{${style.cssText}}${mode === 'dark' ? 'pre,code{background:#282f39}th,td{border-color:#576170}a{color:#8bbceb}' : ''}\n${themeCss}\n${scopedCss(preferences.customCss, ['body'])}`
 }

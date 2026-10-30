@@ -1,6 +1,6 @@
 import type { EditorState } from '@codemirror/state'
 import { EditorView } from '@codemirror/view'
-import { syntaxTree } from '@codemirror/language'
+import { ensureSyntaxTree } from '@codemirror/language'
 import { isolateHistory } from '@codemirror/commands'
 import type { MarkdownEditorProps } from './types'
 import { getMarkdownParser } from './markdown-parser'
@@ -11,6 +11,8 @@ import { isSafeDataImage } from '../../shared/data-image'
 export interface ImageAddressRange { from: number; to: number; source: string; html: boolean }
 
 export function imageAddressRanges(state: EditorState, includeRemote = false): ImageAddressRange[] {
+  const tree = ensureSyntaxTree(state, state.doc.length, 50)
+  if (!tree) throw new Error('文档解析尚未完成，图片处理未执行，请稍后重试。')
   const parser = getMarkdownParser(state.facet(markdownOptionsFacet))
   const normalizeLabel = (text: string) => parser.utils.unescapeAll(text).trim().replace(/\s+/g, ' ').toUpperCase()
   const normalizeSource = (text: string) => parser.normalizeLink(parser.utils.unescapeAll(text))
@@ -19,7 +21,7 @@ export function imageAddressRanges(state: EditorState, includeRemote = false): I
   const definitions = new Map<string, ImageAddressRange>()
   const content = state.doc.toString()
   const frontMatter = content.match(/^---\n[\s\S]*?\n(?:---|\.\.\.)\s*(?:\n|$)/)?.[0].length ?? 0
-  syntaxTree(state).iterate({ enter(node) {
+  tree.iterate({ enter(node) {
     if (node.to <= frontMatter || ['FencedCode', 'CodeBlock', 'InlineCode'].includes(node.name)) return false
     if (node.name === 'Image') {
       const url = node.node.getChild('URL')
@@ -69,25 +71,29 @@ export function imageAddressRanges(state: EditorState, includeRemote = false): I
 async function updateDocumentImages(view: EditorView, getProps: () => MarkdownEditorProps, operation: 'upload' | 'organize'): Promise<void> {
   const props = getProps()
   if (view.state.readOnly || props.readOnly) return
-  const original = view.state.doc
-  const ranges = imageAddressRanges(view.state, operation === 'organize')
-  const sources = [...new Set(ranges.map(range => range.source))]
-  if (!sources.length) throw new Error('当前文档没有可处理的图片引用。')
-  if (sources.length > 20) throw new Error('单次最多处理 20 张不同的图片，请分批处理。')
-  const request = { id: props.documentId, revision: props.revision, content: original.toString(), sources }
-  const result = operation === 'upload' ? await props.desktopApi.uploadImages(request) : await props.desktopApi.organizeImages(request)
-  if (!result.ok) throw new Error(result.error.message)
-  if (!result.data) return
-  const current = getProps()
-  if (!view.dom.isConnected || view.state.readOnly || current.readOnly || current.documentId !== props.documentId || current.revision !== props.revision || !view.state.doc.eq(original)) throw new Error('文档已改变，未替换原文图片引用。')
-  const replacements = new Map(result.data.replacements.map(replacement => [replacement.source, replacement.url]))
-  const changes = ranges.flatMap(range => {
-    const replacement = replacements.get(range.source)
-    if (!replacement) return []
-    const insert = range.html ? replacement.replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/'/g, '&#39;') : replacement.replace(/[()]/g, character => character === '(' ? '%28' : '%29')
-    return original.sliceString(range.from, range.to) === insert ? [] : [{ from: range.from, to: range.to, insert }]
-  })
-  if (changes.length) view.dispatch({ changes, userEvent: `input.image-${operation}`, annotations: isolateHistory.of('full') })
+  const finish = props.closeCoordinator.start()
+  if (!finish) throw new Error('文档正在关闭，操作未执行。')
+  try {
+    const original = view.state.doc
+    const ranges = imageAddressRanges(view.state, operation === 'organize')
+    const sources = [...new Set(ranges.map(range => range.source))]
+    if (!sources.length) throw new Error('当前文档没有可处理的图片引用。')
+    if (sources.length > 20) throw new Error('单次最多处理 20 张不同的图片，请分批处理。')
+    const request = { id: props.documentId, revision: props.revision, content: original.toString(), sources }
+    const result = operation === 'upload' ? await props.desktopApi.uploadImages(request) : await props.desktopApi.organizeImages(request)
+    if (!result.ok) throw new Error(result.error.message)
+    if (!result.data) return
+    const current = getProps()
+    if (!view.dom.isConnected || view.state.readOnly || current.readOnly || current.documentId !== props.documentId || current.revision !== props.revision || !view.state.doc.eq(original)) throw new Error('文档已改变，未替换原文图片引用。')
+    const replacements = new Map(result.data.replacements.map(replacement => [replacement.source, replacement.url]))
+    const changes = ranges.flatMap(range => {
+      const replacement = replacements.get(range.source)
+      if (!replacement) return []
+      const insert = range.html ? replacement.replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/'/g, '&#39;') : replacement.replace(/[()]/g, character => character === '(' ? '%28' : '%29')
+      return original.sliceString(range.from, range.to) === insert ? [] : [{ from: range.from, to: range.to, insert }]
+    })
+    if (changes.length) view.dispatch({ changes, userEvent: `input.image-${operation}`, annotations: isolateHistory.of('full') })
+  } finally { finish() }
 }
 
 export function uploadDocumentImages(view: EditorView, getProps: () => MarkdownEditorProps): Promise<void> { return updateDocumentImages(view, getProps, 'upload') }

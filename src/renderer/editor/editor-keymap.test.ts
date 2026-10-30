@@ -14,7 +14,9 @@ function keyboardView(bindings: readonly KeyBinding[]): EditorView {
 }
 
 function primary(key: string, keyCode: number): KeyboardEvent {
-  const isMac = process.platform === 'darwin'
+  // CodeMirror resolves Mod from navigator.platform, not the Node host OS.
+  // Its Node fallback has no navigator and therefore uses Ctrl.
+  const isMac = typeof navigator !== 'undefined' && /Mac/.test(navigator.platform)
   return { key, keyCode, ctrlKey: !isMac, metaKey: isMac, altKey: false, shiftKey: false, stopPropagation: () => undefined } as KeyboardEvent
 }
 

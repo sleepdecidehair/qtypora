@@ -1,6 +1,6 @@
 import { supportsPreview } from './preview-budget'
-import { EditorSelection, EditorState, Prec, StateEffect, StateField, type Extension, type Range, type TransactionSpec } from '@codemirror/state'
-import { indentRange, syntaxTree } from '@codemirror/language'
+import { EditorSelection, EditorState, Facet, Prec, StateEffect, StateField, type Extension, type Range, type TransactionSpec } from '@codemirror/state'
+import { ensureSyntaxTree, indentRange, syntaxTree } from '@codemirror/language'
 import { isolateHistory } from '@codemirror/commands'
 import { Decoration, EditorView, ViewPlugin, WidgetType, keymap, type DecorationSet } from '@codemirror/view'
 import { editLiveBlock, liveEditingBlock } from './live-blocks'
@@ -88,7 +88,9 @@ export function fenceCreation(state: EditorState): TransactionSpec | null {
   const line = state.doc.lineAt(selection.head)
   const match = /^( {0,3})(`{3,})([^`\n]*)$/.exec(line.text)
   if (!match || selection.head !== line.to) return null
-  let node = syntaxTree(state).resolveInner(selection.head, -1)
+  const tree = ensureSyntaxTree(state, selection.head, 50)
+  if (!tree) return null
+  let node = tree.resolveInner(selection.head, -1)
   while (node.parent && node.name !== 'FencedCode') node = node.parent
   if (node.name !== 'FencedCode' || node.parent?.name !== 'Document' || state.doc.lineAt(node.from).number !== line.number || node.getChildren('CodeMark').length > 1) return null
   const settings = state.facet(markdownOptionsFacet)
@@ -230,6 +232,25 @@ class CodeLanguageWidget extends WidgetType {
   ignoreEvent(): boolean { return true }
 }
 
+const codeFocusMode = Facet.define<boolean, boolean>({ combine: values => values.some(Boolean) })
+const codeEditorFocusChanged = StateEffect.define<boolean>()
+const codeEditorFocused = StateField.define<boolean>({
+  create: () => false,
+  update: (value, transaction) => {
+    for (const effect of transaction.effects) if (effect.is(codeEditorFocusChanged)) value = effect.value
+    return value
+  },
+})
+const syncCodeEditorFocus = ViewPlugin.fromClass(class {
+  constructor(view: EditorView) { this.sync(view) }
+  update(update: import('@codemirror/view').ViewUpdate): void { if (update.transactions.some(transaction => transaction.reconfigured)) this.sync(update.view) }
+  private sync(view: EditorView): void {
+    queueMicrotask(() => {
+      if (view.dom.isConnected && view.state.field(codeEditorFocused, false) !== undefined && view.state.field(codeEditorFocused) !== view.hasFocus) view.dispatch({ effects: codeEditorFocusChanged.of(view.hasFocus) })
+    })
+  }
+})
+
 function codePreviews(state: EditorState): DecorationSet {
   const settings = state.facet(markdownOptionsFacet)
   const ranges: Range<Decoration>[] = []
@@ -240,9 +261,10 @@ function codePreviews(state: EditorState): DecorationSet {
     const display = state.field(codeBlockDisplay, false)?.get(block.from) ?? {}
     const lineNumbers = display.lineNumbers ?? settings.codeLineNumbers
     const wrapLines = display.wrapLines ?? settings.codeWrapLines
+    const activeLine = state.facet(codeFocusMode) && state.field(codeEditorFocused) && state.selection.main.head >= block.bodyFrom && state.selection.main.head <= block.bodyTo ? state.doc.lineAt(state.selection.main.head).number : null
     for (let number = block.firstLine + 1; number < block.lastLine; number++) {
       const edge = `${number === block.firstLine + 1 ? ' cm-live-code-first' : ''}${number === block.lastLine - 1 ? ' cm-live-code-last' : ''}`
-      ranges.push(Decoration.line({ class: `cm-live-code-body${edge}${lineNumbers ? ' cm-live-code-numbered' : ''}${wrapLines ? '' : ' cm-live-code-nowrap'}`, attributes: { 'data-source-line': String(number), 'data-source-end': String(number), 'data-code-line': String(number - block.firstLine) } }).range(state.doc.line(number).from))
+      ranges.push(Decoration.line({ class: `cm-live-code-body${edge}${lineNumbers ? ' cm-live-code-numbered' : ''}${wrapLines ? '' : ' cm-live-code-nowrap'}${state.facet(codeFocusMode) && number !== activeLine ? ' cm-code-focus-muted' : ''}`, attributes: { 'data-source-line': String(number), 'data-source-end': String(number), 'data-code-line': String(number - block.firstLine) } }).range(state.doc.line(number).from))
     }
     ranges.push(Decoration.replace({ widget: new CodeLanguageWidget(block, state.readOnly, display, state.facet(editorLocale)), block: true }).range(state.doc.line(block.lastLine).from, block.to))
   }
@@ -255,7 +277,7 @@ const codeDecorations = StateField.define<DecorationSet>({
     const previousEditing = transaction.startState.field(liveEditingBlock, false)
     const nextEditing = transaction.state.field(liveEditingBlock, false)
     const editingChanged = previousEditing?.from !== nextEditing?.from || previousEditing?.to !== nextEditing?.to
-    return transaction.docChanged || transaction.reconfigured || editingChanged || transaction.effects.some(effect => effect.is(editLiveBlock) || effect.is(setCodeBlockDisplay)) ? codePreviews(transaction.state) : value
+    return transaction.docChanged || transaction.reconfigured || editingChanged || (transaction.selection && transaction.state.facet(codeFocusMode)) || transaction.effects.some(effect => effect.is(editLiveBlock) || effect.is(setCodeBlockDisplay) || effect.is(codeEditorFocusChanged)) ? codePreviews(transaction.state) : value
   },
   provide: (field) => [EditorView.decorations.from(field), EditorView.atomicRanges.of((view) => view.state.field(field).update({ filter: (_from, _to, decoration) => decoration.spec.block === true }))],
 })
@@ -289,8 +311,8 @@ const codeFooterPointer = ViewPlugin.fromClass(class {
   destroy(): void { this.view.scrollDOM.removeEventListener('mousedown', this.onMouseDown, true) }
 })
 
-export function liveCodeExtension(): Extension {
-  return [codeDecorations, codeSelectAllPending, constrainCodePointerSelection, codeFooterPointer, Prec.high(keymap.of([
+export function liveCodeExtension(focusMode = false): Extension {
+  return [codeFocusMode.of(focusMode), codeEditorFocused, EditorView.focusChangeEffect.of((_state, focusing) => codeEditorFocusChanged.of(focusing)), syncCodeEditorFocus, codeDecorations, codeSelectAllPending, constrainCodePointerSelection, codeFooterPointer, Prec.high(keymap.of([
     { key: 'Enter', run: confirmCodeFence },
     { key: 'Mod-a', run: selectLiveCode },
     { key: 'Mod-Enter', run: leaveCode },

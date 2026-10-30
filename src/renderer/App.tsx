@@ -4,28 +4,33 @@ import type { AppCommand, BootstrapData, DesktopApi, DraftRecord, Result, Worksp
 import { MarkdownEditor } from './editor/MarkdownEditor'
 import type { FolderSearchQuery } from './editor/folder-search-highlight'
 import { renderExportDocument } from './editor/markdown'
-import type { ExportFormat, SavedExportPreset } from '../shared/export-options'
+import { normalizeExportOptions, type ExportFormat, type SavedExportPreset } from '../shared/export-options'
 import type { PresetConflictStrategy } from '../shared/export-preset-file'
 import { resolveHeading, resolveMathLabel, resolveFootnote, resolveExplicitAnchor } from './hooks/outline'
 import { articleCss, exportAppearance, exportTheme } from './hooks/appearance'
-import { WordStatistics } from './components/WordStatistics'
+import { compileTyporaTheme } from './hooks/typora-theme'
+import { WordStatistics, WordStatisticsPanel } from './components/WordStatistics'
 import { ExportDialog } from './components/ExportDialog'
 import type { EditorAction, EditorCommand, EditorSelection, JumpRequest } from './editor/types'
+import { CloseCoordinator } from './editor/close-coordinator'
+import type { EditorCloseHandle } from './editor/close-guard'
 import { isDirty, useDocuments } from './hooks/useDocuments'
 import { usePreferences } from './hooks/usePreferences'
 import { isFileContextScopeCurrent } from './hooks/fileContext'
 import { Toolbar } from './components/Toolbar'
 import { Sidebar } from './components/Sidebar'
-import { shortcutCommandForEvent } from '../shared/shortcuts'
+import { macTyporaShortcut, shortcutCommandForEvent } from '../shared/shortcuts'
 import { FloatingToolbar } from './components/FloatingToolbar'
 import { PreferencesDialog } from './components/PreferencesDialog'
+import { PageSetupDialog } from './components/PageSetupDialog'
 import { QuickOpen } from './components/QuickOpen'
 import { DraftRecovery } from './components/DraftRecovery'
+import { SystemVersionsDialog, type VersionScope } from './components/SystemVersionsDialog'
 import { FileActionDialog, type PendingFileAction } from './components/FileActionDialog'
 import { Dialog } from './components/Dialog'
 import { primaryShortcut } from './platform-shortcuts'
 import { LocaleProvider } from './i18n/locale'
-import { translate, type AppLocale } from '../shared/i18n'
+import { translate, translateKnownError, type AppLocale } from '../shared/i18n'
 import './styles/tokens.css'
 import './styles/app.css'
 import './styles/features.css'
@@ -44,7 +49,9 @@ function DesktopApp({ api }: { api: DesktopApi }) {
   const localeRef = useRef<AppLocale>('zh-CN')
   const reportError = useCallback((message: string) => { setError(message); setNotice(null) }, [])
   const run = useCallback((task: Promise<unknown>) => { void task.catch((failure: unknown) => reportError(failure instanceof Error ? failure.message : translate(localeRef.current, '操作失败，请重试。'))) }, [reportError])
-  const documents = useDocuments(api, reportError, localeRef)
+  const closeCoordinator = useRef(new CloseCoordinator()).current
+  const editorCloseHandle = useRef<EditorCloseHandle | null>(null)
+  const documents = useDocuments(api, reportError, localeRef, closeCoordinator, editorCloseHandle)
   const { preferences, preferencesRef, loadPreferences, updatePreferences, flushPreferences, theme } = usePreferences(api, reportError)
   localeRef.current = preferences.locale
   const t = (source: string): string => translate(preferences.locale, source)
@@ -56,25 +63,62 @@ function DesktopApp({ api }: { api: DesktopApi }) {
   const [recentFiles, setRecentFiles] = useState<string[]>([])
   const [recentFolders, setRecentFolders] = useState<string[]>([])
   const [platform, setPlatform] = useState('win32')
+  const [nativeTabsEnabled, setNativeTabsEnabled] = useState(false)
   const [drafts, setDrafts] = useState<DraftRecord[]>([])
-  const [modal, setModal] = useState<'preferences' | 'quick-open' | 'recovery' | 'export' | null>(null)
+  const [modal, setModal] = useState<'preferences' | 'page-setup' | 'statistics' | 'quick-open' | 'recovery' | 'export' | 'system-versions' | null>(null)
+  const [versionScope, setVersionScope] = useState<VersionScope | null>(null)
   const [fileAction, setFileAction] = useState<PendingFileAction | null>(null)
   const [isFileActionPending, setIsFileActionPending] = useState(false)
   const fileActionInProgress = useRef(false)
   const [reloadId, setReloadId] = useState<string | null>(null)
   const [selection, setSelection] = useState<EditorSelection>({ text: '', from: 0, to: 0 })
   const [editorCommand, setEditorCommand] = useState<EditorCommand | null>(null)
+  const queuedEditorCommand = useRef<EditorCommand | null>(null)
   const [jumpRequest, setJumpRequest] = useState<JumpRequest | null>(null)
   const [folderSearch, setFolderSearch] = useState<FolderSearchQuery | null>(null)
   const commandId = useRef(0)
   const bootstrap = useRef<Promise<Result<BootstrapData>> | null>(null)
   const saveAllInProgress = useRef(false)
+  const statisticsFocus = useRef<{ element: HTMLElement; documentId: string | null } | null>(null)
   const current = documents.active
+  const currentIdRef = useRef<string | null>(null)
+  currentIdRef.current = current?.id ?? null
+  const nativeEdited = current ? isDirty(current) : false
+  const [themeRefresh, setThemeRefresh] = useState(0)
+  const [userTheme, setUserTheme] = useState<{ id: string; version: string; editor: string; export: string } | null>(null)
+  useEffect(() => {
+    const id = preferences.typoraThemeId
+    let active = true
+    setUserTheme(null)
+    if (id) void api.readUserTheme(id).then(result => {
+      if (!active) return
+      if (!result.ok) { reportError(result.error.message); return }
+      try {
+        const layers = [result.data.css, result.data.globalCss, result.data.overrideCss].map(compileTyporaTheme)
+        if (result.data.id !== id) throw new Error('读取到的主题与所选主题不一致。')
+        setUserTheme({ id, version: result.data.version, editor: layers.map(layer => layer.editor).join('\n'), export: layers.map(layer => layer.export).join('\n') })
+      } catch (error) { reportError(error instanceof Error ? error.message : '无法读取主题。') }
+    }).catch(error => { if (active) reportError(error instanceof Error ? error.message : '无法读取主题。') })
+    return () => { active = false }
+  }, [api, preferences.typoraThemeId, themeRefresh, reportError])
   const customStyle = useMemo(() => { try { return articleCss(preferences.customCss) } catch { return '' } }, [preferences.customCss])
   useEffect(() => setSelection({ text: '', from: 0, to: 0 }), [current?.id])
+  useEffect(() => {
+    if (isLoading) return
+    void api.setNativeDocumentState(current?.id ?? null, nativeEdited)
+  }, [api, platform, isLoading, current?.id, current?.path, nativeEdited])
   const issueEditorCommand = useCallback((action: EditorAction, value?: string) => {
-    setEditorCommand({ id: ++commandId.current, action, value })
+    const releaseCloseTask = closeCoordinator.start()
+    if (!releaseCloseTask) { reportError(translate(localeRef.current, '正在关闭，请稍后重试。')); return }
+    queuedEditorCommand.current?.releaseCloseTask?.()
+    const command = { id: ++commandId.current, action, value, releaseCloseTask }
+    queuedEditorCommand.current = command
+    setEditorCommand(command)
+  }, [closeCoordinator, reportError])
+  const editorCommandStarted = useCallback((id: number) => {
+    if (queuedEditorCommand.current?.id === id) queuedEditorCommand.current = null
   }, [])
+  useEffect(() => () => { queuedEditorCommand.current?.releaseCloseTask?.(); queuedEditorCommand.current = null }, [])
   const jumpToLine = useCallback((line: number, documentId = current?.id) => setJumpRequest({ id: ++commandId.current, line, documentId }), [current?.id])
   const activePath = current?.path ?? null
   const resolveResource = useCallback(async (source: string) => {
@@ -91,6 +135,7 @@ function DesktopApp({ api }: { api: DesktopApi }) {
       if (!result.ok) { reportError(result.error.message); setIsLoading(false); return }
       loadPreferences(result.data.preferences, result.data.preferencesVersion)
       setPlatform(result.data.platform)
+      setNativeTabsEnabled(result.data.nativeTabsEnabled ?? false)
       setRecentFiles(result.data.recentFiles)
       setRecentFolders(result.data.recentFolders ?? [])
       setDrafts(result.data.drafts)
@@ -188,11 +233,20 @@ function DesktopApp({ api }: { api: DesktopApi }) {
     const plan = documents.acceptResult(await api.getExportPlan({ id: item.id, kind, reusePrevious }))
     if (!plan) return
     const exportPreferences = { ...preferencesRef.current, export: plan.options }
+    const selectedTheme = plan.requiresHtml && exportPreferences.typoraThemeId ? userTheme : null
+    if (plan.requiresHtml && exportPreferences.typoraThemeId && (!selectedTheme || selectedTheme.id !== exportPreferences.typoraThemeId)) throw new Error('主题尚未加载或不可用，请刷新主题后重试。')
+    const verifyTheme = async () => {
+      if (!selectedTheme) return
+      const result = await api.readUserTheme(selectedTheme.id)
+      if (!result.ok) throw new Error(result.error.message)
+      if (result.data.version !== selectedTheme.version || preferencesRef.current.typoraThemeId !== selectedTheme.id) throw new Error('主题已发生变化，请刷新主题后重试。')
+    }
+    await verifyTheme()
     const systemDark = window.matchMedia('(prefers-color-scheme: dark)').matches
     const remoteImages = new Map<string, Promise<string>>()
     let remoteBytes = 0
     let remoteTail: Promise<unknown> = Promise.resolve()
-    const html = !plan.requiresHtml ? undefined : await renderExportDocument(item.content, { locale: exportPreferences.locale, theme: exportTheme(exportPreferences, systemDark), exportCss: exportAppearance(exportPreferences, systemDark), markdownOptions: exportPreferences.markdown, resolveResource: async source => {
+    const html = !plan.requiresHtml ? undefined : await renderExportDocument(item.content, { locale: exportPreferences.locale, theme: exportTheme(exportPreferences, systemDark), exportCss: exportAppearance(exportPreferences, systemDark, selectedTheme?.export ?? ''), markdownOptions: exportPreferences.markdown, resolveResource: async source => {
       if (/^https?:/i.test(source)) {
         if (!remoteImages.has(source)) {
           if (remoteImages.size >= 20) throw new Error(currentT('单次导出最多下载 20 张远程图片，请先整理资源。'))
@@ -213,6 +267,7 @@ function DesktopApp({ api }: { api: DesktopApi }) {
       if (!result.ok) throw new Error(result.error.message)
       return result.data
     }, embedImages: true })
+    await verifyTheme()
     if (print) {
       const printed = documents.acceptResult(await api.printDocument({ id: item.id, revision: item.revision, preferencesVersion: plan.preferencesVersion, kind, html }))
       if (printed) setNotice(currentT('已发送到打印机'))
@@ -230,17 +285,7 @@ function DesktopApp({ api }: { api: DesktopApi }) {
   }
 
   const insertImage = async () => {
-    if (!current) return
-    await documents.flushSync()
-    const revision = current.revision
-    const markdown = documents.acceptResult(await api.insertImage(current.id))
-    if (!markdown) return
-    if (!documents.documentsRef.current.some(item => item.id === current.id && item.revision === revision)) {
-      setNotice(currentT('图片已复制。原文档已关闭，未插入图片引用。'))
-      return
-    }
-    documents.activate(current.id)
-    issueEditorCommand('image', markdown)
+    if (current && !current.readOnly) issueEditorCommand('choose-image')
   }
 
   const openLink = (target: string) => {
@@ -266,23 +311,49 @@ function DesktopApp({ api }: { api: DesktopApi }) {
   }
 
   const executeCommand = async (command: AppCommand) => {
+    if (closeCoordinator.locked) {
+      if (command === 'request-window-close') await api.cancelWindowCloseRequest()
+      reportError(currentT('正在关闭，请稍后重试。'))
+      return
+    }
     // Electron accelerators arrive through IPC before DOM keyboard handlers can stop them.
     if (document.querySelector('.editor-resource-viewer') && command !== 'request-window-close') return
+    if ((command === 'select-line' || command === 'copy-markdown' || command === 'delete-word' || command === 'delete-line') && (modal || fileAction || reloadId || !document.activeElement?.closest('.cm-content'))) return
+    const finishCommand = command === 'upload-images' || command === 'organize-images' ? closeCoordinator.start() : null
+    if ((command === 'upload-images' || command === 'organize-images') && !finishCommand) return
     const options = preferencesRef.current
+    try {
     switch (command) {
       case 'new': await documents.create(); break
+      case 'reopen-closed': await documents.reopenClosed(); break
       case 'new-window': documents.acceptResult(await api.newWindow()); break
+      case 'new-native-tab': documents.acceptResult(await api.newNativeTab()); break
       case 'open': await openFile(); break
       case 'open-folder': await openFolder(); break
+      case 'reveal-current-file': {
+        const item = documents.documentsRef.current.find(document => document.id === currentIdRef.current)
+        if (item?.path && item.externalChange !== 'removed') documents.acceptResult(await api.revealFile(item.path))
+        break
+      }
       case 'insert-image': {
         if (!modal && !fileAction && !reloadId && document.activeElement?.closest('.cm-content') && !current?.readOnly) await insertImage()
+        break
+      }
+      case 'share-document': {
+        const id = current?.id
+        if (!id || modal || fileAction || reloadId) break
+        await documents.flushSync()
+        const item = documents.documentsRef.current.find(document => document.id === id)
+        if (currentIdRef.current !== id || !item) break
+        if (!item.path || isDirty(item) || item.externalChange) { reportError('请先保存文档并处理外部修改，再使用系统分享。'); break }
+        documents.acceptResult(await api.showNativeShare({ id, content: item.content, revision: item.revision }))
         break
       }
       case 'save': await save(); break
       case 'save-all': await saveAll(); break
       case 'save-as': await save(true); break
       case 'close-document': await documents.close(); break
-      case 'request-window-close': if (await flushPreferences()) await documents.requestClose(); break
+      case 'request-window-close': if (await flushPreferences()) await documents.requestClose(); else await api.cancelWindowCloseRequest(); break
       case 'undo':
       case 'redo': {
         const focused = document.activeElement
@@ -297,6 +368,11 @@ function DesktopApp({ api }: { api: DesktopApi }) {
       }
       case 'find': issueEditorCommand('find'); break
       case 'replace': issueEditorCommand('replace'); break
+      case 'find-next':
+      case 'find-previous':
+      case 'replace-next':
+        if (current && !modal && !fileAction && !reloadId) issueEditorCommand(command)
+        break
       case 'quick-open': setModal('quick-open'); break
       case 'preferences': setModal('preferences'); break
       case 'source': updatePreferences({ sourceMode: !options.sourceMode, readingMode: false }); break
@@ -305,26 +381,103 @@ function DesktopApp({ api }: { api: DesktopApi }) {
         if (!modal && !fileAction && !reloadId && document.activeElement?.closest('.cm-content, [data-testid="live-table"]')) issueEditorCommand('select-scope')
         break
       }
+      case 'heading-1':
+      case 'heading-2':
+      case 'heading-3':
+      case 'heading-4':
+      case 'heading-5':
+      case 'heading-6':
+      case 'paragraph':
+      case 'quote':
+      case 'bullet-list':
+      case 'ordered-list':
+      case 'task-list':
+      case 'code':
+      case 'math':
+      case 'table':
+      case 'rule':
+      case 'bold':
+      case 'italic':
+      case 'underline':
+      case 'strike':
+      case 'highlight':
+      case 'superscript':
+      case 'subscript':
+      case 'inline-code':
+      case 'inline-math':
+      case 'html-comment':
+      case 'link':
+      case 'clear-format':
+      case 'task-check':
+      case 'task-uncheck':
+      case 'task-toggle':
+      case 'select-block':
+      case 'delete-block':
+      case 'delete-style':
+      case 'copy-markdown':
+      case 'copy-plain':
+      case 'copy-html':
+      case 'insert-toc':
+      case 'insert-yaml':
+      case 'insert-alert-note':
+      case 'insert-alert-tip':
+      case 'insert-alert-important':
+      case 'insert-alert-warning':
+      case 'insert-alert-caution':
+      case 'insert-footnote':
+      case 'paragraph-before':
+      case 'paragraph-after':
+      case 'heading-promote':
+      case 'heading-demote':
+      case 'select-word':
+      case 'delete-word':
+      case 'select-line':
+      case 'delete-line':
+      case 'jump-start':
+      case 'jump-end':
+      case 'jump-line-start':
+      case 'jump-line-end':
+      case 'jump-selection': {
+        if (!modal && !fileAction && !reloadId && document.activeElement?.closest('.cm-content')) issueEditorCommand(command)
+        break
+      }
       case 'sidebar': updatePreferences({ showSidebar: !options.showSidebar }); break
       case 'outline': updatePreferences({ sidebarMode: 'outline', showSidebar: true }); break
-      case 'files': updatePreferences({ sidebarMode: 'files', showSidebar: true }); break
+      case 'article-list': updatePreferences({ sidebarMode: 'files', showSidebar: true, workspace: { ...options.workspace, view: 'list' } }); break
+      case 'files': updatePreferences({ sidebarMode: 'files', showSidebar: true, workspace: { ...options.workspace, view: 'tree' } }); break
       case 'search-folder': updatePreferences({ sidebarMode: 'search', showSidebar: true }); break
       case 'focus': updatePreferences({ focusMode: !options.focusMode }); break
       case 'typewriter': updatePreferences({ typewriterMode: !options.typewriterMode }); break
       case 'toolbar': updatePreferences({ showToolbar: !options.showToolbar }); break
+      case 'statusbar': updatePreferences({ showStatusBar: !options.showStatusBar }); break
+      case 'indent-first-line': updatePreferences({ indentFirstLine: !options.indentFirstLine }); break
+      case 'toggle-soft-breaks': updatePreferences({ markdown: { ...options.markdown, softBreaks: !options.markdown.softBreaks } }); break
+      case 'line-ending-lf': if (currentIdRef.current) documents.changeLineEnding(currentIdRef.current, 'LF'); break
+      case 'line-ending-crlf': if (currentIdRef.current) documents.changeLineEnding(currentIdRef.current, 'CRLF'); break
+      case 'toggle-spellcheck': updatePreferences({ spellcheck: !options.spellcheck }); break
+      case 'toggle-always-on-top': documents.acceptResult(await api.toggleAlwaysOnTop()); break
       case 'organize-images': await documents.flushSync(); if (await flushPreferences()) issueEditorCommand('organize-images'); break
       case 'upload-images': await documents.flushSync(); if (await flushPreferences()) issueEditorCommand('upload-images'); break
       case 'export-options': setModal('export'); break
       case 'export-previous': await exportDocument('html', true); break
       case 'export-overwrite': await exportDocument('html', true, true); break
+      case 'page-setup': setModal('page-setup'); break
       case 'print': await exportDocument('pdf', false, false, true); break
       case 'import': await documents.importFile(); break
-      case 'statistics': document.querySelector<HTMLButtonElement>('[data-testid=word-count]')?.click(); break
+      case 'statistics': if (!options.showStatusBar) { if (!modal) { statisticsFocus.current = document.activeElement instanceof HTMLElement ? { element: document.activeElement, documentId: currentIdRef.current } : null; setModal('statistics') } } else document.querySelector<HTMLButtonElement>('[data-testid=word-count]')?.click(); break
       case 'export-html': await exportDocument('html'); break
       case 'export-pdf': await exportDocument('pdf'); break
       case 'zoom-in': { const zoomFactor = Math.min(2, Math.round((options.zoomFactor + 0.1) * 10) / 10); updatePreferences({ zoomFactor }); documents.acceptResult(await api.setZoomFactor(zoomFactor)); break }
       case 'zoom-out': { const zoomFactor = Math.max(0.5, Math.round((options.zoomFactor - 0.1) * 10) / 10); updatePreferences({ zoomFactor }); documents.acceptResult(await api.setZoomFactor(zoomFactor)); break }
       case 'zoom-reset': updatePreferences({ zoomFactor: 1 }); documents.acceptResult(await api.setZoomFactor(1)); break
+      case 'system-versions': {
+        const id = currentIdRef.current
+        if (!id || !await documents.flushSync() || currentIdRef.current !== id) break
+        const doc = documents.documentsRef.current.find(item => item.id === id)
+        if (!doc) break
+        setVersionScope({ snapshot: { id: doc.id, content: doc.content, revision: doc.revision }, path: doc.path, version: doc.version, externalChange: doc.externalChange })
+        setModal('system-versions'); break
+      }
       case 'recover-drafts': {
         const result = documents.acceptResult(await api.bootstrap())
         if (result) setDrafts(result.drafts)
@@ -332,6 +485,7 @@ function DesktopApp({ api }: { api: DesktopApi }) {
       }
       case 'next-document': documents.nextDocument(); break
     }
+    } finally { finishCommand?.() }
   }
   const commandHandler = useRef(executeCommand)
   commandHandler.current = executeCommand
@@ -340,17 +494,20 @@ function DesktopApp({ api }: { api: DesktopApi }) {
 
   useEffect(() => api.onEvent(event => {
     if (event.type === 'command') run(commandHandler.current(event.command))
+    else if (event.type === 'validate-close') run(documents.validateClose(event.requestId, event.snapshots))
+    else if (event.type === 'window-close-prevented') run(documents.windowClosePrevented(event.error))
     else if (event.type === 'open-document') documents.addDocument(event.document)
     else if (event.type === 'document-changed') documents.externalChange(event.id, event.kind)
     else if (event.type === 'document-renamed') documents.renamed(event.id, event.path, event.name)
     else if (event.type === 'workspace-changed') run(refreshHandler.current())
-  }), [api, documents.addDocument, documents.externalChange, documents.renamed, run])
+    else if (event.type === 'user-themes-changed') setThemeRefresh(value => value + 1)
+  }), [api, documents.addDocument, documents.externalChange, documents.renamed, documents.validateClose, documents.windowClosePrevented, run])
 
   useEffect(() => {
     const handler = (event: KeyboardEvent) => {
       if (event.defaultPrevented || event.isComposing) return
-      const command = shortcutCommandForEvent(event, platform, preferencesRef.current.shortcuts)
-      if (command === 'insert-image' || command === 'select-scope') {
+      const command = shortcutCommandForEvent(event, platform, preferencesRef.current.shortcuts) ?? macTyporaShortcut(event, platform, preferencesRef.current.shortcuts)
+      if (command === 'insert-image' || command === 'select-scope' || command === 'select-line' || command === 'copy-markdown' || command === 'delete-word' || command === 'delete-line' || command === 'jump-selection' || command === 'ordered-list' || command === 'bullet-list' || command === 'code') {
         if (modal || fileAction || reloadId || !document.activeElement?.closest('.cm-content')) return
       }
       if (command) { event.preventDefault(); run(commandHandler.current(command)) }
@@ -376,25 +533,40 @@ function DesktopApp({ api }: { api: DesktopApi }) {
     } finally { fileActionInProgress.current = false; setIsFileActionPending(false) }
   }
 
-  const appStyle = { '--writing-line-height': preferences.lineHeight, ...(preferences.fontFamily ? { '--font-editor': preferences.fontFamily } : {}), '--content-width': preferences.contentWidthMode === 'auto' ? '100%' : `${preferences.contentWidth}px` } as CSSProperties
+  const appStyle = { '--writing-line-height': preferences.lineHeight, ...(preferences.fontFamily ? { '--font-editor': preferences.fontFamily } : {}), ...(preferences.showStatusBar ? {} : { '--statusbar-height': '0px' }), '--content-width': preferences.contentWidthMode === 'auto' ? '100%' : `${preferences.contentWidth}px` } as CSSProperties
   if (isLoading) return <div className="startup-state"><FileText size={32} /><p>{t('正在打开写作空间…')}</p></div>
 
   return <LocaleProvider locale={preferences.locale}><div className={`desktop-app ${preferences.sourceMode ? 'source-mode' : 'hybrid-mode'}`} style={appStyle} data-testid="desktop-app" data-theme={theme} data-palette={theme === 'dark' ? preferences.darkTheme : preferences.lightTheme}>
+    {userTheme?.id === preferences.typoraThemeId && userTheme.editor ? <style>{userTheme.editor}</style> : null}
     {customStyle ? <style>{customStyle}</style> : null}
-    {platform === 'darwin' ? <div className="mac-titlebar" data-testid="mac-titlebar"><span>{current?.name ?? 'QTypora'}</span></div> : null}
+    {platform === 'darwin' && !nativeTabsEnabled ? <div className="mac-titlebar" data-testid="mac-titlebar"><span>{current?.name ?? 'QTypora'}</span></div> : null}
     <Toolbar platform={platform} showFormatting={preferences.showToolbar} sourceMode={preferences.sourceMode} disabled={!current || current.readOnly} isSaving={current?.isSaving ?? false} onAction={issueEditorCommand} onNew={() => run(executeCommand('new'))} onOpen={() => run(executeCommand('open'))} onSave={() => run(save())} onSaveAll={() => run(saveAll())} onSidebar={() => run(executeCommand('sidebar'))} onSource={() => run(executeCommand('source'))} onQuickOpen={() => setModal('quick-open')} onPreferences={() => setModal('preferences')} onOpenFolder={() => run(openFolder())} onExport={kind => run(exportDocument(kind))} onImage={() => run(insertImage())} onCloseDocument={() => run(documents.close())} onSaveAs={() => run(save(true))} onRecovery={() => run(executeCommand('recover-drafts'))} onNewWindow={() => run(executeCommand('new-window'))} focusMode={preferences.focusMode} typewriterMode={preferences.typewriterMode} onFocus={() => run(executeCommand('focus'))} onTypewriter={() => run(executeCommand('typewriter'))} isContentConstrained={preferences.contentWidthMode === 'fixed'} onContentWidthToggle={() => updatePreferences({ contentWidthMode: preferencesRef.current.contentWidthMode === 'fixed' ? 'auto' : 'fixed' })} />
     <div className="writing-space">
-      {preferences.showSidebar ? <Sidebar recentFolders={recentFolders} markdownOptions={preferences.markdown} workspaceOptions={preferences.workspace} onWorkspaceOptionsChange={workspace => updatePreferences({ workspace })} currentLine={(current?.content.slice(0, selection.from).split('\n').length) ?? 1} api={api} mode={preferences.sidebarMode} workspace={workspace} documents={documents.documents} current={current} refreshVersion={refreshVersion} onMode={mode => updatePreferences({ sidebarMode: mode })} onOpenFolder={path => run(openFolder(path))} onOpen={(path, line) => run(openFile(path, line))} onActivate={documents.activate} onJump={jumpToLine} onFileAction={setFileAction} onError={reportError} onRefresh={() => run(refreshWorkspace())} onSearchChange={setFolderSearch} /> : null}
+      {preferences.showSidebar ? <Sidebar outlineFlat={preferences.outlineFlat} onOutlineFlatChange={outlineFlat => updatePreferences({ outlineFlat })} recentFolders={recentFolders} markdownOptions={preferences.markdown} workspaceOptions={preferences.workspace} onWorkspaceOptionsChange={workspace => updatePreferences({ workspace })} currentLine={(current?.content.slice(0, selection.from).split('\n').length) ?? 1} api={api} mode={preferences.sidebarMode} workspace={workspace} documents={documents.documents} current={current} refreshVersion={refreshVersion} onMode={mode => updatePreferences({ sidebarMode: mode })} onOpenFolder={path => run(openFolder(path))} onOpen={(path, line) => run(openFile(path, line))} onActivate={documents.activate} onJump={jumpToLine} onFileAction={setFileAction} onError={reportError} onRefresh={() => run(refreshWorkspace())} onSearchChange={setFolderSearch} /> : null}
       <main className="document-pane">
         <div className="document-heading"><span className="document-name" data-testid="document-name">{current?.name ?? t('未命名')}</span>{current && isDirty(current) ? <span className="dirty-label" data-testid="dirty-indicator">{t('未保存')}</span> : null}{current?.readOnly ? <span className="dirty-label">{t('只读')}</span> : null}<span className="document-heading-spacer" /><button className="document-path" title={current?.path ?? t('尚未保存到文件')} disabled={!current?.path} onClick={() => { if (current?.path) run(api.revealFile(current.path).then(documents.acceptResult)) }}>{current?.path ? <><FolderOpen size={12} />{current.path}</> : t('Markdown 文档')}</button></div>
         {current?.externalChange ? <div className="external-change"><AlertCircle size={16} /><span>{current.externalChange === 'removed' ? t('文件已被移动或删除。可另存为保留当前编辑。') : t('磁盘上的文件已更改，当前编辑仍然保留。')}</span>{current.externalChange === 'changed' ? <button className="text-button" onClick={() => setReloadId(current.id)}>{t('重新载入')}</button> : null}<button className="text-button" onClick={() => run(save(true))}>{t('另存为')}</button></div> : null}
-        <div className="editor-area">{current ? <FloatingToolbar key={current.id} enabled={preferences.floatingToolbar} documentId={current.id} selection={selection} readOnly={current.readOnly} onAction={issueEditorCommand} /> : null}{current ? <MarkdownEditor locale={preferences.locale} markdownOptions={preferences.markdown} imageOptions={preferences.image} platform={platform} desktopApi={api} documentId={current.id} revision={current.revision} value={current.content} mode={preferences.sourceMode ? 'source' : 'hybrid'} theme={theme} fontSize={preferences.fontSize} focusMode={preferences.focusMode} typewriterMode={preferences.typewriterMode} readOnly={current.readOnly} lineNumbers={preferences.showLineNumbers} wrapLines={preferences.wrapLines} spellcheck={preferences.spellcheck} command={editorCommand} jumpToLine={jumpRequest} folderSearch={folderSearch} onChange={value => documents.changeContent(current.id, value)} onSelectionChange={setSelection} onLinkOpen={openLink} resolveResource={resolveResource} /> : <div className="startup-state"><p>{t('开始写下第一个想法。')}</p><button className="primary-button" onClick={() => run(documents.create())}>{t('新建文档')}</button></div>}</div>
+        <div className="editor-area">{current ? <FloatingToolbar key={current.id} enabled={preferences.floatingToolbar} documentId={current.id} selection={selection} readOnly={current.readOnly} onAction={issueEditorCommand} /> : null}{current ? <MarkdownEditor indentFirstLine={preferences.indentFirstLine} closeCoordinator={closeCoordinator} closeHandleRef={editorCloseHandle} onCommandStarted={editorCommandStarted} locale={preferences.locale} markdownOptions={preferences.markdown} imageOptions={preferences.image} platform={platform} desktopApi={api} documentId={current.id} revision={current.revision} encoding={current.encoding} lineEnding={current.pendingLineEnding ?? current.lineEnding} value={current.content} mode={preferences.sourceMode ? 'source' : 'hybrid'} theme={theme} fontSize={preferences.fontSize} focusMode={preferences.focusMode} typewriterMode={preferences.typewriterMode} readOnly={current.readOnly} lineNumbers={preferences.showLineNumbers} wrapLines={preferences.wrapLines} spellcheck={preferences.spellcheck} command={editorCommand} jumpToLine={jumpRequest} folderSearch={folderSearch} onChange={value => documents.changeContent(current.id, value)} onSelectionChange={setSelection} onLinkOpen={openLink} resolveResource={resolveResource} /> : <div className="startup-state"><p>{t('开始写下第一个想法。')}</p><button className="primary-button" onClick={() => run(documents.create())}>{t('新建文档')}</button></div>}</div>
       </main>
     </div>
-    <footer className="statusbar"><div className="statusbar-left" role="status" aria-live="polite">{current?.isSaving ? t('正在保存…') : notice ? <><Check size={12} />{notice}</> : current && isDirty(current) ? t('编辑中 · 草稿独立保存') : current?.path ? t('已保存') : t('尚未保存')}{preferences.focusMode ? <span>{t('专注')}</span> : null}{preferences.typewriterMode ? <span>{t('打字机')}</span> : null}</div><div className="statusbar-right"><span>{current?.encoding === 'utf8-bom' ? 'UTF-8 BOM' : 'UTF-8'}</span><span>{current?.lineEnding ?? preferences.lineEnding}</span><button data-testid="editor-mode" title={`${t('切换源码模式')} · ${primaryShortcut(platform, '/')}`} onClick={() => run(executeCommand('source'))}>{preferences.sourceMode ? t('源码模式') : t('实时预览')}</button><WordStatistics unit={preferences.statisticsUnit} onUnitChange={statisticsUnit => updatePreferences({ statisticsUnit })} content={current?.content ?? ''} selectedText={selection.text} readingSpeed={preferences.readingSpeed} markdownOptions={preferences.markdown} /></div></footer>
+    <footer className="statusbar" hidden={!preferences.showStatusBar}><div className="statusbar-left" role="status" aria-live="polite">{current?.isSaving ? t('正在保存…') : notice ? <><Check size={12} />{notice}</> : current && isDirty(current) ? t('编辑中 · 草稿独立保存') : current?.path ? t('已保存') : t('尚未保存')}{preferences.focusMode ? <span>{t('专注')}</span> : null}{preferences.typewriterMode ? <span>{t('打字机')}</span> : null}</div><div className="statusbar-right"><span>{current?.encoding === 'utf8-bom' ? 'UTF-8 BOM' : 'UTF-8'}</span><span>{current?.pendingLineEnding ?? current?.lineEnding ?? preferences.lineEnding}</span><button data-testid="editor-mode" title={`${t('切换源码模式')} · ${primaryShortcut(platform, '/')}`} onClick={() => run(executeCommand('source'))}>{preferences.sourceMode ? t('源码模式') : t('实时预览')}</button>{preferences.showStatusBar ? <WordStatistics unit={preferences.statisticsUnit} onUnitChange={statisticsUnit => updatePreferences({ statisticsUnit })} content={current?.content ?? ''} selectedText={selection.text} readingSpeed={preferences.readingSpeed} markdownOptions={preferences.markdown} /> : null}</div></footer>
     {error ? <div className="error-notification" role="alert" data-testid="error-notification"><AlertCircle size={17} /><span>{error}</span><button className="icon-button" aria-label={t('关闭错误提示')} onClick={() => setError(null)}><X size={16} /></button></div> : null}
+    {modal === 'system-versions' && versionScope ? <SystemVersionsDialog api={api} scope={versionScope} current={current} onClose={() => { setModal(null); setVersionScope(null) }} /> : null}
     {modal === 'export' ? <ExportDialog desktopApi={api} options={preferences.export} onImportPresets={importExportPresets} onOptionsChange={options => updatePreferences({ export: options })} onExport={async format => { try { await exportDocument(format) } catch (error) { reportError(error instanceof Error ? error.message : currentT('导出失败')) } }} onSettings={() => setModal('preferences')} onClose={() => setModal(null)} /> : null}
-    {modal === 'preferences' ? <PreferencesDialog desktopApi={api} platform={platform} preferences={preferences} onChange={updatePreferences} onClose={() => { run(flushPreferences().then(saved => { if (saved) setModal(current => current === 'preferences' ? null : current) })) }} /> : null}
+    {modal === 'preferences' ? <PreferencesDialog onThemeRefresh={() => setThemeRefresh(value => value + 1)} desktopApi={api} platform={platform} preferences={preferences} onChange={updatePreferences} onClose={() => { run(flushPreferences().then(saved => { if (saved) setModal(current => current === 'preferences' ? null : current) })) }} /> : null}
+    {modal === 'statistics' ? <Dialog title={t('字数统计')} onClose={() => {
+      const focus = statisticsFocus.current
+      statisticsFocus.current = null
+      setModal(null)
+      requestAnimationFrame(() => { if (focus?.element.isConnected && focus.documentId === currentIdRef.current && document.activeElement === document.body) focus.element.focus() })
+    }}><WordStatisticsPanel inDialog unit={preferences.statisticsUnit} onUnitChange={statisticsUnit => updatePreferences({ statisticsUnit })} content={current?.content ?? ''} selectedText={selection.text} readingSpeed={preferences.readingSpeed} markdownOptions={preferences.markdown} /></Dialog> : null}
+    {modal === 'page-setup' ? <PageSetupDialog options={preferences.export} onClose={() => setModal(null)} onApply={async patch => {
+      try {
+        const next = normalizeExportOptions({ ...preferencesRef.current.export, ...patch })
+        updatePreferences({ export: next })
+        return await flushPreferences()
+      } catch (error) { reportError(error instanceof Error ? translateKnownError(localeRef.current, error.message) : currentT('偏好保存失败')); return false }
+    }} /> : null}
     {modal === 'quick-open' ? <QuickOpen api={api} workspace={workspace} documents={documents.documents} recentFiles={recentFiles} onSelectDocument={documents.activate} onOpenFile={path => run(openFile(path))} onClose={() => setModal(null)} /> : null}
     {modal === 'recovery' ? <DraftRecovery drafts={drafts} onRecover={id => run(documents.recover(id).then(accepted => { if (accepted) { setDrafts(existing => existing.filter(item => item.id !== id)); setModal(null); setNotice(currentT('草稿已恢复，请保存文档')) } }))} onDiscard={id => run(api.discardDraft(id).then(result => { if (result.ok) setDrafts(existing => existing.filter(item => item.id !== id)); else reportError(result.error.message) }))} onClose={() => setModal(null)} /> : null}
     {fileAction ? <FileActionDialog action={fileAction} isSubmitting={isFileActionPending} onSubmit={name => run(performFileAction(name))} onClose={() => { if (!fileActionInProgress.current) setFileAction(null) }} /> : null}

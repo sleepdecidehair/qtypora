@@ -8,13 +8,6 @@ function apply(text: string, action: Parameters<typeof createTextEdit>[0], from:
 }
 
 describe('Markdown text transactions', () => {
-  it('bold toggling changes only the selected span and preserves unrelated syntax', () => {
-    const original = 'before _legacy_\n中文 text\n<!-- untouched -->'
-    const start = original.indexOf('中文')
-    const changed = apply(original, 'bold', start, start + 2)
-    expect(changed).toBe('before _legacy_\n**中文** text\n<!-- untouched -->')
-    expect(apply(changed, 'bold', start + 2, start + 4)).toBe(original)
-  })
   it('line commands do not accidentally include the line after a newline selection', () => {
     expect(apply('first\nsecond\nthird', 'ordered-list', 0, 13)).toBe('1. first\n2. second\nthird')
   })

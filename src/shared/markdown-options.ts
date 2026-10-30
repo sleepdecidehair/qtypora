@@ -12,6 +12,7 @@ export interface MarkdownOptions {
   mathNumbering: boolean
   diagrams: boolean
   smartPunctuation: boolean
+  smartDashInput: boolean
   softBreaks: boolean
   autoPairBrackets: boolean
   autoPairMarkdown: boolean
@@ -28,7 +29,7 @@ export const DEFAULT_MARKDOWN_OPTIONS: MarkdownOptions = {
   strictMode: false,
   frontMatter: true, toc: true, alerts: false, highlight: true,
   subscript: true, superscript: true, footnotes: true, emoji: true,
-  inlineMath: true, mathNumbering: false, diagrams: true, smartPunctuation: false, softBreaks: false,
+  inlineMath: true, mathNumbering: false, diagrams: true, smartPunctuation: false, smartDashInput: false, softBreaks: false,
   autoPairBrackets: true, autoPairMarkdown: true, codeLineNumbers: false,
   codeWrapLines: true, codeIndentSize: 2, defaultCodeLanguage: '', codeDefaultLanguageMode: 'both',
   codeShiftTabAutoIndent: false, copyPlainMarkdown: true,
@@ -38,7 +39,7 @@ export const DEFAULT_MARKDOWN_OPTIONS: MarkdownOptions = {
 export function effectiveMarkdownOptions(options: MarkdownOptions): MarkdownOptions {
   return options.strictMode ? { ...options, frontMatter: false, toc: false, alerts: false, highlight: false,
     subscript: false, superscript: false, footnotes: false, emoji: false, inlineMath: false, mathNumbering: false,
-    diagrams: false, smartPunctuation: false, softBreaks: false } : options
+    diagrams: false, smartPunctuation: false, smartDashInput: false, softBreaks: false } : options
 }
 
 export function normalizeMarkdownOptions(input: unknown): MarkdownOptions {

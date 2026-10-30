@@ -28,7 +28,10 @@ export function normalizeImageOptions(input: unknown): ImageOptions {
 }
 
 export interface ImportedImage { name: string; bytes: Uint8Array }
-export interface ImageImportRequest extends DocumentSnapshot { images: ImportedImage[] }
+export interface ImageImportRequest extends DocumentSnapshot {
+  images: ImportedImage[]
+  pasteBudget?: { from: number; to: number; table: boolean; block?: boolean; virtualCell?: { tableFrom: number; tableTo: number; row: number; column: number }; emptyCell?: { tableFrom: number; tableTo: number; row: number; column: number }; encoding: 'utf8' | 'utf8-bom'; lineEnding: 'LF' | 'CRLF' }
+}
 export interface ImageImportResult { markdown: string; paths: string[] }
 export interface UploadImagesRequest extends DocumentSnapshot { sources: string[] }
 export interface UploadImagesResult { replacements: { source: string; url: string }[] }

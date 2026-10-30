@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto'
 import { isSafeDataImage } from '../shared/data-image'
 import { Readable } from 'node:stream'
 import * as fs from 'node:fs/promises'
+import { constants } from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import type { Protocol } from 'electron'
@@ -15,7 +16,7 @@ import { isPathWithin, isPossiblyWithin, relocatedPath } from './workspace-lock'
 const RESOURCE_MIME = { ...IMAGE_MIME, ...MEDIA_MIME }
 const resourceLimit = (filePath: string): number => MEDIA_MIME[path.extname(filePath).toLowerCase()] ? MAX_MEDIA_BYTES : MAX_DOCUMENT_BYTES
 
-interface ResourceToken { path: string; owner: number }
+interface ResourceToken { path: string; owner: number; documents: DocumentSession }
 
 export class ResourceRegistry {
   private readonly resources = new Map<string, ResourceToken>()
@@ -65,9 +66,24 @@ export class ResourceRegistry {
     if (!token) {
       token = randomUUID()
       this.paths.set(key, token)
-      this.resources.set(token, { path: authorized, owner })
+      this.resources.set(token, { path: authorized, owner, documents })
     }
     return `qtypora-media://resource/${token}`
+  }
+
+  /** Reauthorize each read and bind it to the checked file handle. */
+  private async openResource(resource: ResourceToken): Promise<{ file: fs.FileHandle; size: number }> {
+    const authorized = await resource.documents.authorize(resource.path)
+    if (authorized !== resource.path) throw new DesktopError('PERMISSION_DENIED', '资源路径已改变，请重新打开。')
+    const file = await fs.open(resource.path, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0) | (constants.O_NONBLOCK ?? 0))
+    try {
+      const stat = await file.stat()
+      const current = await fs.lstat(resource.path)
+      if (!stat.isFile() || !current.isFile() || current.isSymbolicLink() || stat.dev !== current.dev || stat.ino !== current.ino || stat.size > resourceLimit(resource.path) || await resource.documents.authorize(resource.path) !== resource.path) {
+        throw new DesktopError('PERMISSION_DENIED', '资源路径已改变或文件超过大小限制。')
+      }
+      return { file, size: stat.size }
+    } catch (error) { await file.close(); throw error }
   }
 
   register(protocol: Pick<Protocol, 'handle'>): void {
@@ -76,27 +92,25 @@ export class ResourceRegistry {
         const url = new URL(request.url)
         const resource = url.hostname === 'resource' ? this.resources.get(url.pathname.slice(1)) : undefined
         if (!resource || !['GET', 'HEAD'].includes(request.method)) return new Response('Not found', { status: 404 })
-        const file = await fs.open(resource.path, 'r')
+        const { file, size } = await this.openResource(resource)
         let streaming = false
         try {
-          const stat = await file.stat()
-          if (!stat.isFile() || stat.size > resourceLimit(resource.path)) return new Response('Too large', { status: 413 })
           const headers = new Headers({
             'Content-Type': RESOURCE_MIME[path.extname(resource.path).toLowerCase()],
             'Content-Security-Policy': "default-src 'none'; style-src 'unsafe-inline'; sandbox",
             'X-Content-Type-Options': 'nosniff', 'Cache-Control': 'no-store',
             'Access-Control-Allow-Origin': '*', 'Accept-Ranges': 'bytes',
           })
-          const range = parseByteRange(request.headers.get('range'), stat.size)
+          const range = parseByteRange(request.headers.get('range'), size)
           if (range === 'invalid') {
-            headers.set('Content-Range', `bytes */${stat.size}`)
+            headers.set('Content-Range', `bytes */${size}`)
             return new Response(null, { status: 416, headers })
           }
           const start = range?.start ?? 0
-          const end = range?.end ?? stat.size - 1
+          const end = range?.end ?? size - 1
           headers.set('Content-Length', String(Math.max(0, end - start + 1)))
-          if (range) headers.set('Content-Range', `bytes ${start}-${end}/${stat.size}`)
-          if (request.method === 'HEAD' || stat.size === 0) return new Response(null, { status: range ? 206 : 200, headers })
+          if (range) headers.set('Content-Range', `bytes ${start}-${end}/${size}`)
+          if (request.method === 'HEAD' || size === 0) return new Response(null, { status: range ? 206 : 200, headers })
           // The response owns the stream; closing it also closes the file descriptor.
           const stream = file.createReadStream({ start, end, autoClose: true })
           streaming = true
@@ -113,8 +127,21 @@ export class ResourceRegistry {
     const resource = url.hostname === 'resource' ? this.resources.get(url.pathname.slice(1)) : undefined
     if (!resource || resource.owner !== owner) throw new DesktopError('PERMISSION_DENIED', '图片资源不属于当前窗口。')
     if (!IMAGE_MIME[path.extname(resource.path).toLowerCase()]) throw new DesktopError('UNSUPPORTED', '此操作仅支持图片。')
-    const bytes = await fs.readFile(resource.path)
-    if (bytes.length > MAX_DOCUMENT_BYTES) throw new DesktopError('UNSUPPORTED', '图片超过 16 MB。')
+    const { file, size } = await this.openResource(resource)
+    let bytes: Buffer
+    try {
+      const before = await file.stat()
+      bytes = Buffer.alloc(size + 1)
+      let offset = 0
+      while (offset < bytes.length) {
+        const result = await file.read(bytes, offset, bytes.length - offset, offset)
+        if (!result.bytesRead) break
+        offset += result.bytesRead
+      }
+      const after = await file.stat()
+      if (offset !== size || before.size !== size || after.size !== size || before.mtimeMs !== after.mtimeMs || before.ctimeMs !== after.ctimeMs || await resource.documents.authorize(resource.path) !== resource.path) throw new DesktopError('CONFLICT', '图片在读取期间发生变化，请重试。')
+      bytes = bytes.subarray(0, offset)
+    } finally { await file.close() }
     return `data:${IMAGE_MIME[path.extname(resource.path).toLowerCase()]};base64,${bytes.toString('base64')}`
   }
 

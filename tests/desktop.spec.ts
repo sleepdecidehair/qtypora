@@ -97,8 +97,16 @@ test('明确重新载入更新保存基线，之后保存不产生伪冲突', as
 test('未保存关闭可取消，另存真实文件后基线干净', async () => {
   await session.page.keyboard.press('ControlOrMeta+n')
   await appendText(session, '未保存内容需要保留')
-  await setMessageResponse(session, 2)
+  await session.app.evaluate(({ dialog }) => {
+    Reflect.set(globalThis, 'qtyporaCancelPromptCount', 0)
+    dialog.showMessageBox = async () => {
+      Reflect.set(globalThis, 'qtyporaCancelPromptCount', Number(Reflect.get(globalThis, 'qtyporaCancelPromptCount')) + 1)
+      return { response: 2, checkboxChecked: false }
+    }
+  })
   await session.page.keyboard.press('ControlOrMeta+w')
+  await expect.poll(() => session.app.evaluate(() => Reflect.get(globalThis, 'qtyporaCancelPromptCount'))).toBe(1)
+  await expect(session.page.locator('.cm-content')).toHaveAttribute('contenteditable', 'true')
   await expect(session.page.locator('.cm-content')).toContainText('未保存内容需要保留')
   const destination = path.join(session.root, '新文档.md')
   await setSaveDialog(session, destination)
@@ -162,8 +170,16 @@ test('外部删除未修改的文档后仍保护内存副本和草稿', async ()
   await unlink(destination)
   await expect(session.page.getByText('文件已被移动或删除。可另存为保留当前编辑。')).toBeVisible()
   await expect(session.page.getByTestId('dirty-indicator')).toBeVisible()
-  await setMessageResponse(session, 2)
+  await session.app.evaluate(({ dialog }) => {
+    Reflect.set(globalThis, 'qtyporaCancelPromptCount', 0)
+    dialog.showMessageBox = async () => {
+      Reflect.set(globalThis, 'qtyporaCancelPromptCount', Number(Reflect.get(globalThis, 'qtyporaCancelPromptCount')) + 1)
+      return { response: 2, checkboxChecked: false }
+    }
+  })
   await session.page.keyboard.press('ControlOrMeta+w')
+  await expect.poll(() => session.app.evaluate(() => Reflect.get(globalThis, 'qtyporaCancelPromptCount'))).toBe(1)
+  await expect(session.page.locator('.cm-content')).toHaveAttribute('contenteditable', 'true')
   await expect(session.page.locator('.cm-content')).toContainText('ONLY_MEMORY_COPY')
   const recoveredPath = path.join(session.root, 'recovered-copy.md')
   await setSaveDialog(session, recoveredPath)
@@ -186,6 +202,25 @@ test('自动保存关闭时异常退出仍可恢复独立草稿', async () => {
   await expect(session.page.getByRole('dialog', { name: '恢复草稿' })).toBeVisible()
   await session.page.getByRole('button', { name: '恢复', exact: true }).first().click()
   await expect(session.page.locator('.cm-content')).toContainText('独立恢复草稿内容 123')
+})
+
+test('恢复已有文件的草稿后保存实际写入文件并保留换行编码', async () => {
+  const filename = await openFixture(session, 'recover-save.md', '\ufefforiginal\r\n')
+  await appendText(session, 'draft')
+  const draftDirectory = path.join(session.userData, 'drafts')
+  await expect.poll(async () => {
+    const names = await readdir(draftDirectory).catch(() => [])
+    const drafts = await Promise.all(names.map(name => readFile(path.join(draftDirectory, name), 'utf8')))
+    return drafts.some(content => content.includes('draft'))
+  }).toBe(true)
+  const root = session.root
+  await stopDesktop(session, false)
+  session = await launchDesktop(root)
+  await expect(session.page.getByRole('dialog', { name: '恢复草稿' })).toBeVisible()
+  await session.page.getByRole('button', { name: '恢复', exact: true }).first().click()
+  await expect(session.page.locator('.cm-content')).toContainText('draft')
+  await session.page.keyboard.press('ControlOrMeta+s')
+  await expect.poll(() => readFile(filename)).toEqual(Buffer.from('\ufefforiginal\r\ndraft'))
 })
 
 test('模式切换保留编辑位置，深色偏好持久保存', async () => {
@@ -541,7 +576,7 @@ test('保存全部遇到未命名文档另存取消会停止，保留后续修�
   await appendText(session, ' must remain unsaved')
   await session.app.evaluate(({ dialog }) => { dialog.showSaveDialog = async () => ({ canceled: true, filePath: '' }) })
   await clickNativeMenu(session, '保存全部')
-  await expect(session.page.getByRole('status')).toContainText('保存全部已停止')
+  await expect(session.page.locator('.statusbar-left')).toContainText('保存全部已停止')
   expect(await readFile(first, 'utf8')).toBe('FIRST saved')
   expect(await readFile(later, 'utf8')).toBe('LATER')
   await expect(session.page).toHaveTitle(/all-after-cancel\.md/)

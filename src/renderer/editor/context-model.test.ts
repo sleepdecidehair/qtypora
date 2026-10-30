@@ -3,9 +3,10 @@ import { EditorState, type Transaction } from '@codemirror/state'
 import { EditorView } from '@codemirror/view'
 import { markdown, markdownLanguage } from '@codemirror/lang-markdown'
 import { history, undo } from '@codemirror/commands'
-import { sourceContextTarget, imageContextTarget, contextTargetUnchanged, contextObjectSource } from './context-target'
+import { sourceContextTarget, imageContextTarget, tableLinkContextTarget, contextTargetUnchanged, contextObjectSource } from './context-target'
 import { contextMenuRequest } from './editor-context'
 import { tableOperation } from './table-operations'
+import { parser, GFM } from '@lezer/markdown'
 
 const state = (doc: string, readonly = false) => EditorState.create({ doc, extensions: [markdown({ base: markdownLanguage }), history(), EditorState.readOnly.of(readonly)] })
 function apply(doc: string, action: Parameters<typeof tableOperation>[4], row = 1, column = 0): string {
@@ -15,6 +16,48 @@ function apply(doc: string, action: Parameters<typeof tableOperation>[4], row = 
 }
 
 describe('canonical context target ranges', () => {
+  it('matches the clicked table link by rendered order and rejects stale or ambiguous cell links', () => {
+    const doc = '| 表头 |\n| --- |\n| 前文 [一][first] 和 [二][second] 后文 |\n\n[first]: one.md\n[second]: two.md\n'
+    const editor = EditorState.create({ doc, extensions: [markdown({ base: markdownLanguage })] })
+    const from = doc.indexOf('前文'), to = doc.indexOf(' 后文') + ' 后文'.length
+    const first = tableLinkContextTarget(editor, from, to, ['one.md', 'two.md'], 0)
+    const second = tableLinkContextTarget(editor, from, to, ['one.md', 'two.md'], 1)
+    expect(first?.source).toBe('[一][first]')
+    expect(second?.source).toBe('[二][second]')
+    expect(second?.address?.value).toBe('two.md')
+    expect(tableLinkContextTarget(editor, from, to, ['two.md'], 0)).toBeNull()
+    expect(tableLinkContextTarget(editor, from, to, ['one.md', 'wrong.md'], 1)).toBeNull()
+    expect(editor.doc.toString()).toBe(doc)
+  })
+  it.each([
+    ['[文字][id]', '[id]: https://example.test/a', 'https://example.test/a'],
+    ['[id][]', '[ID]: https://example.test/a', 'https://example.test/a'],
+    ['[id]', '[id]: https://example.test/a', 'https://example.test/a'],
+    ['[文字][a\\*b]', '[a\\*b]: <https://example.test/a?x=1&amp;y=2>', 'https://example.test/a?x=1&y=2'],
+    ['[文字][id]', '[id]: https://first.test\n[id]: https://second.test', 'https://first.test'],
+  ])('resolves reference link %s without modifying source', (link, definition, href) => {
+    const doc = `${link}\n\n${definition}`
+    const editor = state(doc)
+    const target = sourceContextTarget(editor, 2)
+    expect(target.kind).toBe('link')
+    expect(target.source).toBe(link)
+    expect(target.address?.value).toBe(href)
+    const menu = contextMenuRequest({ state: editor } as EditorView, target, false)
+    expect(menu.availableActions).toContain('copy-link')
+    expect(menu.availableActions).toContain('open-link')
+    expect(editor.doc.toString()).toBe(doc)
+  })
+  it('does not expose missing, unsafe or fenced reference links as openable', () => {
+    for (const doc of ['[文字][missing]', '```md\n[文字][id]\n```\n\n[id]: https://example.test']) {
+      expect(sourceContextTarget(state(doc), doc.indexOf('文字')).kind).not.toBe('link')
+    }
+    const doc = '[文字][id]\n\n[id]: javascript:alert(1)'
+    const editor = state(doc)
+    const target = sourceContextTarget(editor, 2)
+    const menu = contextMenuRequest({ state: editor } as EditorView, target, false)
+    expect(menu.availableActions).not.toContain('open-link')
+    expect(editor.doc.toString()).toBe(doc)
+  })
   it('locates an image URL separately from its alt text and title', () => {
     const doc = 'Before ![original alt](<images/a file.png> "original title") after'
     const target = sourceContextTarget(state(doc), doc.indexOf('original alt'))
@@ -75,6 +118,61 @@ describe('canonical context target ranges', () => {
 })
 
 describe('table structural transactions', () => {
+  it('preserves CRLF when inserting and deleting rows', () => {
+    const original = '| A | B |\r\n| --- | --- |\r\n| one | two |\r\n| three | four |'
+    const apply = (action: 'table-row-after' | 'table-row-delete') => {
+      let result = original
+      for (const change of [...tableOperation(original, 0, 1, 0, action)!].sort((a, b) => b.from - a.from)) result = result.slice(0, change.from) + change.insert + result.slice(change.to)
+      return result
+    }
+    expect(apply('table-row-delete')).toBe('| A | B |\r\n| --- | --- |\r\n| three | four |')
+    const last = tableOperation(original, 0, 2, 0, 'table-row-delete')![0]
+    expect(original.slice(0, last.from) + original.slice(last.to)).toBe('| A | B |\r\n| --- | --- |\r\n| one | two |')
+    expect(apply('table-row-after')).toBe('| A | B |\r\n| --- | --- |\r\n| one | two |\r\n|   |   |\r\n| three | four |')
+    let insertedHeader = original
+    for (const change of [...tableOperation(original, 0, 0, 0, 'table-row-before')!].sort((a, b) => b.from - a.from)) insertedHeader = insertedHeader.slice(0, change.from) + change.insert + insertedHeader.slice(change.to)
+    expect(insertedHeader).toBe('|   |   |\r\n| --- | --- |\r\n| A | B |\r\n| one | two |\r\n| three | four |')
+  })
+  it.each(['\n', '\r\n'])('inserts a leading column in bare tables without losing structure using %j', newline => {
+    const original = ['A | B', '--- | ---', 'one | two'].join(newline)
+    const changes = tableOperation(original, 0, 0, 0, 'table-column-before')!
+    let result = original
+    for (const change of [...changes].sort((a, b) => b.from - a.from)) result = result.slice(0, change.from) + change.insert + result.slice(change.to)
+    expect(parser.configure(GFM).parse(result).toString()).toContain('Table(')
+    expect(result).toBe(['|   |A | B', '| --- |--- | ---', '|   |one | two'].join(newline))
+  })
+  it.each(['\n', '\r\n'])('appends a column in bare tables without losing structure using %j', newline => {
+    const original = ['A | B', '--- | ---', 'one | two'].join(newline)
+    const changes = tableOperation(original, 0, 0, 1, 'table-column-after')!
+    let result = original
+    for (const change of [...changes].sort((a, b) => b.from - a.from)) result = result.slice(0, change.from) + change.insert + result.slice(change.to)
+    expect(result).toBe(['A | B|   |', '--- | ---| --- |', 'one | two|   |'].join(newline))
+    expect(parser.configure(GFM).parse(result.replace(/\r\n/g, '\n')).toString()).toContain('Table(')
+  })
+  it.each(['\n', '\r\n'])('deletes a short first column without consuming the next row using %j', newline => {
+    const original = ['A | B', '--- | ---', 'only', 'next | keep'].join(newline)
+    const changes = tableOperation(original, 0, 1, 0, 'table-column-delete')!
+    let result = original
+    for (const change of [...changes].sort((a, b) => b.from - a.from)) result = result.slice(0, change.from) + change.insert + result.slice(change.to)
+    expect(result).toBe(['| B|', '| ---|', '| |', ' keep'].join(newline))
+  })
+  it('preserves a remaining escaped pipe when deleting to a single column', () => {
+    const original = 'A | B\\|C\n--- | ---\nonly\nnext | keep'
+    const changes = tableOperation(original, 0, 1, 0, 'table-column-delete')!
+    let result = original
+    for (const change of [...changes].sort((a, b) => b.from - a.from)) result = result.slice(0, change.from) + change.insert + result.slice(change.to)
+    expect(result).toBe('| B\\|C|\n| ---|\n| |\n keep')
+  })
+  it.each(['\n', '\r\n'])('preserves single-column syntax for each outer pipe form using %j', newline => {
+    for (const [header, divider] of [['|A|B', '|---|---'], ['A|B|', '---|---|'], ['A|B', '---|---'], ['|A|B|', '|---|---|']]) {
+      const original = [header, divider, 'X'].join(newline)
+      const changes = tableOperation(original, 0, 0, 0, 'table-column-delete')!
+      let result = original
+      for (const change of [...changes].sort((a, b) => b.from - a.from)) result = result.slice(0, change.from) + change.insert + result.slice(change.to)
+      expect(parser.configure(GFM).parse(result.replace(/\r\n/g, '\n')).toString()).toContain('Table(')
+      expect(result.split(newline)[0]).toBe('|B|')
+    }
+  })
   const table = '| Name  | Value |\n| :--- | ---: |\n| a\\|b   | untouched |\n| last | keep |'
   it('deletes only the requested body row while preserving all other bytes', () => {
     expect(apply(table, 'table-row-delete')).toBe('| Name  | Value |\n| :--- | ---: |\n| last | keep |')

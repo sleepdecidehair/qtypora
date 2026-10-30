@@ -19,6 +19,258 @@ test.beforeEach(async () => {
 
 test.afterEach(async () => { if (session) await stopDesktop(session) })
 
+test('段落菜单插入 YAML 前置信息，保留正文并可一次撤销', async () => {
+  const original = '# Title\n\nBody\n'
+  const filePath = await openFixture(session, 'insert-yaml.md', original)
+  const editor = session.page.locator('.cm-content')
+  const source = () => editor.evaluate(element => (Reflect.get(element, 'cmTile').root.view as import('@codemirror/view').EditorView).state.doc.toString())
+  await editor.click()
+  await clickNativeMenu(session, 'YAML 前置信息')
+  await expect.poll(source).toBe('---\n\n---\n\n' + original)
+  await clickNativeMenu(session, 'YAML 前置信息')
+  await expect.poll(source).toBe('---\n\n---\n\n' + original)
+  await session.page.keyboard.press('ControlOrMeta+z')
+  await expect.poll(source).toBe(original)
+  expect(await readFile(filePath, 'utf8')).toBe(original)
+})
+
+test('实时预览插入 YAML 后可立即键入并撤销', async () => {
+  const original = '# Title\n\nBody\n'
+  const filePath = await openFixture(session, 'insert-yaml-hybrid.md', original)
+  await session.page.keyboard.press('ControlOrMeta+/')
+  const editor = session.page.locator('.cm-content')
+  const source = () => editor.evaluate(element => (Reflect.get(element, 'cmTile').root.view as import('@codemirror/view').EditorView).state.doc.toString())
+  await editor.click()
+  await clickNativeMenu(session, 'YAML 前置信息')
+  await expect.poll(source).toBe('---\n\n---\n\n' + original)
+  await session.page.keyboard.insertText('title: demo')
+  await expect.poll(source).toBe('---\ntitle: demo\n---\n\n' + original)
+  await session.page.keyboard.press('ControlOrMeta+z')
+  await expect.poll(source).toBe('---\n\n---\n\n' + original)
+  await session.page.keyboard.press('ControlOrMeta+z')
+  await expect.poll(source).toBe(original)
+  expect(await readFile(filePath, 'utf8')).toBe(original)
+})
+
+test('实时预览插入警告框可直接输入、撤销并保留 CRLF', async () => {
+  const original = 'before\r\n  \r\nafter\r\n'
+  const filename = await openFixture(session, 'insert-alert.md', original)
+  await session.page.keyboard.press('ControlOrMeta+/')
+  const editor = session.page.locator('.cm-content')
+  const source = () => editor.evaluate(element => (Reflect.get(element, 'cmTile').root.view as import('@codemirror/view').EditorView).state.doc.toString())
+  await editor.evaluate(element => {
+    const view = Reflect.get(element, 'cmTile').root.view as import('@codemirror/view').EditorView
+    view.dispatch({ selection: { anchor: view.state.doc.line(2).from + 1 } }); view.focus()
+  })
+  await clickNativeMenu(session, '注意')
+  const inserted = 'before\n\n> [!NOTE]\n> \n  \nafter\n'
+  await expect.poll(source).toBe(inserted)
+  await session.page.keyboard.insertText('内容')
+  await expect.poll(source).toBe(inserted.replace('> \n', '> 内容\n'))
+  await session.page.keyboard.press('ControlOrMeta+s')
+  await expect.poll(() => readFile(filename, 'utf8')).toBe(inserted.replace('> \n', '> 内容\n').replace(/\n/g, '\r\n'))
+  await session.page.keyboard.press('ControlOrMeta+z')
+  await expect.poll(source).toBe(inserted)
+  await session.page.keyboard.press('ControlOrMeta+z')
+  await expect.poll(source).toBe(original.replace(/\r\n/g, '\n'))
+})
+
+test('已有警告框切换类型或移除标记时保留正文和选区', async () => {
+  const original = '> [!NOTE]\n> body text\n\nafter\n'
+  const filename = await openFixture(session, 'toggle-alert.md', original)
+  const editor = session.page.locator('.cm-content')
+  const source = () => editor.evaluate(element => (Reflect.get(element, 'cmTile').root.view as import('@codemirror/view').EditorView).state.doc.toString())
+  const selected = () => editor.evaluate(element => {
+    const view = Reflect.get(element, 'cmTile').root.view as import('@codemirror/view').EditorView
+    return view.state.sliceDoc(view.state.selection.main.from, view.state.selection.main.to)
+  })
+  await editor.evaluate(element => {
+    const view = Reflect.get(element, 'cmTile').root.view as import('@codemirror/view').EditorView
+    const from = view.state.doc.toString().indexOf('body')
+    view.dispatch({ selection: { anchor: from, head: from + 4 } }); view.focus()
+  })
+  await clickNativeMenu(session, '警告')
+  await expect.poll(source).toBe(original.replace('[!NOTE]', '[!WARNING]'))
+  await expect.poll(selected).toBe('body')
+  await session.page.keyboard.press('ControlOrMeta+z')
+  await expect.poll(source).toBe(original)
+  await clickNativeMenu(session, '注意')
+  await expect.poll(source).toBe(original.replace('> [!NOTE]\n', ''))
+  await expect.poll(selected).toBe('body')
+  await session.page.keyboard.press('ControlOrMeta+z')
+  await expect.poll(source).toBe(original)
+  expect(await readFile(filename, 'utf8')).toBe(original)
+})
+
+test('空警告框切换类型后焦点可继续输入并撤销', async () => {
+  const original = '> [!NOTE]\n> \n'
+  const filename = await openFixture(session, 'empty-alert-switch.md', original)
+  await session.page.keyboard.press('ControlOrMeta+/')
+  const editor = session.page.locator('.cm-content')
+  const source = () => editor.evaluate(element => (Reflect.get(element, 'cmTile').root.view as import('@codemirror/view').EditorView).state.doc.toString())
+  await session.page.locator('.cm-live-block').filter({ has: session.page.locator('.md-alert-note') }).getByRole('button', { name: '编辑此块' }).click()
+  await editor.evaluate(element => {
+    const view = Reflect.get(element, 'cmTile').root.view as import('@codemirror/view').EditorView
+    view.dispatch({ selection: { anchor: view.state.doc.line(2).to } }); view.focus()
+  })
+  await clickNativeMenu(session, '警告')
+  await expect.poll(source).toBe(original.replace('NOTE', 'WARNING'))
+  await session.page.keyboard.insertText('body')
+  await expect.poll(source).toBe('> [!WARNING]\n> body\n')
+  await session.page.keyboard.press('ControlOrMeta+z')
+  await expect.poll(source).toBe('> [!WARNING]\n> \n')
+  await session.page.keyboard.press('ControlOrMeta+z')
+  await expect.poll(source).toBe(original)
+  expect(await readFile(filename, 'utf8')).toBe(original)
+})
+
+test('空警告框移除标记后保留空引用并可输入撤销', async () => {
+  const original = '> [!NOTE]\n> \n'
+  const filename = await openFixture(session, 'empty-alert-remove.md', original)
+  await session.page.keyboard.press('ControlOrMeta+/')
+  const editor = session.page.locator('.cm-content')
+  const source = () => editor.evaluate(element => (Reflect.get(element, 'cmTile').root.view as import('@codemirror/view').EditorView).state.doc.toString())
+  await session.page.locator('.cm-live-block').filter({ has: session.page.locator('.md-alert-note') }).getByRole('button', { name: '编辑此块' }).click()
+  await editor.evaluate(element => {
+    const view = Reflect.get(element, 'cmTile').root.view as import('@codemirror/view').EditorView
+    view.dispatch({ selection: { anchor: view.state.doc.line(2).to } }); view.focus()
+  })
+  await clickNativeMenu(session, '注意')
+  await expect.poll(source).toBe('> \n')
+  await session.page.keyboard.insertText('body')
+  await expect.poll(source).toBe('> body\n')
+  await session.page.keyboard.press('ControlOrMeta+z')
+  await expect.poll(source).toBe('> \n')
+  await session.page.keyboard.press('ControlOrMeta+z')
+  await expect.poll(source).toBe(original)
+  expect(await readFile(filename, 'utf8')).toBe(original)
+})
+
+test('正文光标处插入警告框保留两侧内容和 BOM CRLF', async () => {
+  const original = '\ufeffhello\r\n'
+  const filename = await openFixture(session, 'split-paragraph-alert.md', original)
+  await session.page.keyboard.press('ControlOrMeta+/')
+  const editor = session.page.locator('.cm-content')
+  const source = () => editor.evaluate(element => (Reflect.get(element, 'cmTile').root.view as import('@codemirror/view').EditorView).state.doc.toString())
+  await editor.evaluate(element => {
+    const view = Reflect.get(element, 'cmTile').root.view as import('@codemirror/view').EditorView
+    view.dispatch({ selection: { anchor: 2 } }); view.focus()
+  })
+  await clickNativeMenu(session, '提示')
+  const inserted = 'he\n\n> [!TIP]\n> \n\nllo\n'
+  await expect.poll(source).toBe(inserted)
+  await session.page.keyboard.insertText('body')
+  await expect.poll(source).toBe(inserted.replace('> \n', '> body\n'))
+  await session.page.keyboard.press('ControlOrMeta+s')
+  await expect.poll(() => readFile(filename, 'utf8')).toBe('\ufeff' + inserted.replace('> \n', '> body\n').replace(/\n/g, '\r\n'))
+  await session.page.keyboard.press('ControlOrMeta+z')
+  await expect.poll(source).toBe(inserted)
+  await session.page.keyboard.press('ControlOrMeta+z')
+  await expect.poll(source).toBe('hello\n')
+})
+
+test('连字符正文安全拆分插入警告框并撤销', async () => {
+  const original = 'hello-world\n'
+  const filename = await openFixture(session, 'hyphen-alert.md', original)
+  await session.page.keyboard.press('ControlOrMeta+/')
+  const editor = session.page.locator('.cm-content')
+  const source = () => editor.evaluate(element => (Reflect.get(element, 'cmTile').root.view as import('@codemirror/view').EditorView).state.doc.toString())
+  await editor.evaluate(element => {
+    const view = Reflect.get(element, 'cmTile').root.view as import('@codemirror/view').EditorView
+    view.dispatch({ selection: { anchor: 5 } }); view.focus()
+  })
+  await clickNativeMenu(session, '注意')
+  await expect.poll(source).toBe('hello\n\n> [!NOTE]\n> \n\n-world\n')
+  await session.page.keyboard.press('ControlOrMeta+z')
+  await expect.poll(source).toBe(original)
+  expect(await readFile(filename, 'utf8')).toBe(original)
+})
+
+test('普通井号正文可安全插入警告框并撤销', async () => {
+  const original = 'C# language\n'
+  const filename = await openFixture(session, 'hash-alert.md', original)
+  await session.page.keyboard.press('ControlOrMeta+/')
+  const editor = session.page.locator('.cm-content')
+  const source = () => editor.evaluate(element => (Reflect.get(element, 'cmTile').root.view as import('@codemirror/view').EditorView).state.doc.toString())
+  await editor.evaluate(element => {
+    const view = Reflect.get(element, 'cmTile').root.view as import('@codemirror/view').EditorView
+    view.dispatch({ selection: { anchor: 2 } }); view.focus()
+  })
+  await clickNativeMenu(session, '注意')
+  await expect.poll(source).toBe('C#\n\n> [!NOTE]\n> \n\n language\n')
+  await session.page.keyboard.press('ControlOrMeta+z')
+  await expect.poll(source).toBe(original)
+  expect(await readFile(filename, 'utf8')).toBe(original)
+})
+
+test('警告框插入不会拆开 Emoji 简码', async () => {
+  const original = 'hello :smile: text\n'
+  const filename = await openFixture(session, 'emoji-alert-guard.md', original)
+  const editor = session.page.locator('.cm-content')
+  const source = () => editor.evaluate(element => (Reflect.get(element, 'cmTile').root.view as import('@codemirror/view').EditorView).state.doc.toString())
+  await editor.evaluate(element => {
+    const view = Reflect.get(element, 'cmTile').root.view as import('@codemirror/view').EditorView
+    view.dispatch({ selection: { anchor: 9 } }); view.focus()
+  })
+  await clickNativeMenu(session, '注意')
+  await expect.poll(source).toBe(original)
+  expect(await readFile(filename, 'utf8')).toBe(original)
+})
+
+test('智能破折号仅在实时预览键入时转换，可撤销且粘贴不转换', async () => {
+  const initial = await session.page.evaluate(async () => {
+    const bootstrap = await window.desktop.bootstrap()
+    if (!bootstrap.ok) throw new Error(bootstrap.error.message)
+    return window.desktop.updatePreferences({ ...bootstrap.data.preferences, markdown: { ...bootstrap.data.preferences.markdown, smartDashInput: true } })
+  })
+  expect(initial.ok).toBe(true)
+  await session.page.reload()
+  await expect(session.page.locator('.cm-content')).toBeVisible()
+  const filename = await openFixture(session, 'smart-dash.md', 'hello-')
+  await session.page.keyboard.press('ControlOrMeta+/')
+  const editor = session.page.locator('.cm-content')
+  const source = () => editor.evaluate(element => (Reflect.get(element, 'cmTile').root.view as import('@codemirror/view').EditorView).state.doc.toString())
+  await editor.evaluate(element => {
+    const view = Reflect.get(element, 'cmTile').root.view as import('@codemirror/view').EditorView
+    view.dispatch({ selection: { anchor: view.state.doc.length } }); view.focus()
+  })
+  await session.page.keyboard.type('-')
+  await expect.poll(source).toBe('hello–')
+  await session.page.keyboard.press('ControlOrMeta+z')
+  await expect.poll(source).toBe('hello-')
+  await session.app.evaluate(({ clipboard }) => clipboard.writeText('-'))
+  await session.page.keyboard.press('ControlOrMeta+v')
+  await expect.poll(source).toBe('hello--')
+  const imePrevented = await editor.evaluate(element => {
+    const event = new InputEvent('beforeinput', { inputType: 'insertText', data: '-', isComposing: true, bubbles: true, cancelable: true })
+    element.dispatchEvent(event)
+    return event.defaultPrevented
+  })
+  expect(imePrevented).toBe(false)
+  await expect.poll(source).toBe('hello--')
+  await session.page.keyboard.press('ControlOrMeta+/')
+  await session.page.keyboard.type('-')
+  await expect.poll(source).toBe('hello---')
+  expect(await readFile(filename, 'utf8')).toBe('hello-')
+})
+
+test('普通版本号正文可插入警告框并撤销', async () => {
+  const original = 'Version 2.0\n'
+  const filename = await openFixture(session, 'version-alert.md', original)
+  await session.page.keyboard.press('ControlOrMeta+/')
+  const editor = session.page.locator('.cm-content')
+  const source = () => editor.evaluate(element => (Reflect.get(element, 'cmTile').root.view as import('@codemirror/view').EditorView).state.doc.toString())
+  await editor.evaluate(element => {
+    const view = Reflect.get(element, 'cmTile').root.view as import('@codemirror/view').EditorView
+    view.dispatch({ selection: { anchor: 10 } }); view.focus()
+  })
+  await clickNativeMenu(session, '注意')
+  await expect.poll(source).toBe('Version 2.\n\n> [!NOTE]\n> \n\n0\n')
+  await session.page.keyboard.press('ControlOrMeta+z')
+  await expect.poll(source).toBe(original)
+  expect(await readFile(filename, 'utf8')).toBe(original)
+})
+
 test('YAML、目录和 Alerts 使用统一标题索引，重复标题点击定位且保存不改原文', async () => {
   const prefix = '---\ntitle: 示例标题\nauthor: 测试作者\nnotes: |\n  # 不是标题\n---\n\n[toc]\n\n# 重复标题\n\n> [!WARNING]\n> **注意保存**\n\n'
   const content = prefix + Array.from({ length: 40 }, (_, index) => `段落 ${index}\n`).join('\n') + '\n# 重复标题\n\n最终正文\n'

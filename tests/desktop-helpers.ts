@@ -39,6 +39,14 @@ export async function launchDesktop(existingRoot?: string): Promise<DesktopSessi
   if (env.QTYPORA_TEST_VISIBLE !== '1') await app.evaluate(({ app, BrowserWindow }) => {
     const isolate = (window: Electron.BrowserWindow): void => {
       window.webContents.setBackgroundThrottling(false)
+      // On macOS the pending ready-to-show call can make a hidden window visible
+      // without emitting a show event. Suppress only that startup call in the
+      // isolated test process; later explicit show/focus operations stay intact.
+      if (!window.isVisible()) {
+        const originalShow = window.show
+        window.show = () => {}
+        window.once('ready-to-show', () => { queueMicrotask(() => { if (!window.isDestroyed()) window.show = originalShow }) })
+      }
       const hide = () => window.hide()
       Reflect.set(window, 'qtyporaTestHideWindow', hide)
       window.on('show', hide)

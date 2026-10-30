@@ -12,6 +12,36 @@ function popupWindow() {
 }
 
 describe('Context menus', () => {
+  it('validates outline modes and checks the selected native radio item', () => {
+    const value = validateContextMenu(request({ kind: 'outline', readOnly: true, hasSelection: false, availableActions: ['outline-collapsible', 'outline-flat'], outlineFlat: true }))
+    const menu = contextMenuTemplate(value, () => undefined)
+    expect(menu.map(item => [item.id, item.type, item.checked])).toEqual([['outline-collapsible', 'radio', false], ['outline-flat', 'radio', true]])
+    expect(() => validateContextMenu({ ...value, outlineFlat: 'yes' })).toThrow()
+    expect(ids(contextMenuTemplate({ ...value, kind: 'editor' }, () => undefined))).toEqual([])
+  })
+  it('exposes the outline filter as a separate checked toggle', () => {
+    const value = validateContextMenu(request({ kind: 'outline', readOnly: true, hasSelection: false, availableActions: ['outline-filter', 'outline-flat'], outlineFilter: true }))
+    const menu = contextMenuTemplate(value, () => undefined)
+    expect(menu.find(item => item.id === 'outline-filter')).toMatchObject({ type: 'checkbox', checked: true })
+    expect(menu.find(item => item.id === 'outline-flat')).toMatchObject({ type: 'radio', checked: false })
+    expect(() => validateContextMenu({ ...value, outlineFilter: 'true' })).toThrow()
+  })
+  it('routes the outline expand and collapse actions without exposing them to editor menus', () => {
+    const select = vi.fn()
+    const value = validateContextMenu(request({ kind: 'outline', readOnly: true, availableActions: ['outline-expand-all', 'outline-collapse-all'] }))
+    const menu = contextMenuTemplate(value, select)
+    expect(ids(menu)).toEqual(['outline-expand-all', 'outline-collapse-all'])
+    menu[1].click?.()
+    expect(select).toHaveBeenCalledWith('outline-collapse-all')
+    expect(ids(contextMenuTemplate({ ...value, kind: 'editor' }, select))).toEqual([])
+  })
+  it('offers the outline location action for read-only documents', () => {
+    const select = vi.fn()
+    const menu = contextMenuTemplate(validateContextMenu(request({ kind: 'outline', readOnly: true, hasSelection: false, availableActions: ['outline-locate'] })), select)
+    expect(ids(menu)).toEqual(['outline-locate'])
+    menu[0].click?.()
+    expect(select).toHaveBeenCalledWith('outline-locate')
+  })
   it('only offers temporary spelling suppression for editable misspelled words', () => {
     const select = vi.fn()
     const value = validateContextMenu(request({ availableActions: ['spell-ignore', 'spell-learn'], spelling: { word: 'helo', suggestions: [] } }))

@@ -39,6 +39,24 @@ describe('document structure compatibility', () => {
     expect(resolveHeading(source, '#%broken')).toBeNull()
     expect(resolveHeading(source, '#标题')).toBeNull()
   })
+  it('renders Typora TOC aliases without changing source or interpreting fenced examples', () => {
+    for (const marker of ['[TOC]', '{:toc}', '{:TOC}', '[[_TOC_]]']) {
+      const source = `${marker}\n\n# 标题\n\n\`\`\`md\n${marker}\n\`\`\``
+      const editor = state(source)
+      const blocks = liveBlocks(editor).filter(block => block.kind === 'toc')
+      expect(blocks).toHaveLength(1)
+      expect(blocks[0].source).toBe(marker)
+      expect(blocks[0].html).toContain('href="#标题"')
+      expect(parser.render(source).match(/class="md-toc"/g)).toHaveLength(1)
+      expect(editor.doc.toString()).toBe(source)
+      expect(getMarkdownParser({ ...options, toc: false }).render(source)).not.toContain('class="md-toc"')
+      expect(getMarkdownParser({ ...options, strictMode: true }).render(source)).not.toContain('class="md-toc"')
+    }
+    for (const marker of ['[[_toc_]]', '{: toc}', '{:toc} extra', 'prefix {:toc}']) {
+      expect(parser.render(`${marker}\n\n# title`)).not.toContain('class="md-toc"')
+    }
+    expect(parser.render('> {:toc}\n\n- [[_TOC_]]\n\n# title')).not.toContain('class="md-toc"')
+  })
   it('renders all five Alerts without confusing unknown types, nested content or fenced examples', () => {
     for (const type of ['NOTE', 'TIP', 'IMPORTANT', 'WARNING', 'CAUTION']) {
       const html = parser.render(`> [!${type}]\n> **正文**\n>\n> - 保留列表`)

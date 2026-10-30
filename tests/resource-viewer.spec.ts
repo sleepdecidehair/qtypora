@@ -1,7 +1,7 @@
 import { test, expect } from '@playwright/test'
 import { readFile, writeFile } from 'node:fs/promises'
 import path from 'node:path'
-import { captureDesktop, launchDesktop, openFixture, setContextMenuChoice, setMessageResponse, stopDesktop, type DesktopSession } from './desktop-helpers'
+import { captureDesktop, launchDesktop, openFixture, setContextMenuChoice, stopDesktop, type DesktopSession } from './desktop-helpers'
 
 let session: DesktopSession
 test.beforeEach(async () => { session = await launchDesktop() })
@@ -161,11 +161,46 @@ test('查看器隔离原生保存和切换快捷键，原生窗口关闭仍保�
   await session.page.keyboard.press('ControlOrMeta+/')
   expect((await articleState()).mode).toBe('hybrid')
   expect(await readFile(file, 'utf8')).toBe(source)
-  await setMessageResponse(session, 2)
+  await session.app.evaluate(({ dialog }) => {
+    Reflect.set(globalThis, 'qtyporaClosePromptSeen', false)
+    dialog.showMessageBox = async () => { Reflect.set(globalThis, 'qtyporaClosePromptSeen', true); return { response: 2, checkboxChecked: false } }
+  })
   await session.app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].close())
+  await expect.poll(() => session.app.evaluate(() => Reflect.get(globalThis, 'qtyporaClosePromptSeen'))).toBe(true)
+  await expect(session.page.getByTestId('markdown-editor')).not.toHaveAttribute('inert')
   await expect(viewer).toBeVisible()
   expect((await articleState()).source).toBe(modified)
   await session.page.keyboard.press('Escape')
   await expect(viewer).toHaveCount(0)
-  expect((await articleState()).focused).toBe(true)
+  await expect.poll(async () => (await articleState()).focused).toBe(true)
+  await session.page.keyboard.insertText('继续编辑')
+  await expect.poll(async () => (await articleState()).source).toContain('继续编辑')
+  expect(await readFile(file, 'utf8')).toBe(source)
+})
+
+test('关闭确认期间退出查看器，在取消关闭后恢复编辑焦点', async () => {
+  const source = '# 关闭保护\n\n```mermaid\nflowchart LR\nA-->B\n```\n\n'
+  const file = await openFixture(session, 'resource-close-race.md', source)
+  await session.page.keyboard.press('ControlOrMeta+End')
+  await session.page.keyboard.type('待保存')
+  const modified = (await articleState()).source
+  await session.page.keyboard.press('ControlOrMeta+/')
+  await setContextMenuChoice(session, 'view-resource')
+  await session.page.locator('.md-mermaid svg').click({ button: 'right' })
+  const viewer = session.page.getByTestId('resource-viewer')
+  await expect(viewer).toBeVisible()
+  await session.app.evaluate(({ dialog }) => {
+    dialog.showMessageBox = () => new Promise(resolve => { Reflect.set(globalThis, 'qtyporaReleaseCloseDialog', () => resolve({ response: 2, checkboxChecked: false })) })
+  })
+  await session.app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].close())
+  await expect.poll(() => session.app.evaluate(() => typeof Reflect.get(globalThis, 'qtyporaReleaseCloseDialog'))).toBe('function')
+  const editorRoot = session.page.getByTestId('markdown-editor')
+  await expect(editorRoot).toHaveAttribute('inert', '')
+  await session.page.keyboard.press('Escape')
+  await expect(viewer).toHaveCount(0)
+  await session.app.evaluate(() => { const release = Reflect.get(globalThis, 'qtyporaReleaseCloseDialog') as () => void; release() })
+  await expect(editorRoot).not.toHaveAttribute('inert')
+  await expect.poll(async () => (await articleState()).focused).toBe(true)
+  expect((await articleState()).source).toBe(modified)
+  expect(await readFile(file, 'utf8')).toBe(source)
 })

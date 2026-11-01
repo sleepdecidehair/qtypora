@@ -1,57 +1,158 @@
-import type Token from 'markdown-it/lib/token.mjs'
-import { getMarkdownParser } from '../editor/markdown-parser'
-import { DEFAULT_MARKDOWN_OPTIONS, type MarkdownOptions } from '../../shared/markdown-options'
+import { calculateWritingStatistics, type WritingStatistics, type WritingStatisticsRequest, type WritingStatisticsSnapshot } from './word-statistics-core'
+export { calculateWritingStatistics, countWords, writingStatistics } from './word-statistics-core'
+export type { WritingStatistics, WritingStatisticsRequest, WritingStatisticsSnapshot } from './word-statistics-core'
 
-export interface WritingStatistics {
-  words: number
-  characters: number
-  charactersWithoutSpaces: number
-  paragraphs: number
-  lines: number
-  readingMinutes: number
+export type StatisticsTaskSchedule = (task: () => void) => () => void
+
+export interface WritingStatisticsScheduler {
+  request(request: WritingStatisticsRequest): void
+  cancel(): void
+  release(): void
+  dispose(): void
 }
 
-function textInHtml(content: string): string {
-  return getMarkdownParser().utils.unescapeAll(content.replace(/<!--[\s\S]*?-->/g, '').replace(/<(script|style)\b[^>]*>[\s\S]*?<\/\1\s*>/gi, '')
-    .replace(/<[^>]*>/g, ' '))
+/** Debounce edits, then yield until the renderer has idle time before parsing the complete Markdown source. */
+export function scheduleStatisticsTask(task: () => void, delay = 300): () => void {
+  const idleHost = globalThis as typeof globalThis & {
+    requestIdleCallback?: (callback: IdleRequestCallback, options?: IdleRequestOptions) => number
+    cancelIdleCallback?: (handle: number) => void
+  }
+  let cancelled = false
+  let idle: number | null = null
+  let timer: ReturnType<typeof setTimeout> | null = setTimeout(() => {
+    timer = null
+    const run = () => { if (!cancelled) task() }
+    if (idleHost.requestIdleCallback) idle = idleHost.requestIdleCallback(run, { timeout: 1200 })
+    else timer = setTimeout(run, 0)
+  }, delay)
+  return () => {
+    cancelled = true
+    if (timer !== null) clearTimeout(timer)
+    if (idle !== null) idleHost.cancelIdleCallback?.(idle)
+  }
 }
 
-function visibleTokenText(tokens: Token[]): string {
-  let suppressedHtml: string | null = null
-  return tokens.map(token => {
-    if (suppressedHtml) {
-      if (token.type === 'html_inline' && /^<\/(script|style)\s*>/i.exec(token.content)?.[1].toLowerCase() === suppressedHtml) suppressedHtml = null
-      return ''
-    }
-    if (token.type === 'html_inline') {
-      const hidden = /^<(script|style)\b/i.exec(token.content)?.[1].toLowerCase()
-      if (hidden && !/<\/(?:script|style)\s*>/i.test(token.content)) { suppressedHtml = hidden; return '' }
-    }
-    if (token.type === 'front_matter' || token.type === 'table_of_contents' || token.type === 'footnote_ref') return ''
-    if (token.children) return visibleTokenText(token.children)
-    if (['text', 'code_inline', 'fence', 'code_block'].includes(token.type)) return token.content + (token.block ? '\n' : '')
-    if (token.type === 'html_inline' || token.type === 'html_block') return textInHtml(token.content)
-    if (token.type === 'softbreak' || token.type === 'hardbreak' || (token.block && token.nesting === -1)) return '\n'
-    return ''
-  }).join('')
-}
-
-export function countWords(text: string): number {
-  const han = text.match(/\p{Script=Han}/gu)?.length ?? 0
-  const other = text.replace(/\p{Script=Han}/gu, ' ').match(/[\p{L}\p{N}]+(?:['’_-][\p{L}\p{N}]+)*/gu)?.length ?? 0
-  return han + other
-}
-
-export function writingStatistics(content: string, readingSpeed = 300, options: MarkdownOptions = DEFAULT_MARKDOWN_OPTIONS): WritingStatistics {
-  const tokens = getMarkdownParser(options).parse(content, {})
-  const words = countWords(visibleTokenText(tokens))
-  const characters = Array.from(content).length
-  const charactersWithoutSpaces = Array.from(content.replace(/\s/gu, '')).length
-  const speed = Number.isFinite(readingSpeed) && readingSpeed > 0 ? readingSpeed : 300
+export function createWritingStatisticsScheduler(
+  onResult: (snapshot: WritingStatisticsSnapshot) => void,
+  schedule: StatisticsTaskSchedule = scheduleStatisticsTask,
+  calculate: (request: WritingStatisticsRequest) => WritingStatisticsSnapshot = calculateWritingStatistics,
+): WritingStatisticsScheduler {
+  let generation = 0
+  let cancelScheduled: (() => void) | null = null
   return {
-    words, characters, charactersWithoutSpaces,
-    paragraphs: tokens.filter(token => token.type === 'paragraph_open').length,
-    lines: content ? content.split(/\r\n|\r|\n/).length : 0,
-    readingMinutes: words ? Math.max(1, Math.ceil(words / speed)) : 0,
+    request(request) {
+      const current = ++generation
+      cancelScheduled?.()
+      cancelScheduled = schedule(() => {
+        cancelScheduled = null
+        const snapshot = calculate(request)
+        if (current === generation) onResult(snapshot)
+      })
+    },
+    cancel() {
+      generation++
+      cancelScheduled?.()
+      cancelScheduled = null
+    },
+    release() {
+      generation++
+      cancelScheduled?.()
+      cancelScheduled = null
+    },
+    dispose() {
+      generation++
+      cancelScheduled?.()
+      cancelScheduled = null
+    },
+  }
+}
+
+export function createWorkerWritingStatisticsScheduler(
+  onResult: (snapshot: WritingStatisticsSnapshot) => void,
+  schedule: StatisticsTaskSchedule = scheduleStatisticsTask,
+  onFailure: (request: WritingStatisticsRequest) => void = () => undefined,
+): WritingStatisticsScheduler {
+  let generation = 0
+  let latest: WritingStatisticsRequest | null = null
+  let postedGeneration = 0
+  let cancelScheduled: (() => void) | null = null
+  let disposed = false
+  let worker: Worker | null = null
+  let retries = 0
+
+  const createWorker = () => {
+    const next = new Worker(new URL('./word-statistics.worker.ts', import.meta.url), { type: 'module' })
+    next.onmessage = (event: MessageEvent<{ generation: number; statistics: WritingStatistics }>) => {
+      if (disposed || event.data.generation !== generation || !latest) return
+      postedGeneration = 0
+      retries = 0
+      onResult({ ...latest, statistics: event.data.statistics })
+    }
+    next.onerror = () => handleWorkerFailure(next)
+    return next
+  }
+
+  const stopWorker = () => {
+    worker?.terminate()
+    worker = null
+    postedGeneration = 0
+  }
+
+  const postRequest = (request: WritingStatisticsRequest, current: number) => {
+    try {
+      if (!worker) worker = createWorker()
+      postedGeneration = current
+      worker.postMessage({ generation: current, request })
+    } catch {
+      stopWorker()
+      if (!disposed && current === generation && retries++ === 0) postRequest(request, current)
+      else if (!disposed && current === generation) onFailure(request)
+    }
+  }
+
+  function handleWorkerFailure(failedWorker: Worker): void {
+    const current = postedGeneration
+    if (disposed || !current || worker !== failedWorker || current !== generation || !latest) return
+    const request = latest
+    stopWorker()
+    if (retries++ === 0) postRequest(request, current)
+    else onFailure(request)
+  }
+
+  return {
+    request(request) {
+      latest = request
+      const current = ++generation
+      retries = 0
+      cancelScheduled?.()
+      if (postedGeneration) stopWorker()
+      cancelScheduled = schedule(() => {
+        cancelScheduled = null
+        if (disposed || current !== generation) return
+        postRequest(request, current)
+      })
+    },
+    cancel() {
+      generation++
+      latest = null
+      cancelScheduled?.()
+      cancelScheduled = null
+      if (postedGeneration) stopWorker()
+    },
+    release() {
+      generation++
+      latest = null
+      cancelScheduled?.()
+      cancelScheduled = null
+      stopWorker()
+    },
+    dispose() {
+      disposed = true
+      generation++
+      latest = null
+      cancelScheduled?.()
+      cancelScheduled = null
+      stopWorker()
+    },
   }
 }

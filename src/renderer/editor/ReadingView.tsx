@@ -1,4 +1,4 @@
-import { previewContentLength, MAX_PREVIEW_CHARACTERS } from './preview-budget'
+import { supportsPreviewLength } from './preview-budget'
 import { forwardRef, useEffect, useImperativeHandle, useLayoutEffect, useRef, useState } from 'react'
 import { hydratePreview, renderReadingMarkdown } from './markdown'
 import { ReadingSearch, type ReadingSearchHandle } from './ReadingSearch'
@@ -75,7 +75,7 @@ export const ReadingView = forwardRef<ReadingViewHandle, ReadingViewProps>(funct
     setStatus('loading')
     article.style.visibility = 'hidden'
     article.replaceChildren()
-    if (previewContentLength(props.content) > MAX_PREVIEW_CHARACTERS) {
+    if (!supportsPreviewLength(props.content.length)) {
       setStatus('limit')
       return
     }
@@ -186,7 +186,7 @@ export const ReadingView = forwardRef<ReadingViewHandle, ReadingViewProps>(funct
     }}>
     <ReadingSearch ref={searchRef} articleRef={articleRef} ready={status === 'ready'} version={props.content} onClose={() => rootRef.current?.focus({ preventScroll: true })} />
     {status === 'loading' ? <p className="reading-status" role="status">{editorText(locale, '正在排版阅读视图…')}</p> : null}
-    {status === 'limit' ? <p className="reading-status" role="alert">{editorText(locale, '当前阅读模式支持正文不超过 20 万个字符的文档（已验证的内嵌图片数据不计入）。请按 {shortcut} 返回编辑模式查看此文档。', { shortcut: primaryShortcut(props.platform, 'E') })}</p> : null}
+    {status === 'limit' ? <p className="reading-status" role="alert">{locale === 'en-US' ? `Reading view supports documents up to 200,000 characters. Press ${primaryShortcut(props.platform, 'E')} to return to the editor.` : `当前阅读模式支持不超过 20 万个字符的文档。请按 ${primaryShortcut(props.platform, 'E')} 返回编辑模式查看此文档。`}</p> : null}
     {status === 'error' ? <p className="reading-status" role="alert">{editorText(locale, '阅读排版失败，请按 {shortcut} 返回编辑模式检查文档。', { shortcut: primaryShortcut(props.platform, 'E') })}</p> : null}
     <article ref={articleRef} className="md-preview-block reading-article" aria-label={editorText(locale, 'Markdown 阅读内容')} aria-hidden={status !== 'ready'} style={{ visibility: status === 'ready' ? 'visible' : 'hidden' }} />
   </div>

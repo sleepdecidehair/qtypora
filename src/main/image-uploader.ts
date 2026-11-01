@@ -1,4 +1,3 @@
-import { spawn } from 'node:child_process'
 import * as fs from 'node:fs/promises'
 import { constants } from 'node:fs'
 import MarkdownIt from 'markdown-it'
@@ -10,6 +9,7 @@ import { canonicalPath, MAX_DOCUMENT_BYTES, serialized } from './files'
 import { markdownImageSources } from './image-paths'
 import type { ResourceRegistry } from './resources'
 import { isSafeDataImage } from '../shared/data-image'
+import { runConverter } from './converter-process'
 
 const parser = new MarkdownIt()
 export const normalizedImageSource = (source: string) => parser.normalizeLink(parser.utils.unescapeAll(source))
@@ -47,35 +47,27 @@ export async function runImageUploader(paths: string[], rawOptions: ImageOptions
   if (!(await fs.stat(executable)).isFile()) invalid('上传器必须是可执行文件。')
   await fs.access(executable, constants.X_OK)
   const args = options.uploaderArgs.includes('{files}') ? options.uploaderArgs.flatMap(arg => arg === '{files}' ? paths : [arg]) : [...options.uploaderArgs, ...paths]
-  const output = await new Promise<string>((resolve, reject) => {
-    const child = spawn(executable, args, { shell: false, windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] })
-    let stdout = '', total = 0, finished = false
-    let killTimer: ReturnType<typeof setTimeout> | undefined
-    const fail = (message: string) => {
-      if (finished) return
-      finished = true; clearTimeout(timer)
-      child.kill()
-      killTimer = setTimeout(() => { if (child.exitCode === null) child.kill('SIGKILL') }, 1000)
-      killTimer.unref()
-      reject(new DesktopError('IO_ERROR', message))
-    }
-    const timer = setTimeout(() => fail('图片上传超过 60 秒，已停止上传器。原文引用未改变。'), 60000)
-    child.stdout.on('data', (chunk: Buffer) => {
-      total += chunk.length
-      if (total > 1024 * 1024) { fail('上传器输出超过 1 MB，已停止。'); return }
-      stdout += chunk.toString('utf8')
+  let output: Buffer
+  try {
+    output = await runConverter(executable, args, {
+      label: '图片上传',
+      outputLimit: 1024 * 1024,
+      logLimit: 1024 * 1024,
+      combinedOutputLimit: 1024 * 1024,
+      timeoutMs: 60_000,
+      startError: '无法启动图片上传器，请检查可执行路径和权限。',
+      includeStderrInError: false,
     })
-    child.stderr.on('data', (chunk: Buffer) => { total += chunk.length; if (total > 1024 * 1024) fail('上传器输出超过 1 MB，已停止。') })
-    child.on('error', () => fail('无法启动图片上传器，请检查可执行路径和权限。'))
-    child.on('close', code => {
-      clearTimeout(timer); if (killTimer) clearTimeout(killTimer)
-      if (finished) return
-      finished = true
-      if (code !== 0) reject(new DesktopError('IO_ERROR', `图片上传器退出代码 ${String(code)}，原文引用未改变。`))
-      else resolve(stdout)
-    })
-  })
-  return uploaderUrls(output, paths.length)
+  } catch (error) {
+    if (!(error instanceof DesktopError)) throw error
+    const exitCode = error.message.match(/退出码 (-?\d+)/)?.[1]
+    if (exitCode) throw new DesktopError('IO_ERROR', `图片上传器退出代码 ${exitCode}，原文引用未改变。`)
+    if (error.code === 'UNSUPPORTED') throw new DesktopError('IO_ERROR', '上传器输出超过 1 MB，已停止。原文引用未改变。')
+    if (error.code === 'NOT_FOUND') throw new DesktopError('IO_ERROR', '无法启动图片上传器，请检查可执行路径和权限。')
+    if (error.message.includes('超过 60 秒')) throw new DesktopError('IO_ERROR', '图片上传超过 60 秒，已停止上传器。原文引用未改变。')
+    throw new DesktopError('IO_ERROR', '图片上传器运行失败，原文引用未改变。')
+  }
+  return uploaderUrls(output.toString('utf8'), paths.length)
 }
 
 export async function uploadImages(request: UploadImagesRequest, documents: DocumentSession, resources: ResourceRegistry, owner: number, options: ImageOptions): Promise<UploadImagesResult> {

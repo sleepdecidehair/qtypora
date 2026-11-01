@@ -13,7 +13,7 @@ import { ExportHistory } from './export-history'
 import { welcomeDocument } from './welcome'
 import { translate, translateKnownError } from '../shared/i18n'
 import { setNativeDocumentState } from './native-document-state'
-import { showNativeShare } from './native-share'
+import { cleanupStaleNativeShareSnapshots, disposeNativeShareSlotSync, disposeNativeShareSnapshotsSync, showNativeShare } from './native-share'
 import { createNativeTab } from './native-tabs'
 import { minimizeAllDocumentWindows } from './minimize-all'
 import { importExportPresets, exportExportPresets } from './export-preset-files'
@@ -81,6 +81,7 @@ const writeSystemClipboard = async (content: import('../shared/contracts').Clipb
   await clipboard.write([new ClipboardItem({ 'text/plain': content.text, ...(content.html === undefined ? {} : { 'text/html': content.html }), ...(content.rtf === undefined ? {} : { 'text/rtf': content.rtf }) })])
 }
 const clipboardWrites = new ClipboardWriteService(clipboardArbiter, writeSystemClipboard)
+const shareMenus = new Map<number, ShareMenu>()
 let store: LocalStore
 let exportHistory: ExportHistory
 let quitRequested = false
@@ -306,6 +307,8 @@ async function createWindow(openPath?: string, options: { nativeTab?: boolean } 
       windowContext.workspaceWatcher?.close()
       if (windowContext.workspaceTimer) clearTimeout(windowContext.workspaceTimer)
       resources.dispose(owner)
+      shareMenus.delete(window.id)
+      disposeNativeShareSlotSync(`window:${window.id}`)
       windows.delete(owner)
     })
     window.once('ready-to-show', () => { window.webContents.setZoomFactor(store.preferences.zoomFactor); if (!options.nativeTab) window.show() })
@@ -377,10 +380,7 @@ async function openWorkspaceAlreadyLocked(context: WindowContext, selected: stri
   const root = chosenByUser || previouslyChosen ? await canonicalPath(selected) : await context.documents.authorize(selected)
   if (!(await fs.stat(root)).isDirectory()) invalid('请选择文件夹。')
   const entries = await listDirectory(root, store.preferences.workspace)
-  context.documents.allowedRoots.add(root)
-  context.documents.workspace = root
-  await store.addRecentFolder(root)
-  watchWorkspace(context)
+  await context.documents.activateWorkspace(root, () => watchWorkspace(context))
   return { path: root, name: path.basename(root), entries }
 }
 
@@ -773,7 +773,12 @@ function registerIpc(): void {
     const record = await context.documents.createImported(bytes.toString('utf8'))
     return record
   }))
-  handle('showNativeShare', (context, input) => showNativeShare(process.platform, context.documents, validateSnapshot(input), id => context.activeDocumentId === id, filePath => new ShareMenu({ filePaths: [filePath] }).popup({ window: context.window })))
+  handle('showNativeShare', (context, input) => showNativeShare(process.platform, context.documents, validateSnapshot(input), id => context.activeDocumentId === id, filePath => {
+    shareMenus.get(context.window.id)?.closePopup(context.window)
+    const menu = new ShareMenu({ filePaths: [filePath] })
+    shareMenus.set(context.window.id, menu)
+    menu.popup({ window: context.window })
+  }, `window:${context.window.id}`))
   handle('setNativeDocumentState', (context, id, edited) => {
     setNativeDocumentState(process.platform, context.window, context.documents, id, edited)
     context.activeDocumentId = id === null ? null : string(id, '文档 ID', 100)
@@ -811,6 +816,7 @@ function registerIpc(): void {
 }
 
 app.whenReady().then(async () => {
+  if (process.platform === 'darwin') await cleanupStaleNativeShareSnapshots().catch((error: unknown) => console.error('[app] Stale share cleanup failed', error instanceof Error ? error.message : 'unknown'))
   store = new LocalStore(app.getPath('userData'))
   await store.load()
   if (process.platform === 'darwin') nativeTheme.themeSource = store.preferences.theme
@@ -836,4 +842,5 @@ app.whenReady().then(async () => {
 })
 
 app.on('before-quit', () => { quitRequested = true })
+app.on('will-quit', () => disposeNativeShareSnapshotsSync())
 app.on('window-all-closed', () => { if (process.platform !== 'darwin' || quitRequested) app.quit() })

@@ -40,6 +40,25 @@ describe('explicitly configured image uploader', () => {
     await expect(runImageUploader(['a.png'], options)).rejects.toThrow('退出代码 2')
     await expect(runImageUploader(['a.png'], options)).rejects.not.toThrow('private-token')
   })
+  it('waits for an over-limit uploader process tree to stop before rejecting', async () => {
+    const observed = path.join(directory, 'processes.json')
+    const worker = 'setInterval(()=>{},100)'
+    const options = await uploader(`const fs=require('node:fs');const {spawn}=require('node:child_process');const child=spawn(process.execPath,['-e',${JSON.stringify(worker)}],{stdio:'ignore'});fs.writeFileSync(${JSON.stringify(observed)},JSON.stringify({pid:process.pid,child:child.pid}));process.stdout.write(Buffer.alloc(1024*1024+1));setInterval(()=>{},100)`)
+    let info: { pid: number; child: number } | undefined
+    try {
+      await expect(runImageUploader(['a.png'], options)).rejects.toThrow('超过 1 MB')
+      info = JSON.parse(await fs.readFile(observed, 'utf8')) as { pid: number; child: number }
+      expect(() => process.kill(info!.pid, 0)).toThrow()
+      expect(() => process.kill(info!.child, 0)).toThrow()
+    } finally {
+      if (!info) {
+        try { info = JSON.parse(await fs.readFile(observed, 'utf8')) as { pid: number; child: number } } catch { /* The uploader may not have started. */ }
+      }
+      for (const pid of info ? [info.pid, info.child] : []) {
+        try { process.kill(pid, 'SIGKILL') } catch { /* The tested process tree is already gone. */ }
+      }
+    }
+  })
   it('uploads only authorized actual references including normalized spaces and HTML entities', async () => {
     const content = '![a](<a file.png>)\n\n<img src="a&amp;b.png">'
     const filename = path.join(directory, 'note.md')

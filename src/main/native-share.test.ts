@@ -1,13 +1,16 @@
-import { mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises'
+import { mkdtemp, mkdir, readFile, rm, stat, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { DocumentSession } from './documents'
 import { hashBytes } from './files'
-import { showNativeShare } from './native-share'
+import { cleanupStaleNativeShareSnapshots, disposeNativeShareSnapshots, disposeNativeShareSnapshotsSync, showNativeShare } from './native-share'
 
 const roots: string[] = []
-afterEach(async () => { await Promise.all(roots.splice(0).map(root => rm(root, { recursive: true, force: true }))) })
+afterEach(async () => {
+  await disposeNativeShareSnapshots()
+  await Promise.all(roots.splice(0).map(root => rm(root, { recursive: true, force: true })))
+})
 
 async function fixture() {
   const root = await mkdtemp(path.join(tmpdir(), 'qtypora-native-share-'))
@@ -29,12 +32,63 @@ describe('native file sharing', () => {
     await expect(showNativeShare('darwin', documents, snapshot, () => true, chooser)).rejects.toThrow('未保存')
     expect(chooser).not.toHaveBeenCalled()
   })
-  it('opens only the system chooser for the verified saved file and does not modify it', async () => {
+  it('opens the system chooser for a private snapshot and does not modify the saved file', async () => {
     const { filename, content, documents, snapshot, chooser } = await fixture()
     await showNativeShare('darwin', documents, snapshot, () => true, chooser)
     expect(chooser).toHaveBeenCalledOnce()
-    expect(chooser).toHaveBeenCalledWith(filename)
-    expect(await readFile(filename, 'utf8')).toBe(content)
+    const shared = chooser.mock.calls[0][0]
+    expect(shared).not.toBe(filename)
+    expect(path.basename(shared)).toBe(path.basename(filename))
+    expect(await readFile(shared, 'utf8')).toBe(content)
+    await writeFile(filename, '外部替换')
+    expect(await readFile(shared, 'utf8')).toBe(content)
+    expect(await readFile(filename, 'utf8')).toBe('外部替换')
+  })
+  it('keeps an active share snapshot until deterministic shutdown cleanup', async () => {
+    vi.useFakeTimers()
+    const { documents, snapshot, chooser } = await fixture()
+    await showNativeShare('darwin', documents, snapshot, () => true, chooser)
+    const shared = chooser.mock.calls[0][0]
+    vi.advanceTimersByTime(60 * 60_000)
+    expect(await readFile(shared, 'utf8')).toBe(snapshot.content)
+    disposeNativeShareSnapshotsSync()
+    await expect(readFile(shared, 'utf8')).rejects.toMatchObject({ code: 'ENOENT' })
+    vi.useRealTimers()
+  })
+  it('removes only share directories whose owning process has exited', async () => {
+    const root = await mkdtemp(path.join(tmpdir(), 'qtypora-native-share-cleanup-'))
+    roots.push(root)
+    const deadToken = 'a'.repeat(32)
+    const liveToken = 'b'.repeat(32)
+    const reusedToken = 'd'.repeat(32)
+    const stale = path.join(root, `qtypora-share-101-${deadToken}`)
+    const recent = path.join(root, `qtypora-share-202-${liveToken}`)
+    const reused = path.join(root, `qtypora-share-404-${reusedToken}`)
+    const unmarked = path.join(root, `qtypora-share-303-${'c'.repeat(32)}`)
+    const unrelated = path.join(root, 'other-share-Ij56Kl')
+    await Promise.all([mkdir(stale), mkdir(recent), mkdir(reused), mkdir(unmarked), mkdir(unrelated)])
+    await Promise.all([writeFile(path.join(stale, 'old.md'), 'old'), writeFile(path.join(recent, 'new.md'), 'new'), writeFile(path.join(reused, 'reused.md'), 'reused')])
+    await Promise.all([
+      writeFile(path.join(stale, '.qtypora-share.json'), JSON.stringify({ format: 1, ownerPid: 101, ownerIdentity: 'old:101', token: deadToken })),
+      writeFile(path.join(recent, '.qtypora-share.json'), JSON.stringify({ format: 1, ownerPid: 202, ownerIdentity: 'start:202', token: liveToken })),
+      writeFile(path.join(reused, '.qtypora-share.json'), JSON.stringify({ format: 1, ownerPid: 404, ownerIdentity: 'old:404', token: reusedToken })),
+    ])
+    await cleanupStaleNativeShareSnapshots(root, pid => pid === 101 ? { state: 'dead' } : { state: 'alive', value: `start:${pid}` })
+    await expect(readFile(path.join(stale, 'old.md'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' })
+    expect(await readFile(path.join(recent, 'new.md'), 'utf8')).toBe('new')
+    await expect(readFile(path.join(reused, 'reused.md'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' })
+    await expect(stat(unmarked)).resolves.toBeDefined()
+    await expect(stat(unrelated)).resolves.toBeDefined()
+  })
+  it('replaces the previous snapshot retained by the same share surface', async () => {
+    const { documents, snapshot, chooser } = await fixture()
+    await showNativeShare('darwin', documents, snapshot, () => true, chooser, 'window:1')
+    const first = chooser.mock.calls[0][0]
+    await showNativeShare('darwin', documents, snapshot, () => true, chooser, 'window:1')
+    const second = chooser.mock.calls[1][0]
+    expect(second).not.toBe(first)
+    await expect(readFile(first, 'utf8')).rejects.toMatchObject({ code: 'ENOENT' })
+    expect(await readFile(second, 'utf8')).toBe(snapshot.content)
   })
   it('rejects untitled, edited, stale, missing and closed documents without opening a chooser', async () => {
     const { state, documents, snapshot, chooser } = await fixture()

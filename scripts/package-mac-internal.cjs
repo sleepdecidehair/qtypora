@@ -5,15 +5,38 @@ const { spawnSync } = require('node:child_process')
 const { artifactNames, validateVersion } = require('./package-mac-checks.cjs')
 
 const root = path.resolve(__dirname, '..')
-const gitRepositoryRoot = (() => {
-  const result = spawnSync('git', ['rev-parse', '--git-common-dir'], { cwd: root, encoding: 'utf8' })
-  if (result.status !== 0 || !result.stdout.trim()) return root
-  const commonDirectory = path.resolve(root, result.stdout.trim())
-  return path.basename(commonDirectory) === '.git' ? path.dirname(commonDirectory) : root
-})()
+function repositoryRootFromCommonDirectory(projectRoot, commonDirectory) {
+  if (!commonDirectory?.trim()) return path.resolve(projectRoot)
+  const resolved = path.resolve(projectRoot, commonDirectory.trim())
+  return path.basename(resolved) === '.git' ? path.dirname(resolved) : path.resolve(projectRoot)
+}
+
+function sharedMacLockPath(projectRoot, commonDirectory) {
+  if (!commonDirectory?.trim()) return path.join(path.resolve(projectRoot), '.debug', 'package-mac.lock')
+  return path.join(path.resolve(projectRoot, commonDirectory.trim()), 'qtypora-package-mac.lock')
+}
+
+function primaryWorktreeFromPorcelain(projectRoot, output) {
+  const record = output?.split('\0').find(value => value.startsWith('worktree '))
+  return record ? path.resolve(record.slice('worktree '.length)) : path.resolve(projectRoot)
+}
+
+function acquireMacPackagingLock(file) {
+  fs.mkdirSync(path.dirname(file), { recursive: true })
+  try { return fs.openSync(file, 'wx') }
+  catch (error) {
+    if (error?.code === 'EEXIST') throw new Error(`macOS packaging is locked across linked worktrees. Wait for the current run; after an interrupted run, remove ${file} only when no packaging process remains.`)
+    throw new Error(`Unable to create the shared macOS packaging lock at ${file}: ${error.message}`)
+  }
+}
+
+const commonDirectoryResult = spawnSync('git', ['rev-parse', '--git-common-dir'], { cwd: root, encoding: 'utf8' })
+const gitCommonDirectory = commonDirectoryResult.status === 0 ? commonDirectoryResult.stdout : ''
+const worktreeListResult = spawnSync('git', ['worktree', 'list', '--porcelain', '-z'], { cwd: root, encoding: 'utf8' })
+const gitRepositoryRoot = worktreeListResult.status === 0 ? primaryWorktreeFromPorcelain(root, worktreeListResult.stdout) : repositoryRootFromCommonDirectory(root, gitCommonDirectory)
 const debugRoot = path.join(root, '.debug')
 const releaseRoot = path.join(gitRepositoryRoot, 'release')
-const lockPath = path.join(debugRoot, 'package.lock')
+const lockPath = sharedMacLockPath(root, gitCommonDirectory)
 let lock
 let logs
 let pipelineLog
@@ -80,18 +103,16 @@ function main() {
   if (major < 22 || (major === 22 && minor < 12)) throw new Error('Node.js >=22.12 is required.')
   fs.mkdirSync(debugRoot, { recursive: true })
   fs.mkdirSync(releaseRoot, { recursive: true })
-  try { lock = fs.openSync(lockPath, 'wx') }
-  catch { throw new Error('Packaging is locked. Wait for the current run; after an interrupted run, remove .debug/package.lock only when no packaging process remains.') }
-
-  const runId = `${timestamp()}-${crypto.randomUUID().replaceAll('-', '').slice(0, 8)}`
-  const runRoot = path.join(debugRoot, 'package-runs', runId)
-  const staging = path.join(runRoot, 'package')
-  logs = path.join(runRoot, 'logs')
-  pipelineLog = path.join(logs, 'pipeline.log')
-  fs.mkdirSync(staging, { recursive: true })
-  fs.mkdirSync(logs, { recursive: true })
+  lock = acquireMacPackagingLock(lockPath)
 
   try {
+    const runId = `${timestamp()}-${crypto.randomUUID().replaceAll('-', '').slice(0, 8)}`
+    const runRoot = path.join(debugRoot, 'package-runs', runId)
+    const staging = path.join(runRoot, 'package')
+    logs = path.join(runRoot, 'logs')
+    pipelineLog = path.join(logs, 'pipeline.log')
+    fs.mkdirSync(staging, { recursive: true })
+    fs.mkdirSync(logs, { recursive: true })
     const inputsFile = path.join(logs, 'inputs.json')
     run('Locked dependencies and source snapshot', process.execPath, ['scripts/package-checks.cjs', 'preflight', inputsFile])
     const inputs = readJson(inputsFile)
@@ -171,8 +192,12 @@ function main() {
   }
 }
 
-try { main() }
-catch (error) {
-  console.error(`macOS packaging failed: ${error.message}`)
-  process.exitCode = 1
+module.exports = { acquireMacPackagingLock, primaryWorktreeFromPorcelain, repositoryRootFromCommonDirectory, sharedMacLockPath }
+
+if (require.main === module) {
+  try { main() }
+  catch (error) {
+    console.error(`macOS packaging failed: ${error.message}`)
+    process.exitCode = 1
+  }
 }

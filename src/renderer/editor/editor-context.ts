@@ -221,7 +221,10 @@ export function installEditorContext(view: EditorView, getProps: () => MarkdownE
       const replacement = outcome.replacements[0]?.url
       if (!replacement) throw new Error('上传器没有返回图片地址。')
       const insert = /^<img\b/i.test(target.source) ? replacement.replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/'/g, '&#39;') : replacement.replace(/[()]/g, value => value === '(' ? '%28' : '%29')
-      view.dispatch({ changes: { from: target.address.from, to: target.address.to, insert }, userEvent: 'input.image-upload', annotations: isolateHistory.of('full') }); view.focus(); return
+      const current = getProps()
+      const changes = view.state.changes({ from: target.address.from, to: target.address.to, insert })
+      if (!fitsPasteBudget(view.state.doc, changes.apply(view.state.doc), current.encoding, current.lineEnding)) throw new Error('上传后的文件将超过 16 MB，未替换原文图片引用。')
+      view.dispatch({ changes, userEvent: 'input.image-upload', annotations: isolateHistory.of('full') }); view.focus(); return
     }
     if (['image-copy', 'image-move', 'image-delete', 'image-save-as'].includes(action) && target.address) {
       const imageAction = action === 'image-save-as' ? 'save-as' : action.slice('image-'.length) as 'copy' | 'move' | 'delete'

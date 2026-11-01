@@ -10,7 +10,9 @@ interface ConverterOptions {
   timeoutMs?: number
   outputLimit?: number
   logLimit?: number
+  combinedOutputLimit?: number
   startError?: string
+  includeStderrInError?: boolean
 }
 
 /** A failed conversion settles only after close, so callers can safely clean staging files. */
@@ -21,6 +23,7 @@ export function runConverter(executable: string, args: string[], options: Conver
     const timeoutMs = options.timeoutMs ?? 60_000
     const outputLimit = options.outputLimit ?? 64 * 1024 * 1024
     const logLimit = options.logLimit ?? 1024 * 1024
+    const combinedOutputLimit = options.combinedOutputLimit ?? Number.POSITIVE_INFINITY
     let outputBytes = 0, logBytes = 0
     let stderr = ''
     let failure: DesktopError | undefined
@@ -57,13 +60,13 @@ export function runConverter(executable: string, args: string[], options: Conver
       if (failure) return
       if (options.collectOutput === false) logBytes += chunk.length
       else outputBytes += chunk.length
-      if (outputBytes > outputLimit || logBytes > logLimit) cancel(new DesktopError('UNSUPPORTED', `${options.label}的输出或日志超过大小限制。`))
+      if (outputBytes > outputLimit || logBytes > logLimit || outputBytes + logBytes > combinedOutputLimit) cancel(new DesktopError('UNSUPPORTED', `${options.label}的输出或日志超过大小限制。`))
       else if (options.collectOutput !== false) chunks.push(chunk)
     })
     child.stderr.on('data', (chunk: Buffer) => {
       if (failure) return
       logBytes += chunk.length
-      if (logBytes > logLimit) { cancel(new DesktopError('UNSUPPORTED', `${options.label}的日志超过大小限制。`)); return }
+      if (logBytes > logLimit || outputBytes + logBytes > combinedOutputLimit) { cancel(new DesktopError('UNSUPPORTED', `${options.label}的日志超过大小限制。`)); return }
       if (stderr.length < 4000) stderr += chunk.toString('utf8').slice(0, 4000 - stderr.length)
     })
     child.once('error', () => cancel(new DesktopError('NOT_FOUND', options.startError ?? `无法启动${options.label}程序，请检查配置。`)))
@@ -72,7 +75,7 @@ export function runConverter(executable: string, args: string[], options: Conver
       clearTimeout(timer)
       if (forceTimer) clearTimeout(forceTimer)
       if (failure) reject(failure)
-      else if (code !== 0) reject(new DesktopError('IO_ERROR', `${options.label}失败：${stderr.trim().slice(0, 1200) || `退出码 ${code}`}`))
+      else if (code !== 0) reject(new DesktopError('IO_ERROR', `${options.label}失败：${options.includeStderrInError === false ? `退出码 ${code}` : stderr.trim().slice(0, 1200) || `退出码 ${code}`}`))
       else resolve(Buffer.concat(chunks))
     })
     // Early converter failure can close stdin before all input is consumed; close handles its result.

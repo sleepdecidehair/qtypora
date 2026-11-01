@@ -1,18 +1,20 @@
 import { EditorState } from '@codemirror/state'
 import { describe, expect, it } from 'vitest'
-import { previewContentLength, supportsPreview } from './preview-budget'
+import { MAX_PREVIEW_CHARACTERS, supportsPreview, supportsPreviewLength } from './preview-budget'
 import { getMarkdownParser } from './markdown-parser'
 
-const png = 'data:image/png;base64,' + Buffer.concat([Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]), Buffer.alloc(1024 * 1024)]).toString('base64')
+const png = (bytes: number) => 'data:image/png;base64,' + Buffer.concat([Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]), Buffer.alloc(bytes)]).toString('base64')
 
 describe('preview resource budgets', () => {
-  it('renders a normal document with large safe inline images while counting actual prose and rejecting disguised data', () => {
-    const content = `# Image\n\n![pixel](${png})\n`
-    expect(previewContentLength(content)).toBeLessThan(1000)
-    expect(supportsPreview(EditorState.create({ doc: content }))).toBe(true)
-    expect(previewContentLength(`<img src="${png}">`)).toBeLessThan(1000)
-    expect(previewContentLength(png)).toBeGreaterThan(200000)
-    expect(previewContentLength(`![fake](data:image/png;base64,${'a'.repeat(300000)})`)).toBeGreaterThan(200000)
+  it('keeps small inline data images previewable without exempting large payloads from the raw source limit', () => {
+    const small = `# Image\n\n![pixel](${png(32 * 1024)})\n`
+    const large = `# Image\n\n![pixel](${png(1024 * 1024)})\n`
+    expect(small.length).toBeLessThan(MAX_PREVIEW_CHARACTERS)
+    expect(supportsPreview(EditorState.create({ doc: small }))).toBe(true)
+    expect(large.length).toBeGreaterThan(MAX_PREVIEW_CHARACTERS)
+    expect(supportsPreview(EditorState.create({ doc: large }))).toBe(false)
+    expect(supportsPreviewLength(MAX_PREVIEW_CHARACTERS)).toBe(true)
+    expect(supportsPreviewLength(MAX_PREVIEW_CHARACTERS + 1)).toBe(false)
   })
   it('caps token amplification with an explicit source fallback', () => {
     const source = '- text\n'.repeat(14000)

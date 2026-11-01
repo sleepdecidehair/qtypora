@@ -1,4 +1,4 @@
-import { randomUUID } from 'node:crypto'
+import { createHash, randomUUID } from 'node:crypto'
 import { realpathSync, watch, type FSWatcher } from 'node:fs'
 import path from 'node:path'
 import type { DesktopEvent, DocumentRecord, DocumentSnapshot, LineEnding, SaveRequest } from '../shared/contracts'
@@ -24,6 +24,17 @@ interface DocumentState {
   watcher?: FSWatcher
   timer?: ReturnType<typeof setTimeout>
 }
+
+interface RecentlyClosedState {
+  state: DocumentState
+  revision: number
+  contentHash: string | null
+  pendingLineEnding?: LineEnding
+  byteSize: number
+  compacted: boolean
+}
+
+const DEFAULT_RECENTLY_CLOSED_BYTE_BUDGET = MAX_DOCUMENT_BYTES * 4
 
 interface CloseToken {
   state: DocumentState
@@ -69,7 +80,8 @@ export function validateSnapshot(input: unknown): DocumentSnapshot {
 export class DocumentSession {
   private readonly documents = new Map<string, DocumentState>()
   private readonly closedFiles: { path: string }[] = []
-  private readonly recentlyClosedStates = new Map<string, DocumentState>()
+  private readonly recentlyClosedStates = new Map<string, RecentlyClosedState>()
+  private recentlyClosedBytes = 0
   private disposed = false
   readonly allowedRoots = new Set<string>()
   workspace: string | null = null
@@ -79,7 +91,7 @@ export class DocumentSession {
   private readonly closingDocuments = new Set<string>()
   private readonly versionHistory: SystemVersionHistory
 
-  constructor(private readonly store: LocalStore, private readonly dialogs: DocumentDialogs, private readonly send: (event: DesktopEvent) => void, versionProvider: NativeVersionProvider = new MacOSVersionProvider()) {
+  constructor(private readonly store: LocalStore, private readonly dialogs: DocumentDialogs, private readonly send: (event: DesktopEvent) => void, versionProvider: NativeVersionProvider = new MacOSVersionProvider(), private readonly recentlyClosedByteBudget = DEFAULT_RECENTLY_CLOSED_BYTE_BUDGET) {
     this.versionHistory = new SystemVersionHistory(id => this.versionContext(id), versionProvider)
   }
 
@@ -174,16 +186,48 @@ export class DocumentSession {
     const canonical = chosenByUser || recent ? await canonicalPath(resolved) : await this.authorize(resolved)
     this.assertCanLoad()
     const existing = [...this.documents.values()].find((state) => state.record.path === canonical)
-    if (existing) { this.assertCanLoad(existing.record.id); return { ...existing.record, content: existing.currentContent, pendingLineEnding: existing.pendingLineEnding ?? null } }
+    if (existing) {
+      this.assertCanLoad(existing.record.id)
+      this.compactRecentlyClosedPath(canonical)
+      return { ...existing.record, content: existing.currentContent, pendingLineEnding: existing.pendingLineEnding ?? null }
+    }
     let fileIdentity: FileIdentity | null = null
     const record = await readMarkdown(canonical, undefined, identity => { fileIdentity = identity })
     this.assertCanLoad()
-    await this.store.addRecent(canonical)
-    this.assertCanLoad()
-    this.allowedRoots.add(path.dirname(canonical))
-    this.documents.set(record.id, { record, currentContent: record.content, savedContent: record.content, savedRevision: 0, revision: 0, fileMissing: false, notifiedVersion: null, fileIdentity })
-    this.startWatch(record.id)
-    return record
+    const state: DocumentState = { record, currentContent: record.content, savedContent: record.content, savedRevision: 0, revision: 0, fileMissing: false, notifiedVersion: null, fileIdentity }
+    // Watch before the settings write, but keep the provisional document out of
+    // records so a concurrent close cannot observe a half-open session.
+    this.startWatchState(record.id, state)
+    try {
+      await this.store.addRecent(canonical)
+      this.assertCanLoad()
+      let verifiedIdentity: FileIdentity | null = null
+      const verified = await readClosedMarkdown(canonical, identity => { verifiedIdentity = identity })
+      this.assertCanLoad()
+      const initial = fileIdentity as FileIdentity | null, confirmed = verifiedIdentity as FileIdentity | null
+      if (verified.version !== record.version || !initial || !confirmed || initial.dev !== confirmed.dev || initial.ino !== confirmed.ino) {
+        throw new DesktopError('CONFLICT', '文件在打开过程中已被外部修改或替换，请重试。')
+      }
+      const stableRecord = { ...verified, id: record.id }
+      state.record = stableRecord
+      state.currentContent = stableRecord.content
+      state.savedContent = stableRecord.content
+      state.fileIdentity = confirmed
+      this.compactRecentlyClosedPath(canonical)
+      this.allowedRoots.add(path.dirname(canonical))
+      this.documents.set(stableRecord.id, state)
+      return stableRecord
+    } catch (error) {
+      this.stopWatch(state)
+      throw error
+    }
+  }
+
+  async activateWorkspace(root: string, onActivated: () => void): Promise<void> {
+    await this.store.addRecentFolder(root)
+    this.allowedRoots.add(root)
+    this.workspace = root
+    onActivated()
   }
 
   async sync(snapshot: DocumentSnapshot): Promise<void> {
@@ -362,8 +406,6 @@ export class DocumentSession {
     } catch (error) { if (this.documents.get(snapshot.id) === state) await this.persistDraft(state); throw error }
     this.stopWatch(state)
     this.documents.delete(snapshot.id)
-    this.recentlyClosedStates.set(snapshot.id, state)
-    if (this.recentlyClosedStates.size > 20) this.recentlyClosedStates.delete(this.recentlyClosedStates.keys().next().value!)
     if (state.record.path && !state.fileMissing) {
       const path = state.record.path
       const duplicate = this.closedFiles.findIndex(item => item.path === path)
@@ -371,16 +413,20 @@ export class DocumentSession {
       this.closedFiles.unshift({ path })
       this.closedFiles.length = Math.min(this.closedFiles.length, 20)
     }
+    this.rememberRecentlyClosed(snapshot.id, state)
     return true
   }
 
   /** Restore a close that raced a renderer edit; the ID and draft remain authoritative. */
   async restoreClosedEdit(snapshot: DocumentSnapshot): Promise<DocumentRecord> {
     this.assertCanLoad(snapshot.id)
-    const state = this.recentlyClosedStates.get(snapshot.id)
-    if (!state || this.documents.has(snapshot.id)) throw new DesktopError('CONFLICT', '关闭的文档已变化，无法恢复编辑。')
-    const pending = pendingForSnapshot(state, snapshot)
-    if (snapshot.revision < state.revision || (snapshot.revision === state.revision && (snapshot.content !== state.currentContent || pending !== state.pendingLineEnding))) throw new DesktopError('CONFLICT', '恢复的编辑版本无效。')
+    const closed = this.recentlyClosedStates.get(snapshot.id)
+    if (!closed || this.documents.has(snapshot.id)) throw new DesktopError('CONFLICT', '关闭的文档已变化，无法恢复编辑。')
+    const state = closed.state
+    const comparison = closed.compacted ? { ...state, currentContent: snapshot.content, revision: closed.revision, pendingLineEnding: closed.pendingLineEnding } : state
+    const pending = pendingForSnapshot(comparison, snapshot)
+    const sameContent = closed.compacted ? closed.contentHash !== null && this.contentHash(snapshot.content) === closed.contentHash : snapshot.content === state.currentContent
+    if (snapshot.revision < closed.revision || (snapshot.revision === closed.revision && (!sameContent || pending !== closed.pendingLineEnding))) throw new DesktopError('CONFLICT', '恢复的编辑版本无效。')
     // A separate open can win the race. Keep its session untouched and recover
     // the late edits as an independent unsaved document instead of aliasing a path.
     if (state.record.path && [...this.documents.values()].some(item => item.record.path === state.record.path)) {
@@ -392,7 +438,7 @@ export class DocumentSession {
     state.revision = snapshot.revision
     state.pendingLineEnding = pending
     this.documents.set(snapshot.id, state)
-    this.recentlyClosedStates.delete(snapshot.id)
+    this.deleteRecentlyClosed(snapshot.id)
     if (state.record.path) {
       const index = this.closedFiles.findIndex(entry => entry.path === state.record.path)
       if (index >= 0) this.closedFiles.splice(index, 1)
@@ -417,6 +463,7 @@ export class DocumentSession {
         if (this.closingDocuments.has(existing.record.id) || this.closeCheckPending) throw new DesktopError('CONFLICT', '文档正在关闭，请稍后重试。')
         const index = this.closedFiles.indexOf(entry)
         if (index >= 0) this.closedFiles.splice(index, 1)
+        this.compactRecentlyClosedPath(entry.path)
         return { ...existing.record, content: existing.currentContent }
       }
       await this.store.addRecent(entry.path)
@@ -439,6 +486,7 @@ export class DocumentSession {
       }
       const index = this.closedFiles.indexOf(entry)
       if (index >= 0) this.closedFiles.splice(index, 1)
+      this.compactRecentlyClosedPath(entry.path)
       return record
     })
   }
@@ -538,8 +586,61 @@ export class DocumentSession {
     }
   }
 
+  private contentHash(content: string): string {
+    return createHash('sha256').update(content, 'utf8').digest('hex')
+  }
+
+  private stateByteSize(state: DocumentState): number {
+    const contents = new Set([state.record.content, state.currentContent, ...(state.savedContent === null ? [] : [state.savedContent])])
+    return [...contents].reduce((total, content) => total + Buffer.byteLength(content, 'utf8'), 0)
+  }
+
+  private deleteRecentlyClosed(id: string): void {
+    const closed = this.recentlyClosedStates.get(id)
+    if (!closed) return
+    this.recentlyClosedBytes -= closed.byteSize
+    this.recentlyClosedStates.delete(id)
+  }
+
+  private compactRecentlyClosed(closed: RecentlyClosedState): void {
+    if (closed.compacted) return
+    this.recentlyClosedBytes -= closed.byteSize
+    closed.byteSize = 0
+    closed.compacted = true
+    closed.contentHash = this.contentHash(closed.state.currentContent)
+    closed.state.record = { ...closed.state.record, path: null, version: null, content: '', unsaved: true }
+    closed.state.currentContent = ''
+    closed.state.savedContent = null
+    closed.state.savedRevision = 0
+    closed.state.fileMissing = false
+    closed.state.notifiedVersion = null
+    closed.state.fileIdentity = null
+  }
+
+  private compactRecentlyClosedPath(filePath: string): void {
+    for (const closed of this.recentlyClosedStates.values()) {
+      if (closed.state.record.path === filePath) this.compactRecentlyClosed(closed)
+    }
+  }
+
+  private rememberRecentlyClosed(id: string, state: DocumentState): void {
+    this.deleteRecentlyClosed(id)
+    const byteSize = this.stateByteSize(state)
+    this.recentlyClosedStates.set(id, { state, revision: state.revision, contentHash: null, pendingLineEnding: state.pendingLineEnding, byteSize, compacted: false })
+    this.recentlyClosedBytes += byteSize
+    while (this.recentlyClosedBytes > this.recentlyClosedByteBudget) {
+      const candidate = [...this.recentlyClosedStates.values()].find(closed => !closed.compacted)
+      if (!candidate) break
+      this.compactRecentlyClosed(candidate)
+    }
+    while (this.recentlyClosedStates.size > 20) this.deleteRecentlyClosed(this.recentlyClosedStates.keys().next().value!)
+  }
+
   private startWatch(id: string): void {
-    const state = this.get(id)
+    this.startWatchState(id, this.get(id))
+  }
+
+  private startWatchState(id: string, state: DocumentState): void {
     this.stopWatch(state)
     if (!state.record.path) return
     const documentPath = state.record.path
@@ -582,5 +683,11 @@ export class DocumentSession {
     state.timer = undefined
   }
 
-  dispose(): void { this.disposed = true; this.versionHistory.dispose(); for (const state of this.documents.values()) this.stopWatch(state) }
+  dispose(): void {
+    this.disposed = true
+    this.versionHistory.dispose()
+    for (const state of this.documents.values()) this.stopWatch(state)
+    this.recentlyClosedStates.clear()
+    this.recentlyClosedBytes = 0
+  }
 }

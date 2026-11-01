@@ -7,6 +7,7 @@ import { getMarkdownParser } from './markdown-parser'
 import { markdownOptionsFacet } from './markdown-config'
 import { isLocalResource } from './context-target'
 import { isSafeDataImage } from '../../shared/data-image'
+import { fitsPasteBudget } from './paste-budget'
 
 export interface ImageAddressRange { from: number; to: number; source: string; html: boolean }
 
@@ -86,13 +87,17 @@ async function updateDocumentImages(view: EditorView, getProps: () => MarkdownEd
     const current = getProps()
     if (!view.dom.isConnected || view.state.readOnly || current.readOnly || current.documentId !== props.documentId || current.revision !== props.revision || !view.state.doc.eq(original)) throw new Error('文档已改变，未替换原文图片引用。')
     const replacements = new Map(result.data.replacements.map(replacement => [replacement.source, replacement.url]))
-    const changes = ranges.flatMap(range => {
+    const replacementsChanges = ranges.flatMap(range => {
       const replacement = replacements.get(range.source)
       if (!replacement) return []
       const insert = range.html ? replacement.replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/'/g, '&#39;') : replacement.replace(/[()]/g, character => character === '(' ? '%28' : '%29')
       return original.sliceString(range.from, range.to) === insert ? [] : [{ from: range.from, to: range.to, insert }]
     })
-    if (changes.length) view.dispatch({ changes, userEvent: `input.image-${operation}`, annotations: isolateHistory.of('full') })
+    if (replacementsChanges.length) {
+      const changes = view.state.changes(replacementsChanges)
+      if (!fitsPasteBudget(original, changes.apply(original), current.encoding, current.lineEnding)) throw new Error(`${operation === 'upload' ? '上传' : '整理'}后的文件将超过 16 MB，未替换原文图片引用。`)
+      view.dispatch({ changes, userEvent: `input.image-${operation}`, annotations: isolateHistory.of('full') })
+    }
   } finally { finish() }
 }
 

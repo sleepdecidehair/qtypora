@@ -124,22 +124,24 @@ export class LocalStore {
   }
 
   async addRecent(filePath: string): Promise<void> {
-    this.recentFiles = [filePath, ...this.recentFiles.filter((item) => item.toLowerCase() !== filePath.toLowerCase())].slice(0, 20)
-    await this.persistSettings()
+    await serialized('settings:' + this.directory, async () => {
+      const recentFiles = [filePath, ...this.recentFiles.filter((item) => item.toLowerCase() !== filePath.toLowerCase())].slice(0, 20)
+      await this.writeSettings(this.preferences, recentFiles, this.recentFolders)
+      this.recentFiles = recentFiles
+    })
   }
 
   async addRecentFolder(folderPath: string): Promise<void> {
-    this.recentFolders = [folderPath, ...this.recentFolders.filter(item => item !== folderPath)].slice(0, 20)
-    await this.persistSettings()
+    await serialized('settings:' + this.directory, async () => {
+      const recentFolders = [folderPath, ...this.recentFolders.filter(item => item !== folderPath)].slice(0, 20)
+      await this.writeSettings(this.preferences, this.recentFiles, recentFolders)
+      this.recentFolders = recentFolders
+    })
   }
 
-  private async persistSettings(): Promise<void> {
-    await serialized('settings:' + this.directory, () => this.writeSettings(this.preferences))
-  }
-
-  private async writeSettings(preferences: Preferences): Promise<void> {
+  private async writeSettings(preferences: Preferences, recentFiles = this.recentFiles, recentFolders = this.recentFolders): Promise<void> {
     await atomicWrite(path.join(this.directory, 'settings.json'), Buffer.from(JSON.stringify({
-      ...this.unknownSettings, preferences: { ...this.unknownPreferences, ...preferences }, recentFiles: this.recentFiles, recentFolders: this.recentFolders,
+      ...this.unknownSettings, preferences: { ...this.unknownPreferences, ...preferences }, recentFiles, recentFolders,
     }, null, 2)))
   }
 

@@ -353,8 +353,10 @@ export function clipboardImportExtension(getContext: () => ClipboardImportContex
       const before = range.from > 0 && original.sliceString(range.from - 1, range.from) !== '\n' ? '\n\n' : ''
       const after = range.to < original.length && original.sliceString(range.to, range.to + 1) !== '\n' ? '\n\n' : ''
       const insert = before + result.data.markdown + after
+      const changes = view.state.changes({ ...range, insert })
+      if (!fitsPasteBudget(original, changes.apply(original), context.encoding, context.lineEnding)) throw new Error('插入后的文件将超过 16 MB，未插入图片。')
       const restoreFocus = owner.hasFocus() && (owner.activeElement === originalFocus || view.hasFocus)
-      view.dispatch({ changes: { ...range, insert }, selection: { anchor: range.from + insert.length }, annotations: [Transaction.userEvent.of('input.paste'), isolateHistory.of('full')] })
+      view.dispatch({ changes, selection: { anchor: changes.mapPos(range.from, 1) }, annotations: [Transaction.userEvent.of('input.paste'), isolateHistory.of('full')] })
       if (restoreFocus && owner.hasFocus()) view.focus()
     })().catch(error => context.onError(error instanceof Error ? error.message : '图片插入失败。')).finally(() => { pending = false; finish() })
   }

@@ -32,8 +32,8 @@ interface SidebarProps {
 
 export function Sidebar(props: SidebarProps) {
   const t = useTranslation()
-  const deferredContent = useDeferredValue(props.current?.content ?? '')
-  const outline = useMemo(() => extractHeadings(deferredContent, props.markdownOptions ?? DEFAULT_MARKDOWN_OPTIONS), [deferredContent, props.markdownOptions])
+  const deferredContent = useDeferredValue(props.mode === 'outline' ? props.current?.content ?? '' : '')
+  const outline = useMemo(() => props.mode === 'outline' ? extractHeadings(deferredContent, props.markdownOptions ?? DEFAULT_MARKDOWN_OPTIONS) : [], [deferredContent, props.markdownOptions, props.mode])
   return <aside className="sidebar" aria-label={t('文档侧栏')}>
     <div className="sidebar-tabs" role="tablist" aria-label={t('侧栏视图')}>
       <button role="tab" aria-selected={props.mode === 'files'} aria-label={t('文件')} data-testid="files-tab" className={props.mode === 'files' ? 'is-active' : ''} onClick={() => props.onMode('files')}><Files size={16} />{t('文件')}</button>

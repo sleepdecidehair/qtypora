@@ -252,7 +252,9 @@ function configuration(props: MarkdownEditorProps, callbacks: Pick<MarkdownEdito
   return extensions
 }
 
-export function MarkdownEditor(props: MarkdownEditorProps): React.JSX.Element {
+type MarkdownEditorComponentProps = MarkdownEditorProps & { onCurrentLineChange: (line: number) => void }
+
+export function MarkdownEditor(props: MarkdownEditorComponentProps): React.JSX.Element {
   const mountRef = useRef<HTMLDivElement>(null)
   const rootRef = useRef<HTMLDivElement>(null)
   const guardRef = useRef<CloseGuard | null>(null)
@@ -381,6 +383,7 @@ export function MarkdownEditor(props: MarkdownEditorProps): React.JSX.Element {
           if (update.selectionSet || update.docChanged) {
             const { from, to } = update.state.selection.main
             propsRef.current.onSelectionChange({ from, to, text: update.state.doc.sliceString(from, to) })
+            propsRef.current.onCurrentLineChange(update.state.doc.lineAt(update.state.selection.main.head).number)
             if (propsRef.current.typewriterMode && propsRef.current.mode !== 'reading' && !restoringScrollRef.current && !update.view.composing) {
               update.view.requestMeasure({ read: (view) => view.state.selection.main.head, write: (head, view) => {
                 if (propsRef.current.mode !== 'reading' && !restoringScrollRef.current && !view.composing) view.dispatch({ effects: EditorView.scrollIntoView(head, { y: 'center' }) })
@@ -478,6 +481,7 @@ export function MarkdownEditor(props: MarkdownEditorProps): React.JSX.Element {
       if (propsRef.current.mode !== 'reading') view.focus()
       const { from, to } = view.state.selection.main
       propsRef.current.onSelectionChange({ from, to, text: view.state.doc.sliceString(from, to) })
+      propsRef.current.onCurrentLineChange(view.state.doc.lineAt(view.state.selection.main.head).number)
     } else if (view.state.doc.toString() !== props.value) {
       if (emittedValuesRef.current.has(props.value)) return
       if (view.composing) { pendingExternalRef.current = props.value; return }

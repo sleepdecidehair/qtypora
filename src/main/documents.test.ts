@@ -323,6 +323,50 @@ describe('Document sessions and independent drafts', () => {
     expect((await session.open(file, true)).content).toBe('disk')
   })
 
+  it('rejects an atomic replacement while recent-file persistence is pending', async () => {
+    const file = path.join(directory, 'open-race.md'); await fs.writeFile(file, 'same bytes')
+    const session = makeSession()
+    let release!: () => void, entered!: () => void
+    const pending = new Promise<void>(resolve => { release = resolve })
+    const started = new Promise<void>(resolve => { entered = resolve })
+    const spy = vi.spyOn(store, 'addRecent').mockImplementationOnce(async () => { entered(); await pending })
+    const opening = session.open(file, true)
+    await started
+    const replacement = path.join(directory, 'replacement.tmp')
+    await fs.writeFile(replacement, 'same bytes')
+    await fs.rename(replacement, file)
+    release()
+    await expect(opening).rejects.toMatchObject({ code: 'CONFLICT' })
+    expect(session.records()).toHaveLength(0)
+    expect(session.allowedRoots.has(directory)).toBe(false)
+    spy.mockRestore()
+    expect((await session.open(file, true)).content).toBe('same bytes')
+  })
+
+  it('rolls back a provisional open when recent-file persistence fails', async () => {
+    const file = path.join(directory, 'open-failure.md'); await fs.writeFile(file, 'disk')
+    const session = makeSession()
+    const spy = vi.spyOn(store, 'addRecent').mockRejectedValueOnce(new Error('settings unavailable'))
+    await expect(session.open(file, true)).rejects.toThrow('settings unavailable')
+    expect(session.records()).toHaveLength(0)
+    expect(session.allowedRoots.has(directory)).toBe(false)
+    spy.mockRestore()
+    expect((await session.open(file, true)).content).toBe('disk')
+  })
+
+  it('keeps workspace state and watcher activation unchanged when recent-folder persistence fails', async () => {
+    const session = makeSession()
+    const previous = path.join(directory, 'previous'), next = path.join(directory, 'next')
+    session.allowedRoots.add(previous)
+    session.workspace = previous
+    const activated = vi.fn()
+    vi.spyOn(store, 'addRecentFolder').mockRejectedValueOnce(new Error('settings unavailable'))
+    await expect(session.activateWorkspace(next, activated)).rejects.toThrow('settings unavailable')
+    expect(session.workspace).toBe(previous)
+    expect([...session.allowedRoots]).toEqual([previous])
+    expect(activated).not.toHaveBeenCalled()
+  })
+
   it('rejects new operations after close approval seals the session', async () => {
     const file = path.join(directory, 'one.md'); await fs.writeFile(file, 'disk')
     const session = makeSession(), document = await session.open(file, true)
@@ -469,6 +513,29 @@ describe('Document sessions and independent drafts', () => {
     expect(restored.unsaved).toBe(true)
     expect(session.records().find(item => item.id === reopened.id)?.content).toBe('disk')
     expect(store.drafts.get(document.id)?.content).toBe('late edit')
+  })
+
+  it('keeps only minimal recovery state after an ordinary reopen', async () => {
+    const filename = path.join(directory, 'compact-reopen.md')
+    await fs.writeFile(filename, 'disk', 'utf8')
+    const session = makeSession()
+    const original = await session.open(filename, true)
+    expect(await session.close({ id: original.id, content: original.content, revision: 0 })).toBe(true)
+    const reopened = await session.open(filename, true)
+    expect(await session.close({ id: reopened.id, content: reopened.content, revision: 0 })).toBe(true)
+    const restored = await session.restoreClosedEdit({ id: original.id, content: 'late edit', revision: 1 })
+    expect(restored).toMatchObject({ path: null, content: 'late edit', unsaved: true })
+  })
+
+  it('compacts closed state that exceeds the configured byte budget', async () => {
+    const filename = path.join(directory, 'compact-budget.md')
+    await fs.writeFile(filename, 'disk', 'utf8')
+    const session = new DocumentSession(store, { chooseSave: async () => null, confirmClose: async () => 'cancel' }, () => undefined, undefined, 0)
+    sessions.push(session)
+    const document = await session.open(filename, true)
+    expect(await session.close({ id: document.id, content: document.content, revision: 0 })).toBe(true)
+    const restored = await session.restoreClosedEdit({ id: document.id, content: 'late edit', revision: 1 })
+    expect(restored).toMatchObject({ path: null, content: 'late edit', unsaved: true })
   })
 
   it('reports the independent restored path even if its first draft write fails', async () => {

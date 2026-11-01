@@ -16,6 +16,7 @@ describe('bounded converter processes', () => {
     expect(output).toEqual(Buffer.from([0, 1, 255, 10]))
     await expect(runConverter(process.execPath, ['-e', 'process.stderr.write("failure");process.exitCode=2'], { label: '测试' })).rejects.toThrow('failure')
     await expect(runConverter(process.execPath, ['-e', 'process.stdout.write(Buffer.alloc(16384));setInterval(()=>{},100)'], { label: '测试', outputLimit: 1024 })).rejects.toMatchObject({ code: 'UNSUPPORTED' })
+    await expect(runConverter(process.execPath, ['-e', 'process.stdout.write(Buffer.alloc(800));process.stderr.write(Buffer.alloc(800));setInterval(()=>{},100)'], { label: '测试', outputLimit: 1024, logLimit: 1024, combinedOutputLimit: 1024 })).rejects.toMatchObject({ code: 'UNSUPPORTED' })
   })
 
   it.skipIf(process.platform === 'win32')('kills a SIGTERM-resistant process group before removing its staging input', async () => {

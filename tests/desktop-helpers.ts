@@ -66,7 +66,7 @@ export async function launchDesktop(existingRoot?: string): Promise<DesktopSessi
       for (const item of await clipboard.read()) {
         const payload: Record<string, Blob | Electron.ClipboardBookmark> = {}
         for (const type of item.types) payload[type] = await item.getType(type)
-        saved.push(new ClipboardItem(payload))
+        if (Object.keys(payload).length) saved.push(new ClipboardItem(payload))
       }
       Reflect.set(globalThis, 'qtyporaTestClipboard', saved)
     })

@@ -461,6 +461,14 @@ export class LiveTableWidget extends WidgetType {
         if (!focusLiveTableSelection(view)) view.focus()
         return
       }
+      if (event.altKey && !event.ctrlKey && !event.metaKey && !event.shiftKey && ['ArrowUp', 'ArrowDown'].includes(event.key)) {
+        event.preventDefault(); event.stopPropagation()
+        const row = context.cursor.row
+        const targetRow = row + (event.key === 'ArrowUp' ? -1 : 1)
+        if (view.state.readOnly || context.options.readOnly || row < 1 || targetRow < 1 || targetRow >= context.model.rows) return
+        applyStructure(view, container, context, () => moveTableRow(context.block.source, context.block.from, row, targetRow), { row: targetRow, column: context.cursor.column })
+        return
+      }
       if (event.key === 'Tab' || event.key === 'Enter') {
         event.preventDefault(); event.stopPropagation()
         if (event.key === 'Enter' && (event.ctrlKey || event.metaKey) && context.model.rows < MAX_TABLE_ROWS) {

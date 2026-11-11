@@ -25,10 +25,14 @@ describe('table structure and rectangular operations', () => {
     expect(resizeTable(original, 0, 501, 3)).toBeNull()
   })
 
-  it('moves body rows without changing the header/alignment row or cell padding', () => {
-    const updated = EditorState.create({ doc: original }).update({ changes: moveTableRow(original, 0, 2, 1)! }).state.doc.toString()
-    expect(updated).toBe('| A  | B | C |\n| :--- | ---: | :---: |\n| second | five | six |\n| first  | two | three |')
+  it('moves body rows without changing columns and restores the source in one undo', () => {
+    let state = EditorState.create({ doc: original, extensions: [history()] })
+    state = state.update({ changes: moveTableRow(original, 0, 2, 1)!, userEvent: 'input.table.structure' }).state
+    expect(state.doc.toString()).toBe('| A  | B | C |\n| :--- | ---: | :---: |\n| second | five | six |\n| first  | two | three |')
+    expect(undo({ state, dispatch: transaction => { state = transaction.state } })).toBe(true)
+    expect(state.doc.toString()).toBe(original)
     expect(moveTableRow(original, 0, 1, 0)).toBeNull()
+    expect(moveTableRow(original, 0, 3, 4)).toBeNull()
     expect(moveTableRow(original, 0, 2, 2)).toBeNull()
   })
 

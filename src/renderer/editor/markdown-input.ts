@@ -33,8 +33,7 @@ export function markdownInputTransaction(state: EditorState, from: number, to: n
   if (pair && text === pair.delimiter[0] && enabled(state, text)) {
     const empty = pair.from + pair.delimiter.length === pair.to
     const linePrefix = state.doc.sliceString(state.doc.lineAt(from).from, pair.from)
-    // Consecutive openers form bold/strike/code spans. Three backticks remain a normal fence trigger.
-    if (empty && from === pair.to && ['*', '_', '~', '`', '$'].includes(text)) {
+    if (empty && from === pair.to && ['*', '_', '`', '$'].includes(text)) {
       const delimiter = pair.delimiter + text
       if ((!linePrefix.trim() && ((text === '`' && delimiter.length === 3) || (text === '$' && delimiter.length === 2) || (text === '*' && delimiter.length === 3)))) {
         return { changes: { from: pair.from, to: pair.to + pair.delimiter.length, insert: delimiter }, selection: { anchor: pair.from + delimiter.length }, effects: changePair.of({ remove: pair }), userEvent: 'input.type' }
@@ -68,19 +67,12 @@ export function markdownInputTransaction(state: EditorState, from: number, to: n
     const delimiter = text === '=' ? '==' : text
     return { changes: { from, to, insert: delimiter + selected + delimiter }, selection: { anchor: from + delimiter.length, head: to + delimiter.length }, userEvent: 'input.type' }
   }
+  if (['~', '=', '^'].includes(text)) return null
   const next = state.doc.sliceString(to, to + 1)
   const previous = state.doc.sliceString(Math.max(0, from - 1), from)
   if (next && !/[\s)\]}.,;:!?]/.test(next)) return null
   if (['*', '_', '$', '`'].includes(text) && /[\p{L}\p{N}_]/u.test(previous)) return null
-  let delimiter = text
-  let start = from
-  if (text === '=') {
-    // Leave a single equals sign (ordinary prose/equations) alone; pair the second one.
-    if (previous !== '=' || (from > 1 && state.doc.sliceString(from - 2, from - 1) === '=')) return null
-    delimiter = '=='
-    start--
-  }
-  return { changes: { from: start, to, insert: delimiter + delimiter }, selection: { anchor: start + delimiter.length }, effects: changePair.of({ add: { from: start, to: start + delimiter.length, delimiter } }), userEvent: 'input.type' }
+  return { changes: { from, to, insert: text + text }, selection: { anchor: from + text.length }, effects: changePair.of({ add: { from, to: from + text.length, delimiter: text } }), userEvent: 'input.type' }
 }
 
 export function markdownPairBackspace(state: EditorState): TransactionSpec | null {

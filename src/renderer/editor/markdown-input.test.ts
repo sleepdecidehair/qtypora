@@ -34,9 +34,24 @@ describe('typed Markdown pairing source transactions', () => {
     expect(type(create(), '* item').doc.toString()).toBe('* item')
     expect(type(create('text '), '`code`').doc.toString()).toBe('text `code`')
   })
-  it('pairs highlight only after the second equals sign and leaves equations and intraword punctuation alone', () => {
+  it.each([
+    ['~', '~'],
+    ['^', '^'],
+    ['==', '=='],
+  ])('does not insert a closing pair for empty-cursor input %s', (input, expected) => {
+    expect(type(create(), input).doc.toString()).toBe(expected)
+  })
+  it('preserves selected-text wrapping for strike, superscript and highlight', () => {
     expect(type(create('x '), '=').doc.toString()).toBe('x =')
     expect(type(create(), '==highlight==').doc.toString()).toBe('==highlight==')
+    for (const [source, marker, expected] of [
+      ['tilde', '~', '~tilde~'],
+      ['power', '^', '^power^'],
+      ['highlight', '=', '==highlight=='],
+    ]) {
+      const state = create(source, 0).update({ selection: { anchor: 0, head: source.length } }).state
+      expect(type(state, marker).doc.toString()).toBe(expected)
+    }
     expect(type(create('snake'), '_').doc.toString()).toBe('snake_')
     expect(type(create('10'), '$').doc.toString()).toBe('10$')
     expect(type(create('H'), '~2~').doc.toString()).toBe('H~2~')

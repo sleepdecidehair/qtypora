@@ -128,6 +128,15 @@ describe('preference persistence transactions', () => {
     await reloaded.load()
     expect(reloaded.preferences.showStatusBar).toBe(false)
   })
+  it('defaults legacy typewriter centering on and persists input-only mode', async () => {
+    const { typewriterAlwaysCenter: _alwaysCenter, ...legacy } = DEFAULT_PREFERENCES
+    expect(validatePreferences(legacy).typewriterAlwaysCenter).toBe(true)
+    for (const value of [null, 1, 'false']) expect(() => validatePreferences({ ...DEFAULT_PREFERENCES, typewriterAlwaysCenter: value })).toThrow('打字机模式居中')
+    await store.updatePreferences(validatePreferences({ ...DEFAULT_PREFERENCES, typewriterAlwaysCenter: false }))
+    const reopened = new LocalStore(directory)
+    await reopened.load()
+    expect(reopened.preferences.typewriterAlwaysCenter).toBe(false)
+  })
   it('migrates old theme settings while validating and persisting theme identifiers', async () => {
     const { typoraThemeId: _theme, ...legacy } = DEFAULT_PREFERENCES
     expect(validatePreferences(legacy).typoraThemeId).toBe('')

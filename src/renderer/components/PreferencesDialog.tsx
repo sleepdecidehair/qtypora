@@ -58,6 +58,7 @@ export function PreferencesDialog({ desktopApi, platform, preferences: p, onChan
         {row(`${t('源码模式')} · ${primaryShortcut(platform, '/')}`, checkbox(p.sourceMode, sourceMode => onChange({ sourceMode, readingMode: false })))}
         {row('专注模式', checkbox(p.focusMode, focusMode => onChange({ focusMode })))}
         {row('打字机模式', checkbox(p.typewriterMode, typewriterMode => onChange({ typewriterMode })))}
+        {row('打字机模式下始终将光标保持在屏幕中央', checkbox(p.typewriterAlwaysCenter, typewriterAlwaysCenter => onChange({ typewriterAlwaysCenter }), 'typewriter-always-center-toggle'))}
         {row('源码显示行号', checkbox(p.showLineNumbers, showLineNumbers => onChange({ showLineNumbers })))}
         {row('自动换行', checkbox(p.wrapLines, wrapLines => onChange({ wrapLines })))}
         {row('拼写检查', checkbox(p.spellcheck, spellcheck => onChange({ spellcheck })))}

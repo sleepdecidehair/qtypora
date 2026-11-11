@@ -328,6 +328,26 @@ export class LiveTableWidget extends WidgetType {
     return this.block.from === other.block.from && this.block.source === other.block.source && this.options.theme === other.options.theme && this.options.readOnly === other.options.readOnly && this.options.mathKey === other.options.mathKey && this.options.locale === other.options.locale
   }
 
+  coordsAt(dom: HTMLElement, pos: number): DOMRect | null {
+    const position = this.block.from + pos
+    const selection = dom.ownerDocument.getSelection()
+    const cells = Array.from(dom.querySelectorAll<HTMLElement>('th[data-source-from],td[data-source-from]')).filter(cell => Number(cell.dataset.sourceFrom) <= position && Number(cell.dataset.sourceTo) >= position)
+    const cell = cells.find(element => element.contains(selection?.focusNode ?? null)) ?? cells[0]
+    if (!cell) return null
+    if (selection?.focusNode && cell.contains(selection.focusNode)) {
+      const range = dom.ownerDocument.createRange()
+      range.selectNodeContents(cell)
+      range.setEnd(selection.focusNode, selection.focusOffset)
+      if (Number(cell.dataset.sourceFrom) + escapeCellInput(range.toString()).length === position) {
+        range.setStart(selection.focusNode, selection.focusOffset)
+        range.collapse(true)
+        const rect = range.getBoundingClientRect()
+        if (rect.height) return rect
+      }
+    }
+    return cell.getBoundingClientRect()
+  }
+
   toDOM(view: EditorView): HTMLElement {
     const container = document.createElement('div')
     container.className = 'md-preview-block cm-live-table'

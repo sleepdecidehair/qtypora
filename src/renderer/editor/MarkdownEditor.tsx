@@ -59,6 +59,7 @@ import { canFormatInlineSelection } from './inline-format-guard'
 import { inlineCodeTransaction } from './inline-code-format'
 import { linkFormatTransaction } from './link-format'
 import { emphasisTransaction } from './emphasis-format'
+import { changesTypewriterPosition, isTypewriterInputChange, shouldApplyTypewriterScroll, type TypewriterScrollRequest } from './typewriter-scroll'
 
 import { installEditorContext } from './editor-context'
 import { ResourceViewer } from './ResourceViewer'
@@ -264,6 +265,8 @@ export function MarkdownEditor(props: MarkdownEditorComponentProps): React.JSX.E
   const viewRef = useRef<EditorView | null>(null)
   const pendingResourceFocusRef = useRef<string | null>(null)
   const propsRef = useRef(props)
+  const typewriterScrollVersionRef = useRef(0)
+  const pendingCompositionTypewriterScrollRef = useRef<{ documentId: string; mode: MarkdownEditorProps['mode'] } | null>(null)
   const activeDocumentRef = useRef(props.documentId)
   const cacheRef = useRef(new Map<string, EditorState>())
   const compartmentRef = useRef(new Compartment())
@@ -291,6 +294,10 @@ export function MarkdownEditor(props: MarkdownEditorComponentProps): React.JSX.E
     modeScrollAnchorRef.current = { documentId: activeDocumentRef.current, toMode: props.mode, anchor }
   }
   propsRef.current = props
+  useLayoutEffect(() => {
+    typewriterScrollVersionRef.current++
+    pendingCompositionTypewriterScrollRef.current = null
+  }, [props.documentId, props.mode, props.typewriterMode, props.typewriterAlwaysCenter])
 
   const callbacksRef = useRef({
     resolveResource: (source: string) => propsRef.current.resolveResource(source),
@@ -302,6 +309,23 @@ export function MarkdownEditor(props: MarkdownEditorComponentProps): React.JSX.E
 
   function editorConfiguration(current: MarkdownEditorProps): Extension[] {
     return configuration({ ...current, mode: current.mode === 'reading' ? 'source' : current.mode, readOnly: current.readOnly || current.mode === 'reading' }, callbacksRef.current)
+  }
+
+  function scheduleTypewriterScroll(view: EditorView, request: TypewriterScrollRequest): void {
+    view.requestMeasure({
+      read: currentView => currentView.state.selection.main.head,
+      write: (head, currentView) => {
+        queueMicrotask(() => {
+          const current = propsRef.current
+          if (viewRef.current !== currentView || !shouldApplyTypewriterScroll(request, {
+            version: typewriterScrollVersionRef.current, documentId: current.documentId, mode: current.mode,
+            typewriterMode: current.typewriterMode, alwaysCenter: current.typewriterAlwaysCenter,
+            composing: currentView.composing, restoringScroll: restoringScrollRef.current,
+          })) return
+          currentView.dispatch({ effects: EditorView.scrollIntoView(head, { y: 'center' }) })
+        })
+      },
+    })
   }
 
   function schedulePendingExternal(view: EditorView): void {
@@ -384,16 +408,31 @@ export function MarkdownEditor(props: MarkdownEditorComponentProps): React.JSX.E
             const { from, to } = update.state.selection.main
             propsRef.current.onSelectionChange({ from, to, text: update.state.doc.sliceString(from, to) })
             propsRef.current.onCurrentLineChange(update.state.doc.lineAt(update.state.selection.main.head).number)
-            if (propsRef.current.typewriterMode && propsRef.current.mode !== 'reading' && !restoringScrollRef.current && !update.view.composing) {
-              update.view.requestMeasure({ read: (view) => view.state.selection.main.head, write: (head, view) => {
-                if (propsRef.current.mode !== 'reading' && !restoringScrollRef.current && !view.composing) view.dispatch({ effects: EditorView.scrollIntoView(head, { y: 'center' }) })
-              } })
+            if (!changesTypewriterPosition(update.transactions)) return
+            const current = propsRef.current
+            const version = ++typewriterScrollVersionRef.current
+            const isInput = isTypewriterInputChange(update.transactions)
+            if (current.typewriterMode && current.mode !== 'reading' && !restoringScrollRef.current && (current.typewriterAlwaysCenter || isInput)) {
+              if (update.view.composing) {
+                pendingCompositionTypewriterScrollRef.current = isInput ? { documentId: current.documentId, mode: current.mode } : null
+              } else {
+                pendingCompositionTypewriterScrollRef.current = null
+                scheduleTypewriterScroll(update.view, { version, documentId: current.documentId, mode: current.mode, alwaysCenter: current.typewriterAlwaysCenter, isInput })
+              }
+            } else {
+              pendingCompositionTypewriterScrollRef.current = null
             }
           }
         }),
         EditorView.domEventHandlers({
           compositionend: (_event, view) => {
             schedulePendingExternal(view)
+            const pending = pendingCompositionTypewriterScrollRef.current
+            pendingCompositionTypewriterScrollRef.current = null
+            if (pending) scheduleTypewriterScroll(view, {
+              version: typewriterScrollVersionRef.current, documentId: pending.documentId, mode: pending.mode,
+              alwaysCenter: propsRef.current.typewriterAlwaysCenter, isInput: true,
+            })
             return false
           },
         }),

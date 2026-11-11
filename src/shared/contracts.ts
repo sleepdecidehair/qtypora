@@ -26,6 +26,7 @@ export interface Preferences {
   readingMode: boolean
   focusMode: boolean
   typewriterMode: boolean
+  typewriterAlwaysCenter: boolean
   fontSize: number
   contentWidth: number
   contentWidthMode: 'auto' | 'fixed'
@@ -55,7 +56,7 @@ export interface Preferences {
 export const DEFAULT_PREFERENCES: Preferences = {
   locale: 'zh-CN',
   theme: 'light', sidebarMode: 'outline', outlineFlat: false, indentFirstLine: false, showSidebar: true, showToolbar: true, showStatusBar: true, macNativeTabs: false, typoraThemeId: '', floatingToolbar: true, shortcuts: {},
-  sourceMode: false, readingMode: false, focusMode: false, typewriterMode: false,
+  sourceMode: false, readingMode: false, focusMode: false, typewriterMode: false, typewriterAlwaysCenter: true,
   fontSize: 16, contentWidth: 800, contentWidthMode: 'auto', autoSave: false, autoSaveSeconds: 300,
   lineEnding: 'LF', spellcheck: false, showLineNumbers: true, wrapLines: true,
   markdown: DEFAULT_MARKDOWN_OPTIONS, workspace: DEFAULT_WORKSPACE_OPTIONS, image: DEFAULT_IMAGE_OPTIONS, export: DEFAULT_EXPORT_OPTIONS,

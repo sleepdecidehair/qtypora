@@ -30,7 +30,7 @@ const english: Record<string, string> = {
   '快速打开': 'Quick Open', '快速打开…': 'Quick Open…', '在文件夹中搜索': 'Search in folder', '偏好设置': 'Preferences', '偏好设置…': 'Preferences…',
   '源码模式': 'Source mode', '实时预览': 'Live Preview', '显示 / 隐藏侧栏': 'Show / hide sidebar', '切换侧栏': 'Toggle sidebar',
   '大纲': 'Outline', '文件树': 'File tree', '显示 / 隐藏工具栏': 'Show / hide toolbar', '显示 / 隐藏状态栏': 'Show / hide status bar', '窗口置顶 / 取消置顶': 'Toggle always on top', '查找下一个': 'Find next', '查找上一个': 'Find previous', '替换下一个': 'Replace next', '字数统计': 'Word count',
-  '专注模式': 'Focus mode', '打字机模式': 'Typewriter mode', '放大': 'Zoom In', '缩小': 'Zoom Out', '实际大小': 'Actual Size',
+  '专注模式': 'Focus mode', '打字机模式': 'Typewriter mode', '打字机模式下始终将光标保持在屏幕中央': 'Always keep the caret centered while typewriter mode is enabled', '放大': 'Zoom In', '缩小': 'Zoom Out', '实际大小': 'Actual Size',
   '全屏': 'Full Screen', '开发者工具': 'Developer Tools', '最小化': 'Minimize', '全部最小化': 'Minimize All', '缩放': 'Zoom', '前置全部窗口': 'Bring All to Front', '切换文档': 'Switch document',
   '显示 / 隐藏标签栏': 'Show / Hide Tab Bar', '选择上一个标签页': 'Select Previous Tab', '选择下一个标签页': 'Select Next Tab', '显示所有标签页': 'Show All Tabs', '将标签页移至新窗口': 'Move Tab to New Window',
   '使用帮助': 'User guide', '应用诊断': 'Diagnostics', '查看更新与发行记录': 'View updates and releases', '第三方许可': 'Third-party licenses', '关于 QTypora': 'About QTypora',

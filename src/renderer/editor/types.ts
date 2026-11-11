@@ -27,6 +27,7 @@ export interface MarkdownEditorProps {
   imageOptions: import('../../shared/image-options').ImageOptions
   focusMode: boolean
   typewriterMode: boolean
+  typewriterAlwaysCenter: boolean
   readOnly: boolean
   lineNumbers: boolean
   wrapLines: boolean

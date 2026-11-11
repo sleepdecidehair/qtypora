@@ -2,9 +2,10 @@ import * as fs from 'node:fs/promises'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import type { DocumentRecord } from '../shared/contracts'
+import { isMarkdownExtension } from '../shared/markdown-files'
 import type { DocumentSession } from './documents'
 import { DesktopError, invalid, object, string } from './errors'
-import { MARKDOWN_EXTENSIONS, safeName } from './files'
+import { safeName } from './files'
 import { withWorkspaceStructure } from './workspace-lock'
 
 const EXTERNAL_DOCUMENT_EXTENSIONS = new Set([
@@ -51,7 +52,7 @@ export async function openLinkedFile(input: unknown, documents: DocumentSession,
   const sourceWorkspace = documents.workspace
   const { filePath, fragment } = linkPath(target, sourcePath ? path.dirname(sourcePath) : documents.workspace)
   const extension = path.extname(filePath).toLowerCase()
-  const markdown = MARKDOWN_EXTENSIONS.has(extension)
+  const markdown = isMarkdownExtension(extension)
   if (!markdown && !EXTERNAL_DOCUMENT_EXTENSIONS.has(extension)) throw new DesktopError('UNSUPPORTED', '此类型不能从文档链接直接打开。请在文件管理器中处理。')
 
   let canonical: string
@@ -77,7 +78,7 @@ export async function openLinkedFile(input: unknown, documents: DocumentSession,
     const stat = await fs.stat(canonical)
     if (!stat.isFile()) invalid('链接目标不是普通文件。')
     if (markdown) {
-      if (!MARKDOWN_EXTENSIONS.has(path.extname(canonical).toLowerCase())) throw new DesktopError('UNSUPPORTED', '链接实际目标不是 Markdown 文件。')
+      if (!isMarkdownExtension(path.extname(canonical))) throw new DesktopError('UNSUPPORTED', '链接实际目标不是 Markdown 文件。')
       return { document: await documents.openAlreadyLocked(canonical), attachment: null }
     }
     if (!EXTERNAL_DOCUMENT_EXTENSIONS.has(path.extname(canonical).toLowerCase())) throw new DesktopError('UNSUPPORTED', '链接实际目标类型不受支持。')

@@ -10,6 +10,15 @@ beforeEach(async () => { root = await fs.mkdtemp(path.join(os.tmpdir(), 'qtypora
 afterEach(async () => { await fs.rm(root, { recursive: true, force: true }) })
 
 describe('workspace file list and search', () => {
+  it('lists and searches .qmd files as ordinary Markdown documents', async () => {
+    const target = path.join(root, 'report.qmd')
+    await fs.writeFile(target, '# Report\nThe unique phrase is here.\n')
+    expect((await listDirectory(root)).map(item => item.name)).toEqual(['report.qmd'])
+    expect(await searchMarkdown({ root, query: 'unique phrase' })).toEqual([
+      { path: target, name: 'report.qmd', line: 2, text: 'The unique phrase is here.' },
+    ])
+  })
+
   it('shows hidden and non-markdown files only when enabled and applies file filters', async () => {
     await Promise.all(['2.md', '10.md', '.hidden.md', 'pic.png'].map(name => fs.writeFile(path.join(root, name), 'data')))
     await fs.mkdir(path.join(root, 'folder'))
@@ -34,7 +43,7 @@ describe('workspace file list and search', () => {
       await fs.writeFile(target, 'needle\n')
     }
     const result = await searchMarkdown({ root, query: 'needle', excludeDirectories: 'cache,projects/*/generated' })
-    expect(result.map(hit => path.relative(root, hit.path)).sort()).toEqual(['projects/one/source/visible.md', 'visible.md'])
+    expect(result.map(hit => path.relative(root, hit.path)).sort()).toEqual([path.join('projects', 'one', 'source', 'visible.md'), 'visible.md'])
     await expect(searchMarkdown({ root, query: 'needle', excludeDirectories: '../outside' })).rejects.toMatchObject({ code: 'INVALID_INPUT' })
   })
   it('searches deeply nested files and reports size or result limits', async () => {

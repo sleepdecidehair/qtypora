@@ -22,6 +22,21 @@ const createHistory = () => {
 }
 
 describe('file move history', () => {
+  it('creates, renames, and duplicates .qmd files as Markdown documents', async () => {
+    const { history } = createHistory()
+    const source = path.join(root, 'report.qmd')
+    const bytes = Buffer.from('\ufeff# Report\r\nBody\n', 'utf8')
+    await fs.writeFile(source, bytes)
+    const created = await history.create(root, root, 'created.qmd')
+    expect(created.name).toBe('created.qmd')
+    expect(await fs.readFile(created.path)).toEqual(Buffer.alloc(0))
+    const renamed = await history.rename(root, created.path, 'renamed.qmd')
+    expect(renamed.name).toBe('renamed.qmd')
+    const duplicate = await history.duplicate(root, source)
+    expect(duplicate.name).toBe('report - 副本.qmd')
+    expect(await fs.readFile(duplicate.path)).toEqual(bytes)
+  })
+
   it.skipIf(process.platform !== 'darwin' && process.platform !== 'win32')('moves and undoes a directory while preserving open buffers, orphan drafts and resource tokens', async () => {
     const source = path.join(root, 'source'), destination = path.join(root, 'target', 'source')
     await fs.mkdir(path.join(source, 'nested'), { recursive: true })

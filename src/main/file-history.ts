@@ -2,7 +2,8 @@ import * as fs from 'node:fs/promises'
 import { randomUUID } from 'node:crypto'
 import path from 'node:path'
 import type { FileEntry } from '../shared/contracts'
-import { canonicalInside, canonicalPath, hashBytes, MARKDOWN_EXTENSIONS, MAX_DOCUMENT_BYTES, safeName, serialized } from './files'
+import { isMarkdownExtension } from '../shared/markdown-files'
+import { canonicalInside, canonicalPath, hashBytes, MAX_DOCUMENT_BYTES, safeName, serialized } from './files'
 import { DesktopError } from './errors'
 import { readFileSnapshot, type FileIdentity } from './file-snapshot'
 import { moveDirectoryExclusive } from './directory-move'
@@ -118,7 +119,7 @@ export class FileMoveHistory {
     return serialized(this.queue, async () => {
       const root = await canonicalPath(workspace)
       safeName(name)
-      if (!MARKDOWN_EXTENSIONS.has(path.extname(name).toLowerCase())) throw new DesktopError('INVALID_INPUT', '文档名称需要 Markdown 或 .txt 扩展名。')
+      if (!isMarkdownExtension(path.extname(name))) throw new DesktopError('INVALID_INPUT', '文档名称需要 Markdown 或 .txt 扩展名。')
       const parent = await canonicalInside(path.resolve(directory), root)
       if (!(await fs.stat(parent)).isDirectory()) throw new DesktopError('INVALID_INPUT', '请在文件夹内创建文件。')
       const destination = await canonicalInside(path.join(parent, name), root, true)
@@ -150,7 +151,7 @@ export class FileMoveHistory {
       const source = await canonicalInside(path.resolve(sourcePath), root)
       const bytes = await this.hooks.withDocumentLocks(source, async () => {
         const stat = await fs.lstat(source)
-        if (!stat.isFile() || stat.isSymbolicLink() || !MARKDOWN_EXTENSIONS.has(path.extname(source).toLowerCase()) || stat.size > MAX_DOCUMENT_BYTES) throw new DesktopError('UNSUPPORTED', '只能为不超过 16 MB 的普通 Markdown 或文本文件创建副本。')
+        if (!stat.isFile() || stat.isSymbolicLink() || !isMarkdownExtension(path.extname(source)) || stat.size > MAX_DOCUMENT_BYTES) throw new DesktopError('UNSUPPORTED', '只能为不超过 16 MB 的普通 Markdown 或文本文件创建副本。')
         return (await readFileSnapshot(source, MAX_DOCUMENT_BYTES, stat)).bytes
       })
       const parsed = path.parse(source)

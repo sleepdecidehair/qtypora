@@ -2,13 +2,23 @@ import * as fs from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import { atomicWrite, canonicalInside, encodedDocument, MAX_DOCUMENT_BYTES, readMarkdown, safeName, saveMarkdown, searchMarkdown } from './files'
+import { atomicWrite, canonicalInside, encodedDocument, MAX_DOCUMENT_BYTES, readClosedMarkdown, readMarkdown, safeName, saveMarkdown, searchMarkdown } from './files'
 
 let directory: string
 beforeEach(async () => { directory = await fs.mkdtemp(path.join(os.tmpdir(), 'qtypora-files-')) })
 afterEach(async () => { await fs.rm(directory, { recursive: true, force: true }) })
 
 describe('Markdown filesystem behavior', () => {
+  it('opens and saves Quarto Markdown as an ordinary text document', async () => {
+    const target = path.join(directory, 'report.qmd')
+    await fs.writeFile(target, '# Report\n\nOriginal text.\n')
+    const document = await readMarkdown(target)
+    expect(document.content).toBe('# Report\n\nOriginal text.\n')
+    expect((await readClosedMarkdown(await fs.realpath(target))).content).toBe(document.content)
+    await saveMarkdown(document, target, '# Report\n\nEdited text.\n', true)
+    expect(await fs.readFile(target, 'utf8')).toBe('# Report\n\nEdited text.\n')
+  })
+
   it('round-trips UTF-8 BOM and CRLF without changing Chinese content', async () => {
     const target = path.join(directory, '中文.md')
     await fs.writeFile(target, encodedDocument('# 标题\n中文第一行\n', 'utf8-bom', 'CRLF'))

@@ -3,6 +3,7 @@ import { constants, realpath } from 'node:fs'
 import * as fs from 'node:fs/promises'
 import path from 'node:path'
 import type { DocumentRecord, FileEntry, LineEnding, SearchHit, SearchRequest, SearchResults } from '../shared/contracts'
+import { isMarkdownExtension } from '../shared/markdown-files'
 import { DesktopError, invalid } from './errors'
 import { compareWorkspaceEntries, excludesSearchDirectory, matchesFileFilter, normalizeWorkspaceOptions, parseSearchExclusions, type WorkspaceOptions } from '../shared/workspace-options'
 import { createTextSearch } from '../shared/search'
@@ -10,7 +11,7 @@ import { readFileSnapshot, type FileIdentity } from './file-snapshot'
 
 import { MAX_DOCUMENT_BYTES } from '../shared/document-size'
 export { MAX_DOCUMENT_BYTES } from '../shared/document-size'
-export const MARKDOWN_EXTENSIONS = new Set(['.md', '.markdown', '.mdown', '.mkd', '.txt'])
+export { MARKDOWN_EXTENSIONS } from '../shared/markdown-files'
 export const IMAGE_MIME: Record<string, string> = {
   '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.gif': 'image/gif',
   '.webp': 'image/webp', '.bmp': 'image/bmp', '.svg': 'image/svg+xml', '.ico': 'image/x-icon',
@@ -32,7 +33,7 @@ export function encodedDocument(content: string, encoding: DocumentRecord['encod
 }
 
 export async function readMarkdown(filePath: string, id: string = randomUUID(), onIdentity?: (identity: FileIdentity) => void): Promise<DocumentRecord> {
-  if (!MARKDOWN_EXTENSIONS.has(path.extname(filePath).toLowerCase())) throw new DesktopError('UNSUPPORTED', '仅支持打开 Markdown 或 UTF-8 文本文件。')
+  if (!isMarkdownExtension(path.extname(filePath))) throw new DesktopError('UNSUPPORTED', '仅支持打开 Markdown 或 UTF-8 文本文件。')
   const stat = await fs.stat(filePath)
   if (!stat.isFile()) invalid('请选择文件。')
   if (stat.size > MAX_DOCUMENT_BYTES) throw new DesktopError('UNSUPPORTED', '当前开发版支持最大 16 MB 的文档。')
@@ -65,7 +66,7 @@ function sameCanonicalPath(first: string, second: string): boolean {
 
 /** Reopen a previously authorized canonical path without following a replacement symlink. */
 export async function readClosedMarkdown(filePath: string, onIdentity?: (identity: FileIdentity) => void): Promise<DocumentRecord> {
-  if (!MARKDOWN_EXTENSIONS.has(path.extname(filePath).toLowerCase())) throw new DesktopError('UNSUPPORTED', '仅支持打开 Markdown 或 UTF-8 文本文件。')
+  if (!isMarkdownExtension(path.extname(filePath))) throw new DesktopError('UNSUPPORTED', '仅支持打开 Markdown 或 UTF-8 文本文件。')
   const before = await fs.lstat(filePath)
   if (!before.isFile() || before.isSymbolicLink() || !sameCanonicalPath(await canonicalPath(filePath), filePath)) throw new DesktopError('CONFLICT', '关闭的文件路径已变化，请重新选择文件。')
   if (before.size > MAX_DOCUMENT_BYTES) throw new DesktopError('UNSUPPORTED', '当前开发版支持最大 16 MB 的文档。')
@@ -191,7 +192,7 @@ export async function listDirectory(directory: string, input?: WorkspaceOptions)
   const options = normalizeWorkspaceOptions(input)
   const names = await fs.readdir(directory, { withFileTypes: true })
   const entries = await Promise.all(names.filter((entry) => (options.showHidden || !entry.name.startsWith('.')) && !entry.isSymbolicLink() &&
-    (entry.isDirectory() || (entry.isFile() && (options.showAllFiles || MARKDOWN_EXTENSIONS.has(path.extname(entry.name).toLowerCase())) && matchesFileFilter(entry.name, options.filter)))).map(async (entry) => {
+    (entry.isDirectory() || (entry.isFile() && (options.showAllFiles || isMarkdownExtension(path.extname(entry.name))) && matchesFileFilter(entry.name, options.filter)))).map(async (entry) => {
     const entryPath = path.join(directory, entry.name)
     const stat = await fs.stat(entryPath)
     return { name: entry.name, path: entryPath, kind: entry.isDirectory() ? 'directory' as const : 'file' as const, modifiedAt: stat.mtimeMs, createdAt: stat.birthtimeMs }
@@ -223,7 +224,7 @@ export function safeName(name: string): string {
 
 export async function duplicateMarkdown(source: string): Promise<FileEntry> {
   const stat = await fs.lstat(source)
-  if (!stat.isFile() || stat.isSymbolicLink() || !MARKDOWN_EXTENSIONS.has(path.extname(source).toLowerCase()) || stat.size > MAX_DOCUMENT_BYTES) {
+  if (!stat.isFile() || stat.isSymbolicLink() || !isMarkdownExtension(path.extname(source)) || stat.size > MAX_DOCUMENT_BYTES) {
     throw new DesktopError('UNSUPPORTED', '只能为不超过 16 MB 的普通 Markdown 或文本文件创建副本。')
   }
   const parsed = path.parse(source)

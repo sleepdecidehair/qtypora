@@ -1,4 +1,5 @@
 import type { FileEntry } from '../../shared/contracts'
+import { isMarkdownFileName } from '../../shared/markdown-files'
 import { filePathKey } from './workspaceFiles'
 
 export interface QuickOpenDocument { id: string; name: string; path: string | null; isDirty: boolean }
@@ -23,7 +24,7 @@ export function quickOpenItems(documents: QuickOpenDocument[], recentFiles: stri
     items.push({ key, name: path.split(/[\\/]/).pop() ?? path, path, id: null, scope: 'recent', isDirty: false })
   }
   for (const file of files) {
-    if (!/\.(?:md|markdown|mdown|mkd|txt)$/i.test(file.name)) continue
+    if (!isMarkdownFileName(file.name)) continue
     const key = filePathKey(file.path)
     if (seen.has(key)) continue
     seen.add(key)

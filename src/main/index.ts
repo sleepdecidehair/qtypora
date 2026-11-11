@@ -19,12 +19,13 @@ import { minimizeAllDocumentWindows } from './minimize-all'
 import { importExportPresets, exportExportPresets } from './export-preset-files'
 import { EXPORT_FORMATS, type SavedExportPreset } from '../shared/export-options'
 import { createExportPresetFile, mergeImportedExportPresets } from '../shared/export-preset-file'
+import { isMarkdownExtension, MARKDOWN_EXTENSIONS } from '../shared/markdown-files'
 import { normalizeWorkspaceOptions } from '../shared/workspace-options'
 import { organizeImages, importImages, importImageFiles, readSelectedImageFiles, validateImageImport } from './image-import'
 import { openLinkedFile } from './linked-files'
 import { withEmbeddedImportMedia } from './pandoc-import-media'
 import { PANDOC_IMPORT_FORMATS, runPandoc } from './pandoc'
-import { canonicalInside, canonicalPath, IMAGE_MIME, listDirectory, MARKDOWN_EXTENSIONS, MAX_DOCUMENT_BYTES, safeName, serialized, searchMarkdownDetailed } from './files'
+import { canonicalInside, canonicalPath, IMAGE_MIME, listDirectory, MAX_DOCUMENT_BYTES, safeName, serialized, searchMarkdownDetailed } from './files'
 import { LocalStore, validatePreferences } from './preferences'
 import { ResourceRegistry } from './resources'
 import { createMenuTemplate } from './menu'
@@ -196,7 +197,7 @@ async function openSystemFile(filePath: string): Promise<void> {
 }
 
 async function openSystemFileActive(filePath: string): Promise<void> {
-  if (!MARKDOWN_EXTENSIONS.has(path.extname(filePath).toLowerCase())) throw new DesktopError('UNSUPPORTED', '仅支持打开 Markdown 或 UTF-8 文本文件。')
+  if (!isMarkdownExtension(path.extname(filePath))) throw new DesktopError('UNSUPPORTED', '仅支持打开 Markdown 或 UTF-8 文本文件。')
   const context = focused()
   if (!context || context.closing || context.closeCheckPending || context.approvedClose) { await createWindow(filePath); return }
   const document = await context.documents.open(filePath, true)
@@ -226,7 +227,7 @@ async function createWindow(openPath?: string, options: { nativeTab?: boolean } 
         const selected = await dialog.showSaveDialog(window, { title: localText('保存 Markdown', 'Save Markdown'), defaultPath: record.path ?? record.name, filters: markdownFilters(),
           properties: ['showOverwriteConfirmation', 'createDirectory'] })
         if (selected.canceled || !selected.filePath) return null
-        if (!MARKDOWN_EXTENSIONS.has(path.extname(selected.filePath).toLowerCase())) throw new DesktopError('UNSUPPORTED', '请使用 .md、.markdown 或 .txt 扩展名。')
+        if (!isMarkdownExtension(path.extname(selected.filePath))) throw new DesktopError('UNSUPPORTED', '请使用 .md、.markdown、.qmd 或 .txt 扩展名。')
         const missingImages = await missingImagesAfterSaveAs(record.content, record.path, selected.filePath)
         if (missingImages.length) {
           const answer = await dialog.showMessageBox(window, { type: 'warning', title: localText('另存为后的图片路径', 'Image paths after Save As'),
@@ -426,7 +427,7 @@ async function runFileAction(context: WindowContext, action: FileAction): Promis
     return renamed
   }
   if (!(await fs.stat(source)).isDirectory()) invalid('请在文件夹内创建文件。')
-  if (action.action === 'create-file' && !MARKDOWN_EXTENSIONS.has(path.extname(name).toLowerCase())) invalid('文档名称需要 Markdown 或 .txt 扩展名。')
+  if (action.action === 'create-file' && !isMarkdownExtension(path.extname(name))) invalid('文档名称需要 Markdown 或 .txt 扩展名。')
   const created = action.action === 'create-folder' ? await context.fileMoves.createDirectory(root, source, name) : await context.fileMoves.create(root, source, name)
   send(context, { type: 'workspace-changed', path: root })
   return created
@@ -810,7 +811,7 @@ function registerIpc(): void {
     if (input === undefined) { await createWindow(); return }
     const authorized = await context.documents.authorize(string(input, '新窗口路径'))
     const stat = await fs.lstat(authorized)
-    if (!stat.isDirectory() && (!stat.isFile() || !MARKDOWN_EXTENSIONS.has(path.extname(authorized).toLowerCase()))) throw new DesktopError('UNSUPPORTED', '新窗口只能打开已授权的文件夹、Markdown 或文本文件。')
+    if (!stat.isDirectory() && (!stat.isFile() || !isMarkdownExtension(path.extname(authorized)))) throw new DesktopError('UNSUPPORTED', '新窗口只能打开已授权的文件夹、Markdown 或文本文件。')
     await createWindow(authorized)
   }))
 }
@@ -830,7 +831,7 @@ app.whenReady().then(async () => {
   createMenus()
   const jumpListStatus = configureWindowsJumpList(app, process.platform, app.isPackaged, process.execPath)
   if (jumpListStatus !== 'ok' && jumpListStatus !== 'not-applicable') console.error('[app] Jump List unavailable:', jumpListStatus)
-  const openPath = process.argv.slice(1).find((argument) => MARKDOWN_EXTENSIONS.has(path.extname(argument).toLowerCase()))
+  const openPath = process.argv.slice(1).find((argument) => isMarkdownExtension(path.extname(argument)))
   const startup = store.preferences.startup
   const restoredPath = startup === 'last-file' ? store.recentFiles[0] : startup === 'last-folder' ? store.recentFolders[0] : startup === 'custom-folder' ? store.preferences.startupFolder : undefined
   await createWindow(process.argv.includes('--new-document') ? undefined : openPath || restoredPath || undefined)

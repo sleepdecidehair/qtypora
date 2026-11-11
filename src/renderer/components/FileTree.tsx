@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent } from 'react'
 import { ChevronDown, ChevronRight, FileText, Folder, FolderOpen, FilePlus2, FolderPlus, Pencil, Trash2, RefreshCw, FolderInput, Undo2 } from 'lucide-react'
 import type { DesktopApi, FileEntry, Workspace } from '../../shared/contracts'
+import { isMarkdownFileName } from '../../shared/markdown-files'
 import { isDirty, type EditorDocument } from '../hooks/useDocuments'
 import { reconcileFileTree, treeKeyboardTarget, visibleFileTree, type FileTreeState } from '../hooks/fileTree'
 import { filePathKey, indexWorkspaceFiles } from '../hooks/workspaceFiles'
@@ -158,7 +159,7 @@ function FileTreeView(props: FileTreeProps) {
     return compareWorkspaceEntries(first, second, options)
   }), [list.files, options])
   const openEntry = (entry: FileEntry) => {
-    if (/\.(?:md|markdown|mdown|mkd|txt)$/i.test(entry.name)) props.onOpen(entry.path)
+    if (isMarkdownFileName(entry.name)) props.onOpen(entry.path)
     else void props.api.revealFile(entry.path).then(result => { if (!result.ok) errorRef.current(result.error.message) }).catch((error: unknown) => errorRef.current(error instanceof Error ? error.message : tRef.current('无法显示文件')))
   }
 

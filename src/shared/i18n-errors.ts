@@ -232,7 +232,7 @@ export const englishErrors: Readonly<Record<string, string>> = {
   '关闭窗口时文档快照不完整，请重试。': 'The document snapshot was incomplete while closing the window. Try again.',
   '目录位置已更新，但部分草稿写入失败；请保留窗口并另存文档。': 'The folder location was updated, but some drafts could not be written. Keep the window open and save copies.',
   '导入压缩包无效、已加密或超过展开限制（单项 32 MB，总共 128 MB，最多 2048 项）。': 'The import archive is invalid, encrypted, or exceeds the extraction limits (32 MB per item, 128 MB total, 2,048 items).',
-  '请使用 .md、.markdown 或 .txt 扩展名。': 'Use a .md, .markdown, or .txt extension.',
+  '请使用 .md、.markdown、.qmd 或 .txt 扩展名。': 'Use a .md, .markdown, .qmd, or .txt extension.',
   '其他窗口正以此目录或其子目录作为工作区，请先切换工作区。': 'Another window uses this folder or a descendant as its workspace. Switch that workspace first.',
   '不可信的桌面通信来源。': 'The desktop communication source is not trusted.',
   '该页面没有桌面访问权限。': 'This page does not have desktop access.',

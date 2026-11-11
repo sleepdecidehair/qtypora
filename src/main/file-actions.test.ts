@@ -20,6 +20,15 @@ describe('New unique filesystem resources', () => {
     expect(await fs.readFile(source)).toEqual(bytes)
   })
 
+  it('duplicates .qmd documents byte for byte under the same extension', async () => {
+    const source = path.join(directory, 'report.qmd')
+    const bytes = Buffer.from('\ufeff# Report\r\nBody\n', 'utf8')
+    await fs.writeFile(source, bytes)
+    const duplicate = await duplicateMarkdown(source)
+    expect(duplicate.name).toBe('report - 副本.qmd')
+    expect(await fs.readFile(duplicate.path)).toEqual(bytes)
+  })
+
   it('rejects folders and files outside the supported Markdown/text formats', async () => {
     await fs.writeFile(path.join(directory, 'program.js'), 'script')
     await expect(duplicateMarkdown(directory)).rejects.toMatchObject({ code: 'UNSUPPORTED' })

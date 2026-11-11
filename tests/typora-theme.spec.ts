@@ -1,9 +1,77 @@
 import { test, expect, type Page } from '@playwright/test'
 import { mkdir, readFile, unlink, writeFile } from 'node:fs/promises'
 import path from 'node:path'
-import { clickNativeMenu, launchDesktop, openFixture, setSaveDialog, stopDesktop } from './desktop-helpers'
+import { captureDesktop, clickNativeMenu, launchDesktop, openFixture, setSaveDialog, stopDesktop } from './desktop-helpers'
 
 const color = (page: Page) => page.locator('.cm-content').evaluate(element => getComputedStyle(element).color)
+
+test('Typora 目录层级样式在预览和 HTML 导出中隐藏条目但保留标题与原文', async () => {
+  const session = await launchDesktop()
+  try {
+    const themes = path.join(session.userData, 'themes')
+    await mkdir(themes, { recursive: true })
+    await writeFile(path.join(themes, 'toc-levels.css'), 'body, #write .md-toc-h6 { display: none; }')
+    const original = '[toc]\n\n# 一级标题\n\n##### 五级标题\n\n###### 六级标题\n\n正文保持不变。\n'
+    const source = await openFixture(session, 'toc-levels.md', original)
+    await session.page.keyboard.press('ControlOrMeta+/')
+    await expect(session.page.locator('.cm-content')).toHaveAttribute('data-mode', 'hybrid')
+    await expect(session.page.locator('.md-toc a')).toHaveCount(3)
+    await session.page.getByTestId('preferences-button').click()
+    const select = session.page.getByLabel('Typora 主题', { exact: true })
+    await expect(select.locator('option[value="toc-levels"]')).toHaveCount(1)
+    await select.selectOption('toc-levels')
+    const sixth = session.page.locator('.md-toc a[href="#六级标题"]')
+    const fifth = session.page.locator('.md-toc a[href="#五级标题"]')
+    await expect(sixth).toBeHidden()
+    await expect(fifth).toBeVisible()
+    await expect(session.page.locator('.cm-content')).toBeVisible()
+    await session.page.getByLabel('正文自定义 CSS').fill('.md-toc-h5 { display: none; }')
+    await expect(fifth).toBeHidden()
+    await session.page.getByRole('button', { name: '完成', exact: true }).click()
+    await expect(session.page.getByRole('dialog')).toHaveCount(0)
+    await expect(session.page.locator('.cm-live-heading-6')).toBeVisible()
+    await session.page.evaluate(() => new Promise<void>(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))))
+    await captureDesktop(session, path.join(process.cwd(), '.debug', 'typora-parity-2026-11-11', 'toc-levels.png'), { presentInactive: true })
+
+    const output = path.join(session.root, 'toc-levels.html')
+    await setSaveDialog(session, output)
+    await clickNativeMenu(session, 'HTML…')
+    await expect.poll(async () => { try { return await readFile(output, 'utf8') } catch { return '' } }).toContain('md-toc-h6')
+    const opening = session.app.waitForEvent('window')
+    await session.app.evaluate(({ BrowserWindow }, filename) => {
+      const preview = new BrowserWindow({ show: false, webPreferences: { sandbox: true, contextIsolation: true, nodeIntegration: false } })
+      void preview.loadFile(filename)
+    }, output)
+    const exported = await opening
+    await expect(exported.locator('.md-toc a')).toHaveCount(3)
+    await expect(exported.locator('.md-toc-h5')).toBeHidden()
+    await expect(exported.locator('.md-toc-h6')).toBeHidden()
+    await expect(exported.locator('h6')).toBeVisible()
+    await expect(exported.locator('body')).toBeVisible()
+    await exported.close()
+
+    await session.page.getByTestId('preferences-button').click()
+    await session.page.getByLabel('正文自定义 CSS').fill('')
+    await session.page.getByRole('button', { name: '完成', exact: true }).click()
+    await expect(fifth).toBeVisible()
+    await fifth.click()
+    const heading = session.page.locator('.cm-line[data-source-line="5"]')
+    await expect(heading).toBeInViewport()
+    await session.page.keyboard.press('ControlOrMeta+/')
+    await expect(session.page.locator('.cm-content')).toHaveAttribute('data-mode', 'source')
+    await session.page.keyboard.press('Home')
+    await session.page.keyboard.type('#')
+    await session.page.keyboard.press('ControlOrMeta+End')
+    await session.page.keyboard.press('ControlOrMeta+/')
+    await expect(session.page.locator('.cm-content')).toHaveAttribute('data-mode', 'hybrid')
+    await expect(fifth).toBeHidden()
+    await session.page.keyboard.press('ControlOrMeta+z')
+    await expect(fifth).toBeVisible()
+    await session.page.keyboard.press('ControlOrMeta+s')
+    await expect.poll(() => readFile(source, 'utf8')).toBe(original)
+    expect(session.errors).toEqual([])
+  } finally { await stopDesktop(session) }
+})
 
 test('Typora 主题选择、刷新和重启保持安全样式与 Markdown 原文', async () => {
   let session = await launchDesktop()

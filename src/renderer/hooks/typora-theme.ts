@@ -35,10 +35,11 @@ function replaceVariables(value: string, variables: Map<string, string>): string
   return missing || /var\s*\(/i.test(result) ? null : result
 }
 
-function selectors(raw: string): { editor: string[]; exported: string[] } | null {
+function selectors(raw: string): { editor: string[]; exported: string[]; tocLevel?: true } | null {
   const name = raw.trim().replace(/^#write\s+/, '')
   const root = '.document-pane .cm-content', preview = '.document-pane .md-preview-block'
   if (['html', 'body', '#write'].includes(name)) return { editor: [root, preview], exported: ['body'] }
+  if (/^\.md-toc-h[1-6]$/.test(name)) return { editor: [`${root} ${name}`, `${preview} ${name}`], exported: [`body ${name}`], tocLevel: true }
   const heading = /^h([1-6])$/.exec(name)
   if (heading) return { editor: [`${root} :where(.cm-line).cm-live-heading-${heading[1]}`, `${preview} h${heading[1]}`], exported: [`body h${heading[1]}`] }
   // A rendered table is a widget rather than Markdown text lines. Keep the
@@ -64,14 +65,16 @@ export function mapTyporaThemeRules(rules: readonly ThemeRule[]): ThemeCss {
   for (const rule of rules) {
     const media = rule.media ? mediaCondition(rule.media) : null
     if (rule.media && !media) continue
-    const declarations = rule.declarations.flatMap(({ property, value }) => {
-      const resolved = replaceVariables(value, variables)
-      return resolved !== null && safeDeclaration(property.toLowerCase(), resolved) ? [`${property.toLowerCase()}:${resolved}`] : []
-    }).join(';')
-    if (!declarations) continue
     for (const raw of rule.selector.split(',')) {
       const mapped = selectors(raw)
       if (!mapped) continue
+      const declarations = rule.declarations.flatMap(({ property, value }) => {
+        const resolved = replaceVariables(value, variables)
+        const name = property.toLowerCase()
+        const hideTocLevel = mapped.tocLevel && name === 'display' && resolved?.trim().toLowerCase() === 'none'
+        return resolved !== null && (hideTocLevel || safeDeclaration(name, resolved)) ? [`${name}:${resolved}`] : []
+      }).join(';')
+      if (!declarations) continue
       const edit = `${mapped.editor.join(',')}{${declarations}}`
       const output = `${mapped.exported.join(',')}{${declarations}}`
       editor.push(media ? `@media ${media}{${edit}}` : edit)

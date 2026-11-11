@@ -45,6 +45,23 @@ describe('Typora theme selector mapping', () => {
     expect(result.export).toBe('body{font-family:Arial, sans-serif}')
   })
 
+  it('hides only the requested TOC levels across editor, preview and export', () => {
+    const result = mapTyporaThemeRules([
+      { selector: 'body, #write .md-toc-h6, .md-toc-h5', declarations: [{ property: 'display', value: 'none' }, { property: 'color', value: 'red' }] },
+    ])
+    expect(result.export).toBe('body{color:red}\nbody .md-toc-h6{display:none;color:red}\nbody .md-toc-h5{display:none;color:red}')
+    expect(result.editor).toContain('.cm-content .md-toc-h6,.document-pane .md-preview-block .md-toc-h6{display:none;color:red}')
+    expect(result.editor).not.toContain('.cm-content,.document-pane .md-preview-block{display:none')
+  })
+
+  it('does not extend TOC hiding to arbitrary selectors or display values', () => {
+    const result = mapTyporaThemeRules([
+      { selector: '.md-toc-h0, .md-toc-h7, .md-toc-h6 a, h6, .toolbar', declarations: [{ property: 'display', value: 'none' }] },
+      { selector: '.md-toc-h6', declarations: [{ property: 'display', value: 'contents' }, { property: 'position', value: 'fixed' }] },
+    ])
+    expect(result).toEqual({ editor: '', export: '' })
+  })
+
   it('maps Typora table and cell colors to editable tables, previews and exports', () => {
     const result = mapTyporaThemeRules([
       { selector: 'table th, table td', declarations: [{ property: 'border-color', value: '#ccc' }, { property: 'background-color', value: '#fafafa' }] },

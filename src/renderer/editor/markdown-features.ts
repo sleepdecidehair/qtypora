@@ -117,7 +117,7 @@ export function installDocumentFeatures(parser: MarkdownIt, options: MarkdownOpt
       let html = tocCache.get(count)
       if (html === undefined) {
         const escape = parser.utils.escapeHtml
-        html = `<nav class="md-toc" aria-label="${escape(editorText(locale, '文章目录'))}"><ol>${headings.slice(0, count).map(heading => `<li class="md-toc-level-${heading.level}"><a href="#${escape(heading.slug)}">${escape(heading.text || editorText(locale, '无标题'))}</a></li>`).join('')}</ol>${count < headings.length ? `<p>${escape(editorText(locale, '目录条目超过当前文档的预览上限，请使用侧栏大纲查看全部标题。'))}</p>` : ''}</nav>\n`
+        html = `<nav class="md-toc" aria-label="${escape(editorText(locale, '文章目录'))}"><ol>${headings.slice(0, count).map(heading => `<li class="md-toc-level-${heading.level} md-toc-h${heading.level}"><a href="#${escape(heading.slug)}">${escape(heading.text || editorText(locale, '无标题'))}</a></li>`).join('')}</ol>${count < headings.length ? `<p>${escape(editorText(locale, '目录条目超过当前文档的预览上限，请使用侧栏大纲查看全部标题。'))}</p>` : ''}</nav>\n`
         tocCache.set(count, html)
       }
       remainingTocEntries -= count

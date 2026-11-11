@@ -57,6 +57,17 @@ describe('document structure compatibility', () => {
     }
     expect(parser.render('> {:toc}\n\n- [[_TOC_]]\n\n# title')).not.toContain('class="md-toc"')
   })
+  it('exposes Typora level selectors in TOC previews and exports without changing source', () => {
+    const source = '[toc]\n\n' + Array.from({ length: 6 }, (_, index) => `${'#'.repeat(index + 1)} Heading ${index + 1}`).join('\n\n')
+    const editor = state(source)
+    const preview = liveBlocks(editor).find(block => block.kind === 'toc')?.html
+    for (let level = 1; level <= 6; level++) {
+      const entry = `class="md-toc-level-${level} md-toc-h${level}"`
+      expect(preview).toContain(entry)
+      expect(parser.render(source)).toContain(entry)
+    }
+    expect(editor.doc.toString()).toBe(source)
+  })
   it('renders all five Alerts without confusing unknown types, nested content or fenced examples', () => {
     for (const type of ['NOTE', 'TIP', 'IMPORTANT', 'WARNING', 'CAUTION']) {
       const html = parser.render(`> [!${type}]\n> **正文**\n>\n> - 保留列表`)
@@ -161,7 +172,7 @@ describe('stable cached rendering and bounded document expansion', () => {
     const source = '[toc]\n\n'.repeat(100) + '# same\n'.repeat(1000)
     const html = parser.render(source)
     expect(html.match(/<h1 /g)).toHaveLength(1000)
-    expect(html.match(/class="md-toc-level-1"/g)).toHaveLength(5000)
+    expect(html.match(/class="md-toc-level-1 md-toc-h1"/g)).toHaveLength(5000)
     expect(html).toContain('侧栏大纲')
     expect(html.length).toBeLessThan(400000)
   })

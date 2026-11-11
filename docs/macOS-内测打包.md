@@ -21,7 +21,7 @@ npm run package:mac:internal
 - `logs/`：打包流水线、单元测试、产物检查和两个架构的桌面测试记录。
 - `mac*/QTypora Internal.app`：仅用于构建诊断和真实启动测试，不需要与 DMG 一起分发。
 
-失败日志保存在 `.debug/package-runs/<时间>-<编号>/logs/`。任一架构的构建、签名、DMG 校验或真实启动测试失败，都不会更新 `latest-mac.json`。`.debug/package.lock` 拒绝并发打包；进程被强行终止时，确认没有打包进程后才可删除遗留锁文件。
+失败日志保存在 `.debug/package-runs/<时间>-<编号>/logs/`。任一架构的构建、签名、DMG 校验或真实启动测试失败，都不会更新 `latest-mac.json`。Git common directory 中的 `qtypora-package-mac.lock` 拒绝当前仓库及其 linked worktree 并发打包，并兼容独立 Git 元数据目录；进程被强行终止时，确认所有 worktree 都没有打包进程后才可删除遗留锁文件。
 
 ## 签名与 Gatekeeper 边界
 

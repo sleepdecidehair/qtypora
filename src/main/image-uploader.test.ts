@@ -40,6 +40,19 @@ describe('explicitly configured image uploader', () => {
     await expect(runImageUploader(['a.png'], options)).rejects.toThrow('退出代码 2')
     await expect(runImageUploader(['a.png'], options)).rejects.not.toThrow('private-token')
   })
+  it('takes ordered image results from the final lines after uploader logs', async () => {
+    const options = await uploader('console.log("https://uploader.example/help"); console.log("Upload complete"); console.log("https://images.example/a.png"); console.log("https://images.example/b.png"); console.log("")')
+    expect(await runImageUploader(['a.png', 'b.png'], options)).toEqual(['https://images.example/a.png', 'https://images.example/b.png'])
+    expect(uploaderUrls('https://uploader.example/help\r\nhttps://images.example/a.png\r\n\r\n', 1)).toEqual(['https://images.example/a.png'])
+  })
+  it('does not substitute a URL from earlier logs for a missing final result', () => {
+    for (const output of [
+      'https://images.example/a.png\nUpload failed',
+      'https://images.example/a.png\nfile:///private.png',
+      'https://images.example/a.png\ndata:image/png;base64,AA==',
+    ]) expect(() => uploaderUrls(output, 1)).toThrow()
+    expect(() => uploaderUrls('https://images.example/a.png\n\nhttps://images.example/b.png', 2)).toThrow()
+  })
   it('waits for an over-limit uploader process tree to stop before rejecting', async () => {
     const observed = path.join(directory, 'processes.json')
     const worker = 'setInterval(()=>{},100)'

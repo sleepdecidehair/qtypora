@@ -29,14 +29,14 @@ export function validateUploadImages(input: unknown): UploadImagesRequest {
 }
 
 export function uploaderUrls(output: string, count: number): string[] {
-  const urls = output.split(/\r?\n/).map(line => line.trim()).filter(line => /^https?:\/\/\S+$/i.test(line)).map(line => {
+  const lines = output.trimEnd().split(/\r?\n/).slice(-count).map(line => line.trim())
+  if (lines.length !== count || lines.some(line => !/^https?:\/\/\S+$/i.test(line))) throw new DesktopError('IO_ERROR', '上传器返回的图片地址数量与上传数量不一致，原文引用未改变。')
+  return lines.map(line => {
     let url
     try { url = new URL(line) } catch { invalid('上传器返回了无效图片地址。') }
     if (url.username || url.password || !['http:', 'https:'].includes(url.protocol)) invalid('上传器返回的地址不能包含登录凭据。')
     return url.href
   })
-  if (urls.length !== count) throw new DesktopError('IO_ERROR', '上传器返回的图片地址数量与上传数量不一致，原文引用未改变。')
-  return urls
 }
 
 export async function runImageUploader(paths: string[], rawOptions: ImageOptions): Promise<string[]> {

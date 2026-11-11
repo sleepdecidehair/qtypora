@@ -368,7 +368,7 @@ test('图片尺寸对话框更新显示坐标与局部原文，取消和撤销�
 test('用户配置上传器批量返回地址，替换实际引用且整批撤销恢复原文', async () => {
   const executable = process.execPath
   const script = path.join(session.root, 'upload.cjs')
-  await writeFile(script, 'process.argv.slice(2).forEach((_, index) => console.log("https://images.example/" + index + ".png"))')
+  await writeFile(script, 'console.log("https://uploader.example/help"); console.log("Upload complete"); process.argv.slice(2).forEach((_, index) => console.log("https://images.example/" + index + ".png"))')
   await session.page.evaluate(async ({ executable, script }) => {
     const result = await window.desktop.bootstrap()
     if (!result.ok) throw new Error(result.error.message)

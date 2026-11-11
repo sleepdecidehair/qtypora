@@ -11,6 +11,7 @@ export interface DesktopMenuItem extends Omit<MenuItemConstructorOptions, 'subme
 export interface MenuActions {
   command(command: AppCommand): void
   openRecent(filePath: string): void
+  openRecentFolder(folderPath: string): void
   minimizeAll(): void
   pastePlain?(): void
   toggleSoftBreaks?(): void
@@ -24,16 +25,23 @@ export interface MenuActions {
   about(): void
 }
 
-export function createMenuTemplate(platform: NodeJS.Platform, isPackaged: boolean, recentFiles: string[], actions: MenuActions, options: { shortcuts?: ShortcutOverrides; locale?: AppLocale; alwaysOnTop?: boolean; indentFirstLine?: boolean; softBreaks?: boolean; canRevealCurrentFile?: boolean; spellcheck?: boolean; lineEnding?: LineEnding; canChangeLineEnding?: boolean; nativeTabsEnabled?: boolean } = {}): DesktopMenuItem[] {
+export function createMenuTemplate(platform: NodeJS.Platform, isPackaged: boolean, recentFiles: string[], actions: MenuActions, options: { shortcuts?: ShortcutOverrides; locale?: AppLocale; alwaysOnTop?: boolean; indentFirstLine?: boolean; softBreaks?: boolean; canRevealCurrentFile?: boolean; spellcheck?: boolean; lineEnding?: LineEnding; canChangeLineEnding?: boolean; nativeTabsEnabled?: boolean; recentFolders?: string[]; pinnedFolders?: string[] } = {}): DesktopMenuItem[] {
   const isMac = platform === 'darwin'
   const tr = (source: string): string => translate(options.locale ?? 'zh-CN', source)
   const item = (label: string, command: AppCommand, accelerator?: string): DesktopMenuItem => ({ label: tr(label), accelerator: Object.hasOwn(options.shortcuts ?? {}, command) ? options.shortcuts?.[command as keyof ShortcutOverrides] || undefined : shortcutForCommand(command, platform, options.shortcuts ?? {}) ?? accelerator, click: () => actions.command(command) })
+  const pinnedFolders = options.pinnedFolders ?? []
+  const recentFolders = (options.recentFolders ?? []).filter(folder => !pinnedFolders.includes(folder))
+  const folderItems = (label: string, folders: string[]): DesktopMenuItem[] => folders.length ? [
+    { label: tr(label), enabled: false },
+    ...folders.map(folder => ({ label: folder.replaceAll('&', '&&'), click: () => actions.openRecentFolder(folder) })),
+    { type: 'separator' },
+  ] : []
   const template: DesktopMenuItem[] = [
     { label: tr('文件(&F)'), submenu: [
       item('新建', 'new', 'CmdOrCtrl+N'), ...(isMac ? [item('新建标签页', 'new-native-tab')] : []), item('新建窗口', 'new-window', 'CmdOrCtrl+Shift+N'),
       item('打开…', 'open', 'CmdOrCtrl+O'), item('打开文件夹…', 'open-folder'),
       ...(isMac ? [{ ...item('在 Finder 中显示当前文件', 'reveal-current-file'), enabled: options.canRevealCurrentFile ?? false }] : []),
-      { label: tr('最近使用的文件'), submenu: [item('重新打开关闭的文件', 'reopen-closed'), { type: 'separator' }, ...(recentFiles.length ? recentFiles.map((filePath) => ({
+      { label: tr('最近使用的文件与目录'), submenu: [item('重新打开关闭的文件', 'reopen-closed'), { type: 'separator' }, ...folderItems('固定目录', pinnedFolders), ...folderItems('最近目录', recentFolders), ...(recentFiles.length ? recentFiles.map((filePath) => ({
         label: filePath.replaceAll('&', '&&'), click: () => actions.openRecent(filePath),
       })) : [{ label: tr('暂无最近文档'), enabled: false }]), { type: 'separator' }, item('管理最近记录…', 'recent-items')] },
       { type: 'separator' }, item('保存', 'save', 'CmdOrCtrl+S'), item('另存为…', 'save-as', 'CmdOrCtrl+Shift+S'), item('保存全部', 'save-all'),

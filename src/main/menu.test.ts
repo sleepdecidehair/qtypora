@@ -8,11 +8,29 @@ function flatten(menu: DesktopMenuItem[]): DesktopMenuItem[] {
 
 function setup(platform: NodeJS.Platform = 'win32', isPackaged = false): { items: DesktopMenuItem[]; commands: AppCommand[] } {
   const commands: AppCommand[] = []
-  const actions: MenuActions = { command: (command) => commands.push(command), openRecent: () => undefined, minimizeAll: () => undefined, exit: () => undefined, about: () => undefined }
+  const actions: MenuActions = { command: (command) => commands.push(command), openRecent: () => undefined, openRecentFolder: () => undefined, minimizeAll: () => undefined, exit: () => undefined, about: () => undefined }
   return { items: flatten(createMenuTemplate(platform, isPackaged, [], actions)), commands }
 }
 
 describe('Official Typora menu shortcuts', () => {
+  it('lists pinned and recent folders once and dispatches them separately from files', () => {
+    const openedFiles: string[] = [], openedFolders: string[] = []
+    const actions: MenuActions = { command: () => undefined, openRecent: file => openedFiles.push(file), openRecentFolder: folder => openedFolders.push(folder), minimizeAll: () => undefined, exit: () => undefined, about: () => undefined }
+    for (const platform of ['win32', 'darwin'] as const) {
+      const items = flatten(createMenuTemplate(platform, false, ['C:/Notes/one.md'], actions, { pinnedFolders: ['C:/Notes & drafts'], recentFolders: ['C:/Notes & drafts', 'C:/Other'] }))
+      expect(items.filter(item => item.label === 'C:/Notes && drafts')).toHaveLength(1)
+      expect(items.find(item => item.label === '固定目录')).toMatchObject({ enabled: false })
+      items.find(item => item.label === 'C:/Notes && drafts')!.click?.()
+      items.find(item => item.label === 'C:/Other')!.click?.()
+      items.find(item => item.label === 'C:/Notes/one.md')!.click?.()
+    }
+    expect(openedFolders).toEqual(['C:/Notes & drafts', 'C:/Other', 'C:/Notes & drafts', 'C:/Other'])
+    expect(openedFiles).toEqual(['C:/Notes/one.md', 'C:/Notes/one.md'])
+    const translated = flatten(createMenuTemplate('darwin', false, [], actions, { locale: 'en-US', pinnedFolders: ['C:/Notes'] }))
+    expect(translated.some(item => item.label === 'Recent files and folders')).toBe(true)
+    expect(translated.some(item => item.label === 'Pinned folders')).toBe(true)
+  })
+
   it('exposes separate document list and file tree commands', () => {
     const { items, commands } = setup('darwin')
     const list = items.find(item => item.label === '文档列表')!
@@ -24,7 +42,7 @@ describe('Official Typora menu shortcuts', () => {
   })
   it('exposes the confirmed soft-break setting and dispatches its toggle', () => {
     let toggles = 0
-    const actions: MenuActions = { command: () => undefined, openRecent: () => undefined, minimizeAll: () => undefined, exit: () => undefined, about: () => undefined, toggleSoftBreaks: () => { toggles++ } }
+    const actions: MenuActions = { command: () => undefined, openRecent: () => undefined, openRecentFolder: () => undefined, minimizeAll: () => undefined, exit: () => undefined, about: () => undefined, toggleSoftBreaks: () => { toggles++ } }
     const item = flatten(createMenuTemplate('darwin', false, [], actions, { softBreaks: true })).find(entry => entry.label === '保留软换行')!
     expect(item).toMatchObject({ type: 'checkbox', checked: true })
     item.click?.()
@@ -32,7 +50,7 @@ describe('Official Typora menu shortcuts', () => {
   })
   it('shows the active line ending and disables conversion without an editable document', () => {
     const commands: AppCommand[] = []
-    const actions: MenuActions = { command: command => commands.push(command), openRecent: () => undefined, minimizeAll: () => undefined, exit: () => undefined, about: () => undefined }
+    const actions: MenuActions = { command: command => commands.push(command), openRecent: () => undefined, openRecentFolder: () => undefined, minimizeAll: () => undefined, exit: () => undefined, about: () => undefined }
     const items = flatten(createMenuTemplate('darwin', false, [], actions, { lineEnding: 'CRLF', canChangeLineEnding: true }))
     const crlf = items.find(item => item.label === 'Windows 换行符 (CRLF)')!
     const lf = items.find(item => item.label === 'Unix 换行符 (LF)')!
@@ -44,7 +62,7 @@ describe('Official Typora menu shortcuts', () => {
   })
   it('shows the macOS spelling checkbox using the confirmed preference', () => {
     let toggles = 0
-    const actions: MenuActions = { command: () => undefined, openRecent: () => undefined, minimizeAll: () => undefined, exit: () => undefined, about: () => undefined, toggleSpellcheck: () => { toggles++ } }
+    const actions: MenuActions = { command: () => undefined, openRecent: () => undefined, openRecentFolder: () => undefined, minimizeAll: () => undefined, exit: () => undefined, about: () => undefined, toggleSpellcheck: () => { toggles++ } }
     const items = flatten(createMenuTemplate('darwin', false, [], actions, { spellcheck: true }))
     const item = items.find(entry => entry.label === '键入时检查拼写')!
     expect(item).toMatchObject({ type: 'checkbox', checked: true })
@@ -65,7 +83,7 @@ describe('Official Typora menu shortcuts', () => {
   })
   it('adds Settings to the macOS application menu while registering its shortcut once', () => {
     const commands: AppCommand[] = []
-    const actions: MenuActions = { command: command => commands.push(command), openRecent: () => undefined, minimizeAll: () => undefined, exit: () => undefined, about: () => undefined }
+    const actions: MenuActions = { command: command => commands.push(command), openRecent: () => undefined, openRecentFolder: () => undefined, minimizeAll: () => undefined, exit: () => undefined, about: () => undefined }
     const menu = createMenuTemplate('darwin', false, [], actions)
     const application = menu[0]
     expect(application.role).toBe('appMenu')
@@ -84,7 +102,7 @@ describe('Official Typora menu shortcuts', () => {
   })
   it('enables the Finder entry only for an available current file', () => {
     const commands: AppCommand[] = []
-    const actions: MenuActions = { command: command => commands.push(command), openRecent: () => undefined, minimizeAll: () => undefined, exit: () => undefined, about: () => undefined }
+    const actions: MenuActions = { command: command => commands.push(command), openRecent: () => undefined, openRecentFolder: () => undefined, minimizeAll: () => undefined, exit: () => undefined, about: () => undefined }
     const find = (available: boolean) => flatten(createMenuTemplate('darwin', false, [], actions, { canRevealCurrentFile: available })).find(item => item.label === '在 Finder 中显示当前文件')!
     expect(find(false).enabled).toBe(false)
     expect(find(true).enabled).toBe(true)
@@ -94,7 +112,7 @@ describe('Official Typora menu shortcuts', () => {
   })
   it('routes and reflects paragraph first-line indentation', () => {
     const commands: AppCommand[] = []
-    const actions: MenuActions = { command: command => commands.push(command), openRecent: () => undefined, minimizeAll: () => undefined, exit: () => undefined, about: () => undefined }
+    const actions: MenuActions = { command: command => commands.push(command), openRecent: () => undefined, openRecentFolder: () => undefined, minimizeAll: () => undefined, exit: () => undefined, about: () => undefined }
     const item = flatten(createMenuTemplate('darwin', false, [], actions, { indentFirstLine: true })).find(entry => entry.label === '段落首行缩进')!
     expect(item).toMatchObject({ type: 'checkbox', checked: true })
     item.click?.()
@@ -105,12 +123,12 @@ describe('Official Typora menu shortcuts', () => {
     expect(mac.find(item => item.label === '开始朗读')?.role).toBe('startSpeaking')
     expect(mac.find(item => item.label === '停止朗读')?.role).toBe('stopSpeaking')
     expect(setup('win32').items.find(item => item.label === '语音')).toBeUndefined()
-    const actions: MenuActions = { command: () => undefined, openRecent: () => undefined, minimizeAll: () => undefined, exit: () => undefined, about: () => undefined }
+    const actions: MenuActions = { command: () => undefined, openRecent: () => undefined, openRecentFolder: () => undefined, minimizeAll: () => undefined, exit: () => undefined, about: () => undefined }
     expect(flatten(createMenuTemplate('darwin', false, [], actions, { locale: 'en-US' })).find(item => item.label === 'Start Speaking')?.role).toBe('startSpeaking')
   })
   it('opens the system emoji panel only from the macOS menu', () => {
     let opened = false
-    const actions: MenuActions = { command: () => undefined, openRecent: () => undefined, minimizeAll: () => undefined, exit: () => undefined, about: () => undefined, showEmojiPanel: () => { opened = true } }
+    const actions: MenuActions = { command: () => undefined, openRecent: () => undefined, openRecentFolder: () => undefined, minimizeAll: () => undefined, exit: () => undefined, about: () => undefined, showEmojiPanel: () => { opened = true } }
     flatten(createMenuTemplate('darwin', false, [], actions)).find(item => item.label === '表情与符号')?.click?.()
     expect(opened).toBe(true)
     expect(flatten(createMenuTemplate('win32', false, [], actions)).find(item => item.label === '表情与符号')).toBeUndefined()
@@ -119,7 +137,7 @@ describe('Official Typora menu shortcuts', () => {
   it('exposes plain text paste in the edit menu', () => {
     for (const platform of ['darwin', 'win32'] as const) {
       let invoked = false
-      const actions: MenuActions = { command: () => undefined, openRecent: () => undefined, minimizeAll: () => undefined, exit: () => undefined, about: () => undefined, pastePlain: () => { invoked = true } }
+      const actions: MenuActions = { command: () => undefined, openRecent: () => undefined, openRecentFolder: () => undefined, minimizeAll: () => undefined, exit: () => undefined, about: () => undefined, pastePlain: () => { invoked = true } }
       flatten(createMenuTemplate(platform, false, [], actions)).find(item => item.label === '粘贴为纯文本')?.click?.()
       expect(invoked).toBe(true)
     }
@@ -137,7 +155,7 @@ describe('Official Typora menu shortcuts', () => {
     expect(commands).toEqual(['toggle-always-on-top'])
   })
   it('reflects the active native window state in the view menu', () => {
-    const actions: MenuActions = { command: () => undefined, openRecent: () => undefined, minimizeAll: () => undefined, exit: () => undefined, about: () => undefined }
+    const actions: MenuActions = { command: () => undefined, openRecent: () => undefined, openRecentFolder: () => undefined, minimizeAll: () => undefined, exit: () => undefined, about: () => undefined }
     const items = flatten(createMenuTemplate('darwin', false, [], actions, { alwaysOnTop: true }))
     expect(items.find(item => item.label === '窗口置顶 / 取消置顶')).toMatchObject({ type: 'checkbox', checked: true })
   })
@@ -213,7 +231,7 @@ describe('Official Typora menu shortcuts', () => {
 
   it('routes minimize all only from the macOS window menu', () => {
     let calls = 0
-    const actions: MenuActions = { command: () => undefined, openRecent: () => undefined, minimizeAll: () => { calls++ }, exit: () => undefined, about: () => undefined }
+    const actions: MenuActions = { command: () => undefined, openRecent: () => undefined, openRecentFolder: () => undefined, minimizeAll: () => { calls++ }, exit: () => undefined, about: () => undefined }
     const mac = flatten(createMenuTemplate('darwin', false, [], actions))
     mac.find(item => item.label === '全部最小化')?.click?.()
     expect(calls).toBe(1)
@@ -221,7 +239,7 @@ describe('Official Typora menu shortcuts', () => {
   })
 
   it('exposes native tab controls only for eligible macOS windows', () => {
-    const actions: MenuActions = { command: () => undefined, openRecent: () => undefined, minimizeAll: () => undefined, exit: () => undefined, about: () => undefined }
+    const actions: MenuActions = { command: () => undefined, openRecent: () => undefined, openRecentFolder: () => undefined, minimizeAll: () => undefined, exit: () => undefined, about: () => undefined }
     const roles = ['toggleTabBar', 'selectPreviousTab', 'selectNextTab', 'showAllTabs', 'moveTabToNewWindow']
     const enabled = flatten(createMenuTemplate('darwin', false, [], actions, { nativeTabsEnabled: true }))
     const disabled = flatten(createMenuTemplate('darwin', false, [], actions, { nativeTabsEnabled: false }))

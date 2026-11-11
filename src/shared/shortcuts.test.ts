@@ -9,7 +9,7 @@ describe('application shortcut configuration', () => {
     const overrides = normalizeShortcutOverrides({ new: 'Cmd+Ctrl+2' }, 'darwin')
     expect(shortcutCommandForEvent(event, 'darwin', overrides)).toBe('new')
     expect(shortcutForCommand('article-list', 'darwin', overrides)).toBeUndefined()
-    const actions = { command: () => undefined, openRecent: () => undefined, minimizeAll: () => undefined, exit: () => undefined, about: () => undefined }
+    const actions = { command: () => undefined, openRecent: () => undefined, openRecentFolder: () => undefined, minimizeAll: () => undefined, exit: () => undefined, about: () => undefined }
     const flatten = (items: DesktopMenuItem[]): DesktopMenuItem[] => items.flatMap(item => [item, ...flatten(item.submenu ?? [])])
     const list = flatten(createMenuTemplate('darwin', false, [], actions, { shortcuts: overrides })).find(item => item.label === '文档列表')
     expect(list?.accelerator).toBeUndefined()
@@ -36,7 +36,7 @@ describe('application shortcut configuration', () => {
       const overrides = normalizeShortcutOverrides({ new: 'CmdOrCtrl+L' }, platform)
       expect(shortcutCommandForEvent(event, platform, overrides)).toBe('new')
       expect(shortcutForCommand('select-line', platform, overrides)).toBeUndefined()
-      const menu = createMenuTemplate(platform, true, [], { command: () => undefined, exit: () => undefined, openRecent: () => undefined, minimizeAll: () => undefined, about: () => undefined })
+      const menu = createMenuTemplate(platform, true, [], { command: () => undefined, exit: () => undefined, openRecent: () => undefined, openRecentFolder: () => undefined, minimizeAll: () => undefined, about: () => undefined })
       const flatten = (items: DesktopMenuItem[]): DesktopMenuItem[] => items.flatMap(item => [item, ...flatten(item.submenu ?? [])])
       expect(flatten(menu).find(item => item.label === '选中当前行或句')?.accelerator).toBe('CmdOrCtrl+L')
     }
@@ -48,7 +48,7 @@ describe('application shortcut configuration', () => {
       const overrides = normalizeShortcutOverrides({ new: 'CmdOrCtrl+Shift+C' }, platform)
       expect(shortcutCommandForEvent(event, platform, overrides)).toBe('new')
       expect(shortcutForCommand('copy-markdown', platform, overrides)).toBeUndefined()
-      const menu = createMenuTemplate(platform, true, [], { command: () => undefined, exit: () => undefined, openRecent: () => undefined, minimizeAll: () => undefined, about: () => undefined })
+      const menu = createMenuTemplate(platform, true, [], { command: () => undefined, exit: () => undefined, openRecent: () => undefined, openRecentFolder: () => undefined, minimizeAll: () => undefined, about: () => undefined })
       const flatten = (items: DesktopMenuItem[]): DesktopMenuItem[] => items.flatMap(item => [item, ...flatten(item.submenu ?? [])])
       expect(flatten(menu).find(item => item.label === '复制为 Markdown')?.accelerator).toBe('CmdOrCtrl+Shift+C')
     }
@@ -60,7 +60,7 @@ describe('application shortcut configuration', () => {
       const overrides = normalizeShortcutOverrides({ new: 'CmdOrCtrl+Shift+D' }, platform)
       expect(shortcutCommandForEvent(event, platform, overrides)).toBe('new')
       expect(shortcutForCommand('delete-word', platform, overrides)).toBeUndefined()
-      const menu = createMenuTemplate(platform, true, [], { command: () => undefined, exit: () => undefined, openRecent: () => undefined, minimizeAll: () => undefined, about: () => undefined })
+      const menu = createMenuTemplate(platform, true, [], { command: () => undefined, exit: () => undefined, openRecent: () => undefined, openRecentFolder: () => undefined, minimizeAll: () => undefined, about: () => undefined })
       const flatten = (items: DesktopMenuItem[]): DesktopMenuItem[] => items.flatMap(item => [item, ...flatten(item.submenu ?? [])])
       expect(flatten(menu).find(item => item.label === '删除当前词')?.accelerator).toBe('CmdOrCtrl+Shift+D')
     }
@@ -70,7 +70,7 @@ describe('application shortcut configuration', () => {
       const event = { key: 'Backspace', code: 'Backspace', ctrlKey: platform === 'win32', metaKey: platform === 'darwin', altKey: false, shiftKey: true }
       expect(shortcutCommandForEvent(event, platform, {})).toBe('delete-line')
       expect(shortcutCommandForEvent(event, platform, { 'delete-line': '' })).toBeNull()
-      const menu = createMenuTemplate(platform, true, [], { command: () => undefined, exit: () => undefined, openRecent: () => undefined, minimizeAll: () => undefined, about: () => undefined })
+      const menu = createMenuTemplate(platform, true, [], { command: () => undefined, exit: () => undefined, openRecent: () => undefined, openRecentFolder: () => undefined, minimizeAll: () => undefined, about: () => undefined })
       const flatten = (items: DesktopMenuItem[]): DesktopMenuItem[] => items.flatMap(item => [item, ...flatten(item.submenu ?? [])])
       expect(flatten(menu).find(item => item.label === '删除当前行或句')?.accelerator).toBe('CmdOrCtrl+Shift+Backspace')
     }
@@ -82,7 +82,7 @@ describe('application shortcut configuration', () => {
       const overrides = normalizeShortcutOverrides({ new: 'CmdOrCtrl+J' }, platform)
       expect(shortcutCommandForEvent(event, platform, overrides)).toBe('new')
       expect(shortcutForCommand('jump-selection', platform, overrides)).toBeUndefined()
-      const menu = createMenuTemplate(platform, true, [], { command: () => undefined, exit: () => undefined, openRecent: () => undefined, minimizeAll: () => undefined, about: () => undefined })
+      const menu = createMenuTemplate(platform, true, [], { command: () => undefined, exit: () => undefined, openRecent: () => undefined, openRecentFolder: () => undefined, minimizeAll: () => undefined, about: () => undefined })
       const flatten = (items: DesktopMenuItem[]): DesktopMenuItem[] => items.flatMap(item => [item, ...flatten(item.submenu ?? [])])
       expect(flatten(menu).find(item => item.label === '跳转到所选内容')?.accelerator).toBe('CmdOrCtrl+J')
     }
@@ -118,7 +118,7 @@ describe('application shortcut configuration', () => {
     expect(shortcutCommandForEvent({ ...event, key: 'F7', code: 'F7', ctrlKey: false }, 'win32', { statistics: 'F7' })).toBe('statistics')
     expect(shortcutForCommand('save', 'win32', { save: '' })).toBeUndefined()
     const flatten = (items: DesktopMenuItem[]): DesktopMenuItem[] => items.flatMap(item => [item, ...flatten(item.submenu ?? [])])
-    const items = flatten(createMenuTemplate('win32', true, [], { command: () => undefined, exit: () => undefined, openRecent: () => undefined, minimizeAll: () => undefined, about: () => undefined }, { shortcuts: { save: '', 'save-all': 'Ctrl+Alt+S' } }))
+    const items = flatten(createMenuTemplate('win32', true, [], { command: () => undefined, exit: () => undefined, openRecent: () => undefined, openRecentFolder: () => undefined, minimizeAll: () => undefined, about: () => undefined }, { shortcuts: { save: '', 'save-all': 'Ctrl+Alt+S' } }))
     expect(items.find(item => item.label === '保存')?.accelerator).toBeUndefined()
     expect(items.find(item => item.label === '保存全部')?.accelerator).toBe('Ctrl+Alt+S')
     expect(items.find(item => item.label === '撤销')?.accelerator).toBe('CmdOrCtrl+Z')

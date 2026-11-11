@@ -8,7 +8,7 @@ import { createMenuTemplate, type DesktopMenuItem, type MenuActions } from './me
 import { contextMenuTemplate } from './context-menu'
 import { diagnosticsText, helpText } from './app-help'
 
-const actions: MenuActions = { command: () => undefined, openRecent: () => undefined, minimizeAll: () => undefined, exit: () => undefined, about: () => undefined }
+const actions: MenuActions = { command: () => undefined, openRecent: () => undefined, openRecentFolder: () => undefined, minimizeAll: () => undefined, exit: () => undefined, about: () => undefined }
 function flatten(menu: DesktopMenuItem[]): DesktopMenuItem[] { return menu.flatMap(item => [item, ...flatten(item.submenu ?? [])]) }
 
 describe('localized desktop application', () => {

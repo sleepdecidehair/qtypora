@@ -200,6 +200,7 @@ export type DesktopEvent =
   | { type: 'document-changed'; id: string; kind: 'changed' | 'removed'; document: DocumentRecord | null }
   | { type: 'document-renamed'; id: string; path: string; name: string }
   | { type: 'workspace-changed'; path: string }
+  | { type: 'open-workspace'; workspace: Workspace }
   | { type: 'recent-items-changed'; recentItems: RecentItems }
   | { type: 'preferences-changed'; preferences: Preferences; version: number }
   | { type: 'user-themes-changed'; revision: number }

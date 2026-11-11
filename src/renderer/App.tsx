@@ -499,9 +499,10 @@ function DesktopApp({ api }: { api: DesktopApi }) {
     else if (event.type === 'document-changed') documents.externalChange(event.id, event.kind)
     else if (event.type === 'document-renamed') documents.renamed(event.id, event.path, event.name)
     else if (event.type === 'workspace-changed') run(refreshHandler.current())
+    else if (event.type === 'open-workspace') { workspaceRef.current = event.workspace; setWorkspace(event.workspace); updatePreferences({ sidebarMode: 'files', showSidebar: true }) }
     else if (event.type === 'recent-items-changed') { setRecentFiles(event.recentItems.recentFiles); setRecentFolders(event.recentItems.recentFolders) }
     else if (event.type === 'user-themes-changed') setThemeRefresh(value => value + 1)
-  }), [api, documents.addDocument, documents.externalChange, documents.renamed, documents.validateClose, documents.windowClosePrevented, run])
+  }), [api, documents.addDocument, documents.externalChange, documents.renamed, documents.validateClose, documents.windowClosePrevented, run, updatePreferences])
 
   useEffect(() => {
     const handler = (event: KeyboardEvent) => {
@@ -567,7 +568,7 @@ function DesktopApp({ api }: { api: DesktopApi }) {
         return await flushPreferences()
       } catch (error) { reportError(error instanceof Error ? translateKnownError(localeRef.current, error.message) : currentT('偏好保存失败')); return false }
     }} /> : null}
-    {modal === 'quick-open' ? <QuickOpen api={api} workspace={workspace} documents={documents.documents} recentFiles={recentFiles} onSelectDocument={documents.activate} onOpenFile={path => run(openFile(path))} onClose={() => setModal(null)} /> : null}
+    {modal === 'quick-open' ? <QuickOpen api={api} workspace={workspace} documents={documents.documents} recentFiles={recentFiles} recentFolders={recentFolders} pinnedFolders={preferences.workspace.pinnedFolders} onSelectDocument={documents.activate} onOpenFile={path => run(openFile(path))} onOpenFolder={path => run(openFolder(path))} onClose={() => setModal(null)} /> : null}
     {modal === 'recent-items' ? <RecentItemsDialog api={api} recentItems={{ recentFiles, recentFolders }} pinnedFolders={preferences.workspace.pinnedFolders} onClose={() => setModal(null)} /> : null}
     {modal === 'recovery' ? <DraftRecovery drafts={drafts} onRecover={id => run(documents.recover(id).then(accepted => { if (accepted) { setDrafts(existing => existing.filter(item => item.id !== id)); setModal(null); setNotice(currentT('草稿已恢复，请保存文档')) } }))} onDiscard={id => run(api.discardDraft(id).then(result => { if (result.ok) setDrafts(existing => existing.filter(item => item.id !== id)); else reportError(result.error.message) }))} onClose={() => setModal(null)} /> : null}
     {fileAction ? <FileActionDialog action={fileAction} isSubmitting={isFileActionPending} onSubmit={name => run(performFileAction(name))} onClose={() => { if (!fileActionInProgress.current) setFileAction(null) }} /> : null}

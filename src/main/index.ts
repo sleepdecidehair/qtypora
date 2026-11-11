@@ -163,6 +163,10 @@ function createMenus(): void {
       const context = focused()
       if (context) void context.documents.open(filePath).then((document) => send(context, { type: 'open-document', document })).catch((error: unknown) => showFailure(context, error))
     },
+    openRecentFolder: folderPath => {
+      const context = focused()
+      if (context) void withActiveFileOperation(() => openWorkspace(context, folderPath, false)).then(workspace => send(context, { type: 'open-workspace', workspace })).catch((error: unknown) => showFailure(context, error))
+    },
     exit: () => focused()?.window.close(),
     minimizeAll: () => {
       const owner = focused()
@@ -178,7 +182,7 @@ function createMenus(): void {
       const window = focused()?.window
       if (window) void dialog.showMessageBox(window, { type: 'info', title: translate(store.preferences.locale, '关于 QTypora'), message: translate(store.preferences.locale, app.isPackaged ? 'QTypora 内测版' : 'QTypora 开发版'), icon: appIconPath, detail: `${translate(store.preferences.locale, '版本')} ${app.getVersion()}\n${translate(store.preferences.locale, '本地 Markdown 桌面编辑器')}\nElectron ${process.versions.electron}` })
     },
-  }, { shortcuts: store.preferences.shortcuts, locale: store.preferences.locale, alwaysOnTop: current?.window.isAlwaysOnTop() ?? false, indentFirstLine: store.preferences.indentFirstLine, softBreaks: store.preferences.markdown.softBreaks, canRevealCurrentFile, spellcheck: store.preferences.spellcheck, lineEnding, canChangeLineEnding, nativeTabsEnabled: Boolean(current?.nativeTabsEnabled && !current.closing && !current.closeCheckPending && !current.approvedClose) })
+  }, { shortcuts: store.preferences.shortcuts, locale: store.preferences.locale, alwaysOnTop: current?.window.isAlwaysOnTop() ?? false, indentFirstLine: store.preferences.indentFirstLine, softBreaks: store.preferences.markdown.softBreaks, canRevealCurrentFile, spellcheck: store.preferences.spellcheck, lineEnding, canChangeLineEnding, nativeTabsEnabled: Boolean(current?.nativeTabsEnabled && !current.closing && !current.closeCheckPending && !current.approvedClose), recentFolders: store.recentFolders, pinnedFolders: store.preferences.workspace.pinnedFolders })
   Menu.setApplicationMenu(Menu.buildFromTemplate(template))
 }
 

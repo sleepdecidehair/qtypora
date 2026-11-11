@@ -3,32 +3,41 @@ import { isMarkdownFileName } from '../../shared/markdown-files'
 import { filePathKey } from './workspaceFiles'
 
 export interface QuickOpenDocument { id: string; name: string; path: string | null; isDirty: boolean }
-export interface QuickOpenItem {
-  key: string; name: string; path: string; id: string | null
-  scope: 'open' | 'recent' | 'workspace'; isDirty: boolean
-}
+export type QuickOpenItem = { key: string; name: string; path: string } & (
+  | { kind: 'document'; id: string; scope: 'open'; isDirty: boolean }
+  | { kind: 'file'; scope: 'recent' | 'workspace' }
+  | { kind: 'folder'; scope: 'pinned' | 'recent' }
+)
 
-export function quickOpenItems(documents: QuickOpenDocument[], recentFiles: string[], files: FileEntry[], unsavedLabel = '未保存文档'): QuickOpenItem[] {
+export function quickOpenItems(documents: QuickOpenDocument[], recentFiles: string[], files: FileEntry[], options: { pinnedFolders?: string[]; recentFolders?: string[]; unsavedLabel?: string } = {}): QuickOpenItem[] {
   const seen = new Set<string>()
   const items: QuickOpenItem[] = []
   for (const document of documents) {
     const key = document.path ? filePathKey(document.path) : `untitled:${document.id}`
     if (seen.has(key)) continue
     seen.add(key)
-    items.push({ key: document.id, name: document.name, path: document.path ?? unsavedLabel, id: document.id, scope: 'open', isDirty: document.isDirty })
+    items.push({ kind: 'document', key: document.id, name: document.name, path: document.path ?? options.unsavedLabel ?? '未保存文档', id: document.id, scope: 'open', isDirty: document.isDirty })
+  }
+  for (const scope of ['pinned', 'recent'] as const) {
+    for (const path of (scope === 'pinned' ? options.pinnedFolders : options.recentFolders) ?? []) {
+      const key = `folder:${filePathKey(path)}`
+      if (seen.has(key)) continue
+      seen.add(key)
+      items.push({ kind: 'folder', key, name: path.replace(/[\\/]+$/, '').split(/[\\/]/).pop() || path, path, scope })
+    }
   }
   for (const path of recentFiles) {
     const key = filePathKey(path)
     if (seen.has(key)) continue
     seen.add(key)
-    items.push({ key, name: path.split(/[\\/]/).pop() ?? path, path, id: null, scope: 'recent', isDirty: false })
+    items.push({ kind: 'file', key, name: path.split(/[\\/]/).pop() ?? path, path, scope: 'recent' })
   }
   for (const file of files) {
     if (!isMarkdownFileName(file.name)) continue
     const key = filePathKey(file.path)
     if (seen.has(key)) continue
     seen.add(key)
-    items.push({ key, name: file.name, path: file.path, id: null, scope: 'workspace', isDirty: false })
+    items.push({ kind: 'file', key, name: file.name, path: file.path, scope: 'workspace' })
   }
   return items
 }

@@ -226,7 +226,7 @@ test('代码块正文支持鼠标拖选和双击选词，不会展开围栏源�
   expect(selectionStyle.pointerEvents).toBe('none')
 })
 
-test('单独代码块全选及向外拖选只包含代码正文', async () => {
+test('单独代码块先选正文，再选整个文档', async () => {
   const body = 'const message = "hello"\nconsole.log(message)'
   const source = '```typescript\n' + body + '\n```\n\n'
   await openFixture(session, 'code-selection-boundary.md', source)
@@ -247,57 +247,107 @@ test('单独代码块全选及向外拖选只包含代码正文', async () => {
       return rect.left >= code.left - 1 && rect.right <= code.right + 1
     })
   })).toBe(true)
-  await session.page.mouse.move(first.x + 25, first.y + first.height / 2)
-  await session.page.mouse.down()
-  await session.page.mouse.move(last.x + last.width - 5, last.y + last.height + 100, { steps: 10 })
-  await session.page.mouse.up()
-  const selected = await editorState()
-  expect(selected.selected.length).toBeGreaterThan(0)
-  expect(body).toContain(selected.selected)
-  await session.page.mouse.move(last.x + 35, last.y + last.height / 2)
-  await session.page.mouse.down()
-  await session.page.mouse.move(first.x + 5, first.y - 100, { steps: 10 })
-  await session.page.mouse.up()
-  const reverse = await editorState()
-  expect(reverse.selected.length).toBeGreaterThan(0)
-  expect(body).toContain(reverse.selected)
-  await session.page.mouse.click(last.x + 10, last.y + last.height + 120)
   await session.page.keyboard.press('ControlOrMeta+a')
-  await expect.poll(async () => (await editorState()).selected).toBe(body)
+  await expect.poll(async () => (await editorState()).selected).toBe(source)
   expect((await editorState()).text).toBe(source)
 })
 
-test('代码块外有正文时依次全选代码正文和整个文档', async () => {
+test('从正文全选整个文档，从代码块先全选代码再全选文档', async () => {
   const source = '前文\n\n```js\nconst value = 1\n```\n\n后文'
   await openFixture(session, 'code-selection-mixed.md', source)
   await session.page.keyboard.press('ControlOrMeta+/')
   await session.page.locator('.cm-line').filter({ hasText: '前文' }).click()
   await session.page.keyboard.press('ControlOrMeta+a')
+  await expect.poll(async () => (await editorState()).selected).toBe(source)
+  await expect.poll(() => session.page.locator('.cm-content').evaluate((element, position) => {
+    const view = Reflect.get(element, 'cmTile').root.view as import('@codemirror/view').EditorView
+    const text = view.coordsAtPos(position)
+    if (!text) return false
+    const x = text.left + 2, y = (text.top + text.bottom) / 2
+    return [...element.closest('.cm-scroller')!.querySelectorAll('.cm-selectionBackground')].some(marker => {
+      const rect = marker.getBoundingClientRect()
+      return rect.left <= x && rect.right >= x && rect.top <= y && rect.bottom >= y
+    })
+  }, source.indexOf('value'))).toBe(true)
+  const language = session.page.getByRole('combobox', { name: '代码块语言' })
+  await expect.poll(() => language.evaluate(element => getComputedStyle(element, '::selection').backgroundColor)).toBe('rgba(0, 0, 0, 0)')
+  await session.page.evaluate(() => new Promise<void>(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))))
+  await captureDesktop(session, '.debug/code-full-document-selection.png')
+  await session.page.keyboard.press('ControlOrMeta+c')
+  await expect.poll(() => session.app.evaluate(({ clipboard }) => clipboard.readText())).toContain('const value = 1')
+  const plain = await session.app.evaluate(({ clipboard }) => clipboard.readText())
+  expect(plain).toContain('前文')
+  expect(plain).toContain('后文')
+  await session.page.keyboard.press('ControlOrMeta+Shift+c')
+  await expect.poll(() => session.app.evaluate(({ clipboard }) => clipboard.readText())).toBe(source)
+  await session.page.keyboard.insertText('替换')
+  await expect.poll(async () => (await editorState()).text).toBe('替换')
+  await session.page.keyboard.press('ControlOrMeta+z')
+  await expect.poll(async () => (await editorState()).text).toBe(source)
+  await session.page.locator('.cm-live-code-body').click()
+  await session.page.keyboard.press('ControlOrMeta+a')
   await expect.poll(async () => (await editorState()).selected).toBe('const value = 1')
   await session.page.keyboard.press('ControlOrMeta+a')
   await expect.poll(async () => (await editorState()).selected).toBe(source)
+  await language.click()
+  await language.press('ControlOrMeta+a')
+  await expect.poll(() => language.evaluate((element: HTMLInputElement) => element.value.slice(element.selectionStart ?? 0, element.selectionEnd ?? 0))).toBe('js')
+  await expect.poll(() => language.evaluate(element => getComputedStyle(element, '::selection').backgroundColor)).not.toBe('rgba(0, 0, 0, 0)')
 })
 
-test('多个代码块优先全选离光标最近的代码块', async () => {
+test('多个代码块时从正文全选整个文档', async () => {
   const source = '```js\nfirst\n```\n\n中间正文\n\n```js\nsecond\n```\n\n结尾正文'
   await openFixture(session, 'code-selection-nearest.md', source)
   await session.page.keyboard.press('ControlOrMeta+/')
   await session.page.locator('.cm-line').filter({ hasText: '结尾正文' }).click()
   await session.page.keyboard.press('ControlOrMeta+a')
-  await expect.poll(async () => (await editorState()).selected).toBe('second')
-  await session.page.keyboard.press('ControlOrMeta+a')
   await expect.poll(async () => (await editorState()).selected).toBe(source)
 })
 
-test('空代码块之后的第二次全选选中整个文档', async () => {
+test('从正文全选包含空代码块的整个文档', async () => {
   const source = '前文\n\n```js\n\n```\n\n后文'
   await openFixture(session, 'code-selection-empty.md', source)
   await session.page.keyboard.press('ControlOrMeta+/')
   await session.page.locator('.cm-line').filter({ hasText: '前文' }).click()
   await session.page.keyboard.press('ControlOrMeta+a')
-  expect((await editorState()).selected).toBe('')
-  await session.page.keyboard.press('ControlOrMeta+a')
   await expect.poll(async () => (await editorState()).selected).toBe(source)
+})
+
+test('鼠标可从代码正文向前后普通段落拖选并复制', async () => {
+  const source = '前文内容\n\n```js\nconst value = 1\nconsole.log(value)\n```\n\n后文内容'
+  const destination = await openFixture(session, 'code-cross-selection.md', source)
+  await session.page.keyboard.press('ControlOrMeta+/')
+  const editor = session.page.locator('.cm-content')
+  const pointAt = (position: number) => editor.evaluate((element, offset) => {
+    const view = Reflect.get(element, 'cmTile').root.view as import('@codemirror/view').EditorView
+    const rectangle = view.coordsAtPos(offset)
+    if (!rectangle) throw new Error(`Missing coordinates for source offset ${offset}`)
+    return { x: rectangle.left, y: (rectangle.top + rectangle.bottom) / 2 }
+  }, position)
+  const drag = async (from: number, to: number) => {
+    const start = await pointAt(from), end = await pointAt(to)
+    await session.page.mouse.move(start.x, start.y)
+    await session.page.mouse.down()
+    await session.page.mouse.move(end.x, end.y, { steps: 12 })
+    await session.page.mouse.up()
+  }
+  const codeOffset = source.indexOf('value')
+  const beforeOffset = source.indexOf('文内容')
+  const afterOffset = source.lastIndexOf('文内容')
+  await drag(codeOffset, beforeOffset)
+  await expect.poll(async () => (await editorState()).selected).toBe(source.slice(beforeOffset, codeOffset))
+  await captureDesktop(session, '.debug/code-partial-cross-selection.png')
+  await drag(codeOffset, afterOffset)
+  await expect.poll(async () => (await editorState()).selected).toBe(source.slice(codeOffset, afterOffset))
+  await session.page.keyboard.press('ControlOrMeta+Shift+c')
+  await expect.poll(() => session.app.evaluate(({ clipboard }) => clipboard.readText())).toBe(source.slice(codeOffset, afterOffset))
+  await drag(beforeOffset, codeOffset)
+  await expect.poll(async () => (await editorState()).selected).toBe(source.slice(beforeOffset, codeOffset))
+  await drag(afterOffset, codeOffset)
+  await expect.poll(async () => (await editorState()).selected).toBe(source.slice(codeOffset, afterOffset))
+  expect((await editorState()).text).toBe(source)
+  await session.page.keyboard.press('ControlOrMeta+s')
+  await expect.poll(() => readFile(destination, 'utf8')).toBe(source)
 })
 
 test('三个反引号加 Enter 创建可编辑代码块，撤销和源码切换保留原文光标', async () => {

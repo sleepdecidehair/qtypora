@@ -131,16 +131,10 @@ const codeSelectAllPending = StateField.define<boolean>({
 export function selectLiveCode(view: EditorView): boolean {
   const state = view.state
   if (!state.field(codeDecorations, false)) return false
-  const blocks = liveCodeBlocks(state)
-  if (!blocks.length) return false
   const selection = state.selection.main
-  const onlyCode = blocks.length === 1 && !state.doc.sliceString(0, blocks[0].from).trim() && !state.doc.sliceString(blocks[0].to).trim()
   const active = selectedCode(state)
-  if (active && state.field(codeSelectAllPending) && selection.from === active.bodyFrom && selection.to === active.bodyTo && !onlyCode) return false
-  if (!active && !selection.empty && selection.from === 0 && selection.to === state.doc.length) return false
-  const distance = (block: LiveCodeBlock): number => selection.head < block.bodyFrom ? block.bodyFrom - selection.head : Math.max(0, selection.head - block.bodyTo)
-  const block = active ?? blocks.reduce((nearest, candidate) => distance(candidate) < distance(nearest) ? candidate : nearest)
-  view.dispatch({ selection: EditorSelection.range(block.bodyFrom, block.bodyTo), userEvent: 'select.code-all' })
+  if (!active || (state.field(codeSelectAllPending) && selection.from === active.bodyFrom && selection.to === active.bodyTo)) return false
+  view.dispatch({ selection: EditorSelection.range(active.bodyFrom, active.bodyTo), userEvent: 'select.code-all' })
   view.focus()
   return true
 }
@@ -282,16 +276,6 @@ const codeDecorations = StateField.define<DecorationSet>({
   provide: (field) => [EditorView.decorations.from(field), EditorView.atomicRanges.of((view) => view.state.field(field).update({ filter: (_from, _to, decoration) => decoration.spec.block === true }))],
 })
 
-const constrainCodePointerSelection = EditorState.transactionFilter.of(transaction => {
-  if (transaction.docChanged || !transaction.selection || !transaction.isUserEvent('select.pointer')) return transaction
-  const selection = transaction.selection.main
-  if (selection.empty || transaction.selection.ranges.length !== 1) return transaction
-  const block = liveCodeBlocks(transaction.startState).find(candidate => selection.anchor >= candidate.bodyFrom && selection.anchor <= candidate.bodyTo)
-  if (!block || (selection.head >= block.bodyFrom && selection.head <= block.bodyTo)) return transaction
-  const head = Math.max(block.bodyFrom, Math.min(block.bodyTo, selection.head))
-  return [transaction, { selection: EditorSelection.range(selection.anchor, head) }]
-})
-
 const codeFooterPointer = ViewPlugin.fromClass(class {
   private readonly onMouseDown = (event: MouseEvent): void => {
     if (event.button !== 0 || event.shiftKey || event.metaKey || event.ctrlKey || event.altKey || !(event.target instanceof Element) || event.target.closest('input,button,select,summary,details')) return
@@ -312,7 +296,7 @@ const codeFooterPointer = ViewPlugin.fromClass(class {
 })
 
 export function liveCodeExtension(focusMode = false): Extension {
-  return [codeFocusMode.of(focusMode), codeEditorFocused, EditorView.focusChangeEffect.of((_state, focusing) => codeEditorFocusChanged.of(focusing)), syncCodeEditorFocus, codeDecorations, codeSelectAllPending, constrainCodePointerSelection, codeFooterPointer, Prec.high(keymap.of([
+  return [codeFocusMode.of(focusMode), codeEditorFocused, EditorView.focusChangeEffect.of((_state, focusing) => codeEditorFocusChanged.of(focusing)), syncCodeEditorFocus, codeDecorations, codeSelectAllPending, codeFooterPointer, Prec.high(keymap.of([
     { key: 'Enter', run: confirmCodeFence },
     { key: 'Mod-a', run: selectLiveCode },
     { key: 'Mod-Enter', run: leaveCode },

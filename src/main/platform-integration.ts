@@ -18,3 +18,7 @@ export function rememberSystemDocument(app: Pick<App, 'addRecentDocument'>, plat
   if (!paths.isAbsolute(filePath) || /[\0\r\n]/.test(filePath)) return
   app.addRecentDocument(filePath)
 }
+
+export function clearSystemRecentDocuments(app: Pick<App, 'clearRecentDocuments'>, platform: NodeJS.Platform, packaged: boolean): void {
+  if (packaged && (platform === 'win32' || platform === 'darwin')) app.clearRecentDocuments()
+}

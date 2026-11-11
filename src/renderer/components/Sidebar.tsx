@@ -28,6 +28,7 @@ interface SidebarProps {
   outlineFlat: boolean
   onOutlineFlatChange: (flat: boolean) => void
   recentFolders?: string[]
+  onManageRecentItems: () => void
 }
 
 export function Sidebar(props: SidebarProps) {

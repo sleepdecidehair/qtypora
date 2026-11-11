@@ -108,6 +108,7 @@ export interface FileEntry {
   createdAt?: number
 }
 export interface Workspace { path: string; name: string; entries: FileEntry[] }
+export interface RecentItems { recentFiles: string[]; recentFolders: string[] }
 export interface SearchRequest {
   root: string
   query: string
@@ -186,7 +187,7 @@ export interface ImageOperationResult { source: string | null }
 export interface ResourceSaveRequest { id: string; format: 'svg' | 'png' | 'jpeg'; data: string }
 export type AppCommand = 'article-list' | 'toggle-soft-breaks' | 'line-ending-lf' | 'line-ending-crlf' | 'toggle-spellcheck' | 'page-setup' | 'reveal-current-file' | 'indent-first-line' | 'replace-next' | 'find-next' | 'find-previous' | 'html-comment' | 'toggle-always-on-top' | 'statusbar' | 'inline-math' | 'new' | 'new-window' | 'open' | 'open-folder' | 'save' |
   'save-as' | 'save-all' | 'close-document' | 'request-window-close' | 'find' | 'replace' |
-  'quick-open' | 'preferences' | 'source' | 'sidebar' | 'outline' | 'files' |
+  'quick-open' | 'recent-items' | 'preferences' | 'source' | 'sidebar' | 'outline' | 'files' |
   'search-folder' | 'focus' | 'typewriter' | 'toolbar' | 'export-html' | 'export-pdf' |
   'zoom-in' | 'zoom-out' | 'zoom-reset' | 'recover-drafts' | 'next-document' | 'undo' | 'redo' | 'reading' | 'select-scope' | 'select-word' | 'delete-word' | 'heading-1' | 'heading-2' | 'heading-3' | 'heading-4' | 'heading-5' | 'heading-6' | 'paragraph' | 'quote' | 'bullet-list' | 'ordered-list' | 'task-list' | 'code' | 'math' | 'table' | 'rule' | 'bold' | 'italic' | 'underline' | 'strike' | 'highlight' | 'superscript' | 'subscript' | 'inline-code' | 'link' | 'clear-format' | 'select-block' | 'delete-block' | 'delete-style' | 'copy-markdown' | 'copy-plain' | 'copy-html' | 'heading-promote' | 'heading-demote' | 'insert-toc' | 'insert-yaml' | 'insert-alert-note' | 'insert-alert-tip' | 'insert-alert-important' | 'insert-alert-warning' | 'insert-alert-caution' | 'insert-footnote' | 'paragraph-before' | 'paragraph-after' | 'task-check' | 'task-uncheck' | 'task-toggle' | 'share-document' | 'new-native-tab' | 'reopen-closed' | 'select-line' | 'delete-line' | 'jump-start' | 'jump-end' | 'jump-line-start' | 'jump-line-end' | 'jump-selection' | 'insert-image' |
   'export-options' | 'export-previous' | 'export-overwrite' | 'print' | 'import' | 'statistics' | 'upload-images' | 'organize-images' | 'system-versions'
@@ -199,6 +200,7 @@ export type DesktopEvent =
   | { type: 'document-changed'; id: string; kind: 'changed' | 'removed'; document: DocumentRecord | null }
   | { type: 'document-renamed'; id: string; path: string; name: string }
   | { type: 'workspace-changed'; path: string }
+  | { type: 'recent-items-changed'; recentItems: RecentItems }
   | { type: 'preferences-changed'; preferences: Preferences; version: number }
   | { type: 'user-themes-changed'; revision: number }
 
@@ -215,6 +217,8 @@ export interface DesktopApi {
   openLinkedFile(request: { id: string; target: string }): Promise<Result<{ document: DocumentRecord | null; fragment: string | null } | null>>
   openFile(path?: string): Promise<Result<DocumentRecord | null>>
   openFolder(path?: string): Promise<Result<Workspace | null>>
+  removeRecentFolder(path: string): Promise<Result<RecentItems>>
+  clearRecentItems(request: { includePinned: boolean }): Promise<Result<RecentItems | null>>
   readDirectory(path: string, options?: WorkspaceOptions): Promise<Result<FileEntry[]>>
   saveDocument(request: SaveRequest): Promise<SaveResult>
   syncDocument(snapshot: DocumentSnapshot): Promise<Result<void>>

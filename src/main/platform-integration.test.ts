@@ -1,9 +1,19 @@
 import { describe, expect, it, vi } from 'vitest'
 import type { JumpListCategory } from 'electron'
-import { configureWindowsJumpList, rememberSystemDocument, windowsJumpList } from './platform-integration'
+import { clearSystemRecentDocuments, configureWindowsJumpList, rememberSystemDocument, windowsJumpList } from './platform-integration'
 import { diagnosticsText, helpText } from './app-help'
 
 describe('desktop integration boundaries', () => {
+  it('clears system history only for packaged Windows and macOS apps', () => {
+    const app = { clearRecentDocuments: vi.fn() }
+    clearSystemRecentDocuments(app, 'win32', false)
+    clearSystemRecentDocuments(app, 'darwin', false)
+    clearSystemRecentDocuments(app, 'linux', true)
+    expect(app.clearRecentDocuments).not.toHaveBeenCalled()
+    clearSystemRecentDocuments(app, 'win32', true)
+    clearSystemRecentDocuments(app, 'darwin', true)
+    expect(app.clearRecentDocuments).toHaveBeenCalledTimes(2)
+  })
   it('only registers a packaged Windows launcher, leaving recent removal decisions to the OS', () => {
     const app = { setJumpList: vi.fn((_categories: JumpListCategory[] | null) => 'ok' as const) }
     expect(configureWindowsJumpList(app, 'darwin', true, '/Applications/QTypora.app')).toBe('not-applicable')

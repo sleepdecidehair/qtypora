@@ -35,7 +35,7 @@ export function createMenuTemplate(platform: NodeJS.Platform, isPackaged: boolea
       ...(isMac ? [{ ...item('在 Finder 中显示当前文件', 'reveal-current-file'), enabled: options.canRevealCurrentFile ?? false }] : []),
       { label: tr('最近使用的文件'), submenu: [item('重新打开关闭的文件', 'reopen-closed'), { type: 'separator' }, ...(recentFiles.length ? recentFiles.map((filePath) => ({
         label: filePath.replaceAll('&', '&&'), click: () => actions.openRecent(filePath),
-      })) : [{ label: tr('暂无最近文档'), enabled: false }])] },
+      })) : [{ label: tr('暂无最近文档'), enabled: false }]), { type: 'separator' }, item('管理最近记录…', 'recent-items')] },
       { type: 'separator' }, item('保存', 'save', 'CmdOrCtrl+S'), item('另存为…', 'save-as', 'CmdOrCtrl+Shift+S'), item('保存全部', 'save-all'),
       ...(isMac ? [item('共享…', 'share-document')] : []),
       ...(isMac ? [item('系统版本历史…', 'system-versions')] : []),

@@ -1,6 +1,6 @@
 import * as fs from 'node:fs/promises'
 import path from 'node:path'
-import { DEFAULT_PREFERENCES, type DraftRecord, type Preferences } from '../shared/contracts'
+import { DEFAULT_PREFERENCES, type DraftRecord, type Preferences, type RecentItems } from '../shared/contracts'
 import { atomicWrite, serialized } from './files'
 import { boolean, invalid, object, string } from './errors'
 import { normalizeExportOptions } from '../shared/export-options'
@@ -80,7 +80,9 @@ export class LocalStore {
   drafts = new Map<string, DraftRecord>()
   private unknownSettings: Record<string, unknown> = {}
   private unknownPreferences: Record<string, unknown> = {}
-  constructor(private readonly directory: string) {}
+  constructor(private readonly directory: string, private readonly onRecentItemsChanged: (recentItems: RecentItems) => void = () => {}) {}
+
+  recentItems(): RecentItems { return { recentFiles: [...this.recentFiles], recentFolders: [...this.recentFolders] } }
 
   async load(): Promise<void> {
     await fs.mkdir(path.join(this.directory, 'drafts'), { recursive: true })
@@ -128,6 +130,7 @@ export class LocalStore {
       const recentFiles = [filePath, ...this.recentFiles.filter((item) => item.toLowerCase() !== filePath.toLowerCase())].slice(0, 20)
       await this.writeSettings(this.preferences, recentFiles, this.recentFolders)
       this.recentFiles = recentFiles
+      this.onRecentItemsChanged(this.recentItems())
     })
   }
 
@@ -136,6 +139,31 @@ export class LocalStore {
       const recentFolders = [folderPath, ...this.recentFolders.filter(item => item !== folderPath)].slice(0, 20)
       await this.writeSettings(this.preferences, this.recentFiles, recentFolders)
       this.recentFolders = recentFolders
+      this.onRecentItemsChanged(this.recentItems())
+    })
+  }
+
+  async removeRecentFolder(folderPath: string): Promise<RecentItems> {
+    return serialized('settings:' + this.directory, async () => {
+      const recentFolders = this.recentFolders.filter(item => item !== folderPath)
+      await this.writeSettings(this.preferences, this.recentFiles, recentFolders)
+      this.recentFolders = recentFolders
+      const recentItems = this.recentItems()
+      this.onRecentItemsChanged(recentItems)
+      return recentItems
+    })
+  }
+
+  async clearRecentItems(includePinned: boolean): Promise<RecentItems> {
+    return serialized('settings:' + this.directory, async () => {
+      const preferences = includePinned ? { ...this.preferences, workspace: { ...this.preferences.workspace, pinnedFolders: [] } } : this.preferences
+      await this.writeSettings(preferences, [], [])
+      this.preferences = preferences
+      this.recentFiles = []
+      this.recentFolders = []
+      const recentItems = this.recentItems()
+      this.onRecentItemsChanged(recentItems)
+      return recentItems
     })
   }
 

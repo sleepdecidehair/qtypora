@@ -19,6 +19,7 @@ interface FileTreeProps {
   workspaceOptions?: WorkspaceOptions
   onWorkspaceOptionsChange?: (options: WorkspaceOptions) => void
   recentFolders?: string[]
+  onManageRecentItems: () => void
 }
 
 function emptyTree(): FileTreeState { return { expanded: new Set(), children: {}, selected: null } }
@@ -220,6 +221,7 @@ function FileTreeView(props: FileTreeProps) {
     <div className="sidebar-section-heading"><h2 className="sidebar-label">{t('已打开')}</h2><span>{props.documents.length}</span></div>
     {props.documents.map(document => <button key={document.id} className={`open-document-row ${document.id === props.current?.id ? 'is-current' : ''}`} onClick={() => props.onActivate(document.id)} onPointerDown={event => { if (event.button === 2) event.preventDefault() }} onContextMenu={event => { event.preventDefault(); if (document.path) void showFileContextMenu({ name: document.name, path: document.path, kind: 'file', modifiedAt: 0 }, document.id) }} title={document.path ?? t('未保存文档')}><FileText size={15} /><span>{document.name}</span>{isDirty(document) ? <span className="dirty-dot" aria-label={t('未保存')}>●</span> : null}</button>)}
     <div className="sidebar-section-heading folder-heading"><button className="folder-picker" data-testid="workspace-folder" onClick={() => props.onOpenFolder()} onPointerDown={event => { if (event.button === 2) event.preventDefault() }} onContextMenu={event => { event.preventDefault(); if (props.workspace) void showFileContextMenu({ name: props.workspace.name, path: props.workspace.path, kind: 'directory', modifiedAt: 0 }) }}><FolderOpen size={15} /><span>{props.workspace?.name ?? t('打开文件夹')}</span></button></div>
+    <button type="button" className="recent-items-manage" onClick={props.onManageRecentItems}>{t('管理最近记录…')}</button>
     {props.workspace ? <>
       <div className="workspace-options">
         <div><label>{t('视图')}<select aria-label={t('文件视图')} value={options.view} onChange={event => updateOptions({ view: event.target.value === 'list' ? 'list' : 'tree' })}><option value="tree">{t('文件树')}</option><option value="list">{t('文章列表')}</option></select></label><label>{t('排序')}<select aria-label={t('文件排序')} value={options.sort} onChange={event => updateOptions({ sort: event.target.value as WorkspaceOptions['sort'] })}><option value="natural">{t('自然顺序')}</option><option value="name">{t('名称')}</option><option value="modified">{t('修改时间')}</option><option value="created">{t('创建时间')}</option></select></label></div>

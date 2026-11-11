@@ -25,6 +25,82 @@ function signal() {
 }
 
 describe('preference persistence transactions', () => {
+  it('removes one recent folder durably without removing its pin or touching files', async () => {
+    const folder = path.join(directory, 'pinned')
+    await store.addRecentFolder(folder)
+    await store.addRecentFolder(directory)
+    await store.addRecent(path.join(folder, 'note.md'))
+    await store.updatePreferences({ ...store.preferences, workspace: { ...store.preferences.workspace, pinnedFolders: [folder] } })
+    await store.removeRecentFolder(folder)
+    const reopened = new LocalStore(directory)
+    await reopened.load()
+    expect(reopened.recentFolders).toEqual([directory])
+    expect(reopened.recentFiles).toEqual([path.join(folder, 'note.md')])
+    expect(reopened.preferences.workspace.pinnedFolders).toEqual([folder])
+  })
+
+  it('clears files and folders while preserving pins unless explicitly included', async () => {
+    await store.addRecentFolder(directory)
+    await store.addRecent(path.join(directory, 'note.md'))
+    await store.updatePreferences({ ...store.preferences, workspace: { ...store.preferences.workspace, pinnedFolders: [directory] } })
+    expect(await store.clearRecentItems(false)).toEqual({ recentFiles: [], recentFolders: [] })
+    let reopened = new LocalStore(directory)
+    await reopened.load()
+    expect(reopened.recentItems()).toEqual({ recentFiles: [], recentFolders: [] })
+    expect(reopened.preferences.workspace.pinnedFolders).toEqual([directory])
+    await store.clearRecentItems(true)
+    reopened = new LocalStore(directory)
+    await reopened.load()
+    expect(reopened.preferences.workspace.pinnedFolders).toEqual([])
+  })
+
+  it('retains all recent history and pins if removal or clearing cannot be persisted', async () => {
+    const notify = vi.fn()
+    store = new LocalStore(directory, notify)
+    await store.load()
+    await store.addRecentFolder(directory)
+    await store.addRecent(path.join(directory, 'note.md'))
+    await store.updatePreferences({ ...store.preferences, workspace: { ...store.preferences.workspace, pinnedFolders: [directory] } })
+    notify.mockClear()
+    const atomicWrite = vi.spyOn(files, 'atomicWrite')
+    atomicWrite.mockRejectedValueOnce(new Error('disk full'))
+    await expect(store.removeRecentFolder(directory)).rejects.toThrow('disk full')
+    atomicWrite.mockRejectedValueOnce(new Error('disk full'))
+    await expect(store.clearRecentItems(true)).rejects.toThrow('disk full')
+    expect(notify).not.toHaveBeenCalled()
+    expect(store.recentItems()).toEqual({ recentFiles: [path.join(directory, 'note.md')], recentFolders: [directory] })
+    const reopened = new LocalStore(directory)
+    await reopened.load()
+    expect(reopened.recentItems()).toEqual(store.recentItems())
+    expect(reopened.preferences.workspace.pinnedFolders).toEqual([directory])
+  })
+
+  it('notifies only committed history and serializes a new recent item after clearing', async () => {
+    const notify = vi.fn()
+    store = new LocalStore(directory, notify)
+    await store.load()
+    await store.addRecentFolder(directory)
+    const entered = signal(), finish = signal()
+    const atomicWrite = files.atomicWrite
+    vi.spyOn(files, 'atomicWrite').mockImplementationOnce(async (...args) => {
+      entered.release()
+      await finish.promise
+      await atomicWrite(...args)
+    })
+    notify.mockClear()
+    const clear = store.clearRecentItems(false)
+    await entered.promise
+    const add = store.addRecent(path.join(directory, 'new.md'))
+    expect(store.recentFolders).toEqual([directory])
+    expect(notify).not.toHaveBeenCalled()
+    finish.release()
+    await Promise.all([clear, add])
+    expect(notify.mock.calls.map(([items]) => items)).toEqual([{ recentFiles: [], recentFolders: [] }, { recentFiles: [path.join(directory, 'new.md')], recentFolders: [] }])
+    const reopened = new LocalStore(directory)
+    await reopened.load()
+    expect(reopened.recentItems()).toEqual({ recentFiles: [path.join(directory, 'new.md')], recentFolders: [] })
+  })
+
   it('defaults paragraph indentation off and persists explicit changes', async () => {
     const { indentFirstLine: _indent, ...legacy } = DEFAULT_PREFERENCES
     expect(validatePreferences(legacy).indentFirstLine).toBe(false)

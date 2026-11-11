@@ -1,5 +1,6 @@
 import { englishErrors } from './i18n-errors'
 import { englishFileTree } from './i18n-file-tree'
+import { englishRecentItems } from './i18n-recent-items'
 import { SHORTCUT_DEFINITIONS } from './shortcuts'
 
 export type AppLocale = 'zh-CN' | 'en-US'
@@ -12,6 +13,7 @@ const english: Record<string, string> = {
   '支持正文、标题、表格及部分文本样式、简单变量和有限的媒体查询；其他选择器和属性会被忽略。不支持导入、外部字体或图片资源。': 'Some styles for body text, headings and tables, simple variables, and limited media queries are supported. Other selectors and properties are ignored. Imports, external fonts, and image resources are unsupported.',
   '无法读取主题目录。': 'Could not read the theme folder.', '无法打开主题目录。': 'Could not open the theme folder.', '无法读取主题。': 'Could not read the theme.', '读取到的主题与所选主题不一致。': 'The theme read does not match the selected theme.', '主题样式超过大小限制。': 'The theme stylesheet exceeds the size limit.', '主题包含不支持的导入、字体或资源。': 'The theme contains unsupported imports, fonts, or resources.',
   ...englishFileTree,
+  ...englishRecentItems,
   '当前窗口没有可以撤销的文件操作。': 'There is no file operation to undo in this window.',
   '文件菜单操作失败': 'File menu operation failed',
   '文件(&F)': 'File(&F)', '编辑(&E)': 'Edit(&E)', '查看(&V)': 'View(&V)', '窗口(&W)': 'Window(&W)', '帮助(&H)': 'Help(&H)',

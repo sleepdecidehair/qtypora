@@ -36,7 +36,7 @@ import { resourceBytes, validateResourceSave, writeResource } from './resource-s
 import { mergePreferencePatch } from '../shared/preference-patch'
 import { downloadRemoteImage } from './image-download'
 import { learnSpelling, forgetSpelling, listSpellingWords } from './spelling'
-import { configureWindowsJumpList, rememberSystemDocument } from './platform-integration'
+import { clearSystemRecentDocuments, configureWindowsJumpList, rememberSystemDocument } from './platform-integration'
 import { helpText, diagnosticsText } from './app-help'
 import { showThirdPartyNotices } from './notices'
 import { OpenFileQueue } from './open-files'
@@ -494,6 +494,26 @@ function registerIpc(): void {
     try { workspaceOptions = normalizeWorkspaceOptions(options) } catch (error) { invalid(error instanceof Error ? error.message : '文件显示设置无效。') }
     return listDirectory(await context.documents.authorize(string(input, '文件夹路径')), workspaceOptions)
   })
+  handle('removeRecentFolder', (_context, input) => store.removeRecentFolder(string(input, '文件夹路径')))
+  handle('clearRecentItems', async (context, input) => {
+    const includePinned = boolean(object(input).includePinned, '清除固定目录')
+    const response = await dialog.showMessageBox(context.window, {
+      type: 'question', title: localText('清除最近记录', 'Clear recent history'),
+      message: includePinned ? localText('清除最近文件、最近目录和固定目录？', 'Clear recent files, recent folders, and pinned folders?') : localText('清除最近文件和最近目录？', 'Clear recent files and folders?'),
+      detail: localText('只移除历史记录，不会删除文件或关闭已打开的文档。', 'This removes history only. Files are not deleted and open documents stay open.'),
+      buttons: [localText('清除', 'Clear'), localText('取消', 'Cancel')], defaultId: 1, cancelId: 1, noLink: true,
+    })
+    if (response.response !== 0) return null
+    return serialized('preferences:update', async () => {
+      const recentItems = await store.clearRecentItems(includePinned)
+      if (includePinned) {
+        const version = ++preferencesVersion
+        for (const target of windows.values()) send(target, { type: 'preferences-changed', preferences: store.preferences, version })
+      }
+      clearSystemRecentDocuments(app, process.platform, app.isPackaged)
+      return recentItems
+    })
+  })
   handle('syncDocument', async (context, input) => {
     try { return await context.documents.sync(validateSnapshot(input)) }
     finally { createMenus() }
@@ -818,7 +838,10 @@ function registerIpc(): void {
 
 app.whenReady().then(async () => {
   if (process.platform === 'darwin') await cleanupStaleNativeShareSnapshots().catch((error: unknown) => console.error('[app] Stale share cleanup failed', error instanceof Error ? error.message : 'unknown'))
-  store = new LocalStore(app.getPath('userData'))
+  store = new LocalStore(app.getPath('userData'), recentItems => {
+    for (const target of windows.values()) send(target, { type: 'recent-items-changed', recentItems })
+    createMenus()
+  })
   await store.load()
   if (process.platform === 'darwin') nativeTheme.themeSource = store.preferences.theme
   exportHistory = new ExportHistory(app.getPath('userData'))

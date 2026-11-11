@@ -24,6 +24,7 @@ import { FloatingToolbar } from './components/FloatingToolbar'
 import { PreferencesDialog } from './components/PreferencesDialog'
 import { PageSetupDialog } from './components/PageSetupDialog'
 import { QuickOpen } from './components/QuickOpen'
+import { RecentItemsDialog } from './components/RecentItemsDialog'
 import { DraftRecovery } from './components/DraftRecovery'
 import { SystemVersionsDialog, type VersionScope } from './components/SystemVersionsDialog'
 import { FileActionDialog, type PendingFileAction } from './components/FileActionDialog'
@@ -65,7 +66,7 @@ function DesktopApp({ api }: { api: DesktopApi }) {
   const [platform, setPlatform] = useState('win32')
   const [nativeTabsEnabled, setNativeTabsEnabled] = useState(false)
   const [drafts, setDrafts] = useState<DraftRecord[]>([])
-  const [modal, setModal] = useState<'preferences' | 'page-setup' | 'statistics' | 'quick-open' | 'recovery' | 'export' | 'system-versions' | null>(null)
+  const [modal, setModal] = useState<'preferences' | 'page-setup' | 'statistics' | 'quick-open' | 'recent-items' | 'recovery' | 'export' | 'system-versions' | null>(null)
   const [versionScope, setVersionScope] = useState<VersionScope | null>(null)
   const [fileAction, setFileAction] = useState<PendingFileAction | null>(null)
   const [isFileActionPending, setIsFileActionPending] = useState(false)
@@ -187,13 +188,11 @@ function DesktopApp({ api }: { api: DesktopApi }) {
     const folder = documents.acceptResult(await api.openFolder(path))
     if (!folder) return
     workspaceRef.current = folder; setWorkspace(folder)
-    setRecentFolders(existing => [folder.path, ...existing.filter(path => path !== folder.path)].slice(0, 20))
     if (preferencesRef.current.sidebarMode === sidebarAtStart) updatePreferences({ sidebarMode: 'files', showSidebar: true })
   }
 
   const openFile = async (path?: string, line?: number) => {
     const opened = await documents.open(path)
-    if (path) setRecentFiles(existing => [path, ...existing.filter(item => item.toLowerCase() !== path.toLowerCase())].slice(0, 30))
     if (opened && line) jumpToLine(line, opened.id)
     return opened
   }
@@ -201,8 +200,6 @@ function DesktopApp({ api }: { api: DesktopApi }) {
   const save = async (saveAs = false) => {
     if (await documents.save(saveAs)) {
       setNotice(currentT('文档已保存'))
-      const saved = documents.documentsRef.current.find(item => item.id === current?.id)
-      if (saved?.path) setRecentFiles(existing => [saved.path!, ...existing.filter(item => item !== saved.path)].slice(0, 30))
     }
   }
 
@@ -375,6 +372,7 @@ function DesktopApp({ api }: { api: DesktopApi }) {
         if (current && !modal && !fileAction && !reloadId) issueEditorCommand(command)
         break
       case 'quick-open': setModal('quick-open'); break
+      case 'recent-items': setModal('recent-items'); break
       case 'preferences': setModal('preferences'); break
       case 'source': updatePreferences({ sourceMode: !options.sourceMode, readingMode: false }); break
       case 'reading':
@@ -501,6 +499,7 @@ function DesktopApp({ api }: { api: DesktopApi }) {
     else if (event.type === 'document-changed') documents.externalChange(event.id, event.kind)
     else if (event.type === 'document-renamed') documents.renamed(event.id, event.path, event.name)
     else if (event.type === 'workspace-changed') run(refreshHandler.current())
+    else if (event.type === 'recent-items-changed') { setRecentFiles(event.recentItems.recentFiles); setRecentFolders(event.recentItems.recentFolders) }
     else if (event.type === 'user-themes-changed') setThemeRefresh(value => value + 1)
   }), [api, documents.addDocument, documents.externalChange, documents.renamed, documents.validateClose, documents.windowClosePrevented, run])
 
@@ -543,7 +542,7 @@ function DesktopApp({ api }: { api: DesktopApi }) {
     {platform === 'darwin' && !nativeTabsEnabled ? <div className="mac-titlebar" data-testid="mac-titlebar"><span>{current?.name ?? 'QTypora'}</span></div> : null}
     <Toolbar platform={platform} showFormatting={preferences.showToolbar} sourceMode={preferences.sourceMode} disabled={!current || current.readOnly} isSaving={current?.isSaving ?? false} onAction={issueEditorCommand} onNew={() => run(executeCommand('new'))} onOpen={() => run(executeCommand('open'))} onSave={() => run(save())} onSaveAll={() => run(saveAll())} onSidebar={() => run(executeCommand('sidebar'))} onSource={() => run(executeCommand('source'))} onQuickOpen={() => setModal('quick-open')} onPreferences={() => setModal('preferences')} onOpenFolder={() => run(openFolder())} onExport={kind => run(exportDocument(kind))} onImage={() => run(insertImage())} onCloseDocument={() => run(documents.close())} onSaveAs={() => run(save(true))} onRecovery={() => run(executeCommand('recover-drafts'))} onNewWindow={() => run(executeCommand('new-window'))} focusMode={preferences.focusMode} typewriterMode={preferences.typewriterMode} onFocus={() => run(executeCommand('focus'))} onTypewriter={() => run(executeCommand('typewriter'))} isContentConstrained={preferences.contentWidthMode === 'fixed'} onContentWidthToggle={() => updatePreferences({ contentWidthMode: preferencesRef.current.contentWidthMode === 'fixed' ? 'auto' : 'fixed' })} />
     <div className="writing-space">
-      {preferences.showSidebar ? <Sidebar outlineFlat={preferences.outlineFlat} onOutlineFlatChange={outlineFlat => updatePreferences({ outlineFlat })} recentFolders={recentFolders} markdownOptions={preferences.markdown} workspaceOptions={preferences.workspace} onWorkspaceOptionsChange={workspace => updatePreferences({ workspace })} currentLine={currentLine} api={api} mode={preferences.sidebarMode} workspace={workspace} documents={documents.documents} current={current} refreshVersion={refreshVersion} onMode={mode => updatePreferences({ sidebarMode: mode })} onOpenFolder={path => run(openFolder(path))} onOpen={(path, line) => run(openFile(path, line))} onActivate={documents.activate} onJump={jumpToLine} onFileAction={setFileAction} onError={reportError} onRefresh={() => run(refreshWorkspace())} onSearchChange={setFolderSearch} /> : null}
+      {preferences.showSidebar ? <Sidebar outlineFlat={preferences.outlineFlat} onOutlineFlatChange={outlineFlat => updatePreferences({ outlineFlat })} recentFolders={recentFolders} onManageRecentItems={() => setModal('recent-items')} markdownOptions={preferences.markdown} workspaceOptions={preferences.workspace} onWorkspaceOptionsChange={workspace => updatePreferences({ workspace })} currentLine={currentLine} api={api} mode={preferences.sidebarMode} workspace={workspace} documents={documents.documents} current={current} refreshVersion={refreshVersion} onMode={mode => updatePreferences({ sidebarMode: mode })} onOpenFolder={path => run(openFolder(path))} onOpen={(path, line) => run(openFile(path, line))} onActivate={documents.activate} onJump={jumpToLine} onFileAction={setFileAction} onError={reportError} onRefresh={() => run(refreshWorkspace())} onSearchChange={setFolderSearch} /> : null}
       <main className="document-pane">
         <div className="document-heading"><span className="document-name" data-testid="document-name">{current?.name ?? t('未命名')}</span>{current && isDirty(current) ? <span className="dirty-label" data-testid="dirty-indicator">{t('未保存')}</span> : null}{current?.readOnly ? <span className="dirty-label">{t('只读')}</span> : null}<span className="document-heading-spacer" /><button className="document-path" title={current?.path ?? t('尚未保存到文件')} disabled={!current?.path} onClick={() => { if (current?.path) run(api.revealFile(current.path).then(documents.acceptResult)) }}>{current?.path ? <><FolderOpen size={12} />{current.path}</> : t('Markdown 文档')}</button></div>
         {current?.externalChange ? <div className="external-change"><AlertCircle size={16} /><span>{current.externalChange === 'removed' ? t('文件已被移动或删除。可另存为保留当前编辑。') : t('磁盘上的文件已更改，当前编辑仍然保留。')}</span>{current.externalChange === 'changed' ? <button className="text-button" onClick={() => setReloadId(current.id)}>{t('重新载入')}</button> : null}<button className="text-button" onClick={() => run(save(true))}>{t('另存为')}</button></div> : null}
@@ -569,6 +568,7 @@ function DesktopApp({ api }: { api: DesktopApi }) {
       } catch (error) { reportError(error instanceof Error ? translateKnownError(localeRef.current, error.message) : currentT('偏好保存失败')); return false }
     }} /> : null}
     {modal === 'quick-open' ? <QuickOpen api={api} workspace={workspace} documents={documents.documents} recentFiles={recentFiles} onSelectDocument={documents.activate} onOpenFile={path => run(openFile(path))} onClose={() => setModal(null)} /> : null}
+    {modal === 'recent-items' ? <RecentItemsDialog api={api} recentItems={{ recentFiles, recentFolders }} pinnedFolders={preferences.workspace.pinnedFolders} onClose={() => setModal(null)} /> : null}
     {modal === 'recovery' ? <DraftRecovery drafts={drafts} onRecover={id => run(documents.recover(id).then(accepted => { if (accepted) { setDrafts(existing => existing.filter(item => item.id !== id)); setModal(null); setNotice(currentT('草稿已恢复，请保存文档')) } }))} onDiscard={id => run(api.discardDraft(id).then(result => { if (result.ok) setDrafts(existing => existing.filter(item => item.id !== id)); else reportError(result.error.message) }))} onClose={() => setModal(null)} /> : null}
     {fileAction ? <FileActionDialog action={fileAction} isSubmitting={isFileActionPending} onSubmit={name => run(performFileAction(name))} onClose={() => { if (!fileActionInProgress.current) setFileAction(null) }} /> : null}
     {reloadId ? <Dialog title={t('重新载入文件')} onClose={() => setReloadId(null)}><div className="dialog-content"><p>{t('重新载入会用磁盘内容替换当前文档的编辑。请先另存需要保留的内容。')}</p></div><div className="dialog-footer"><button className="text-button" onClick={() => setReloadId(null)}>{t('取消')}</button><button className="primary-button" onClick={() => { const id = reloadId; setReloadId(null); run(documents.reload(id)) }}>{t('重新载入')}</button></div></Dialog> : null}

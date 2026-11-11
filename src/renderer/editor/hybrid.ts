@@ -18,16 +18,25 @@ import { editorText } from './editor-i18n'
 import type { AppLocale } from '../../shared/i18n'
 import { isTaskMarker } from './task-marker'
 import { focusedParagraphLines } from './focus-paragraph'
+import { footnoteHoverExtension } from './footnote-hover'
 
 export type HybridOptions = LiveOptions
 
 class InlineTextWidget extends WidgetType {
-  constructor(readonly text: string, readonly href?: string, readonly locale?: AppLocale) { super() }
-  eq(other: InlineTextWidget): boolean { return this.text === other.text && this.href === other.href && this.locale === other.locale }
+  constructor(readonly text: string, readonly from: number, readonly to: number, readonly href?: string, readonly locale?: AppLocale) { super() }
+  eq(other: InlineTextWidget): boolean { return this.text === other.text && this.from === other.from && this.to === other.to && this.href === other.href && this.locale === other.locale }
   toDOM(): HTMLElement {
     const span = document.createElement(this.href ? 'a' : 'span')
     span.textContent = this.text
-    if (this.href) { span.className = 'cm-live-footnote cm-live-link'; span.dataset.href = this.href; span.setAttribute('href', this.href); span.setAttribute('aria-label', editorText(this.locale, '跳转到脚注 {label}', { label: this.text })) }
+    if (this.href) {
+      span.className = 'cm-live-footnote cm-live-link'
+      span.dataset.href = this.href
+      span.dataset.footnoteFrom = String(this.from)
+      span.dataset.footnoteTo = String(this.to)
+      span.setAttribute('href', this.href)
+      span.setAttribute('tabindex', '0')
+      span.setAttribute('aria-label', editorText(this.locale, '跳转到脚注 {label}', { label: this.text }))
+    }
     return span
   }
   ignoreEvent(): boolean { return false }
@@ -87,7 +96,7 @@ function decorations(state: EditorState, options: HybridOptions): DecorationSet 
   }
   for (const span of inlinePreviewSpans(state, [...excluded, ...mediaRanges, ...codeBlocks, ...(editing ? [editing] : [])])) {
     if (span.line) ranges.push(Decoration.line({ class: span.className }).range(span.from))
-    else if (span.replacement !== undefined) ranges.push(Decoration.replace({ widget: new InlineTextWidget(span.replacement, span.href, options.locale) }).range(span.from, span.to))
+    else if (span.replacement !== undefined) ranges.push(Decoration.replace({ widget: new InlineTextWidget(span.replacement, span.from, span.to, span.href, options.locale) }).range(span.from, span.to))
     else if (span.hidden && span.to > span.from) ranges.push(Decoration.replace({}).range(span.from, span.to))
     else if (span.className && span.to > span.from) ranges.push(Decoration.mark({ class: span.className, ...(span.href && isSafeLink(span.href) ? { attributes: { 'data-href': span.href } } : {}) }).range(span.from, span.to))
   }
@@ -126,7 +135,7 @@ export function hybridExtension(options: HybridOptions): Extension {
     closeCompletion(view)
     view.dispatch({ effects: editLiveBlock.of(null) })
     return true
-  } }])), liveCodeExtension(options.focusMode), previews, resourceFitExtension, liveSourceEditExtension, EditorView.domEventHandlers({
+  } }])), liveCodeExtension(options.focusMode), previews, resourceFitExtension, liveSourceEditExtension, footnoteHoverExtension(options.onLinkOpen), EditorView.domEventHandlers({
     mousedown: (event) => {
       const link = event.target instanceof Element ? event.target.closest<HTMLElement>('.cm-live-link[data-href]') : null
       if (!link || !(link.classList.contains('cm-live-footnote') || event.ctrlKey || event.metaKey)) return false

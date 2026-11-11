@@ -19,7 +19,8 @@ interface DocumentState {
   pendingLineEnding?: LineEnding
   lastSavedLineEndingConversion?: LineEnding
   fileMissing: boolean
-  notifiedVersion: string | null
+  notifiedChange: { kind: 'changed'; version: DocumentRecord['version'] } | { kind: 'removed' } | null
+  fileReadGeneration?: number
   fileIdentity?: FileIdentity | null
   watcher?: FSWatcher
   timer?: ReturnType<typeof setTimeout>
@@ -145,7 +146,7 @@ export class DocumentSession {
       id: randomUUID(), path: null, name: `${this.store.preferences.locale === 'en-US' ? 'Untitled' : '未命名'}${++this.untitledCount}.md`, content,
       version: null, encoding: 'utf8', lineEnding: this.store.preferences.lineEnding, readOnly: false,
     }
-    this.documents.set(record.id, { record, currentContent: content, revision: 0, savedContent: content, savedRevision: 0, fileMissing: false, notifiedVersion: null })
+    this.documents.set(record.id, { record, currentContent: content, revision: 0, savedContent: content, savedRevision: 0, fileMissing: false, notifiedChange: null })
     return record
   }
 
@@ -194,7 +195,7 @@ export class DocumentSession {
     let fileIdentity: FileIdentity | null = null
     const record = await readMarkdown(canonical, undefined, identity => { fileIdentity = identity })
     this.assertCanLoad()
-    const state: DocumentState = { record, currentContent: record.content, savedContent: record.content, savedRevision: 0, revision: 0, fileMissing: false, notifiedVersion: null, fileIdentity }
+    const state: DocumentState = { record, currentContent: record.content, savedContent: record.content, savedRevision: 0, revision: 0, fileMissing: false, notifiedChange: null, fileIdentity }
     // Watch before the settings write, but keep the provisional document out of
     // records so a concurrent close cannot observe a half-open session.
     this.startWatchState(record.id, state)
@@ -298,7 +299,7 @@ export class DocumentSession {
       current.lastSavedLineEndingConversion = pending
       if (current.pendingLineEnding === pending) current.pendingLineEnding = undefined
       current.fileMissing = false
-      current.notifiedVersion = null
+      current.notifiedChange = null
       this.startWatch(saved.id)
       const result = pending ? { ...saved, savedLineEndingConversion: pending } : saved
       onCommitted(result)
@@ -333,7 +334,7 @@ export class DocumentSession {
       state.lastSavedLineEndingConversion = undefined
       state.pendingLineEnding = undefined
       state.fileMissing = false
-      state.notifiedVersion = null
+      state.notifiedChange = null
       return record
     })
   }
@@ -365,7 +366,7 @@ export class DocumentSession {
     } else record = { id, path: null, name: draft.name, content: '', version: null, encoding: draft.encoding ?? 'utf8', lineEnding: this.store.preferences.lineEnding, readOnly: false }
     this.assertCanLoad(id)
     // The renderer starts the recovered editing session at revision zero.
-    const state: DocumentState = { record, currentContent: draft.content, savedContent: null, savedRevision: 0, revision: 0, fileMissing: false, notifiedVersion: null, pendingLineEnding: draft.pendingLineEnding ?? undefined }
+    const state: DocumentState = { record, currentContent: draft.content, savedContent: null, savedRevision: 0, revision: 0, fileMissing: false, notifiedChange: null, pendingLineEnding: draft.pendingLineEnding ?? undefined }
     await this.persistDraft(state)
     this.assertCanLoad(id)
     this.documents.set(id, state)
@@ -468,7 +469,7 @@ export class DocumentSession {
       }
       await this.store.addRecent(entry.path)
       this.assertCanLoad()
-      this.documents.set(record.id, { record, currentContent: record.content, savedContent: record.content, savedRevision: 0, revision: 0, fileMissing: false, notifiedVersion: null, fileIdentity })
+      this.documents.set(record.id, { record, currentContent: record.content, savedContent: record.content, savedRevision: 0, revision: 0, fileMissing: false, notifiedChange: null, fileIdentity })
       this.startWatch(record.id)
       try {
         // Cover the gap between the first read and installing the watcher.
@@ -540,11 +541,21 @@ export class DocumentSession {
   }
 
   async withPathLocks<T>(source: string, operation: () => Promise<T>): Promise<T> {
-    const ids = [...this.documents.values()].filter(state => {
+    const affected = [...this.documents.values()].filter(state => {
       const current = state.record.path
       return current && isPathWithin(current, source)
-    }).map(state => state.record.id).sort()
-    const lock = (index: number): Promise<T> => index === ids.length ? operation() : serialized('save-document:' + ids[index], () => serialized('session:' + ids[index], () => lock(index + 1)))
+    })
+    const ids = affected.map(state => state.record.id).sort()
+    const run = async (): Promise<T> => {
+      for (const state of affected) this.stopWatch(state)
+      try { return await operation() }
+      finally {
+        const active = affected.filter(state => !this.disposed && this.documents.get(state.record.id) === state)
+        for (const state of active) if (!state.watcher) this.startWatchState(state.record.id, state)
+        await Promise.all(active.map(state => this.notifyFileChange(state.record.id).catch(() => console.error('[watch] Document change check failed'))))
+      }
+    }
+    const lock = (index: number): Promise<T> => index === ids.length ? run() : serialized('save-document:' + ids[index], () => serialized('session:' + ids[index], () => lock(index + 1)))
     return lock(0)
   }
 
@@ -574,6 +585,7 @@ export class DocumentSession {
       } else {
         state.fileMissing = true
         this.send({ type: 'document-changed', id: state.record.id, kind: 'removed', document: null })
+        state.notifiedChange = { kind: 'removed' }
         changed.push(state)
       }
     }
@@ -613,7 +625,7 @@ export class DocumentSession {
     closed.state.savedContent = null
     closed.state.savedRevision = 0
     closed.state.fileMissing = false
-    closed.state.notifiedVersion = null
+    closed.state.notifiedChange = null
     closed.state.fileIdentity = null
   }
 
@@ -658,19 +670,23 @@ export class DocumentSession {
     const state = this.documents.get(id)
     if (!state?.record.path) return
     const observedPath = state.record.path
+    const watcher = state.watcher
     try {
       const document = await readMarkdown(observedPath, id)
-      if (state.record.path !== observedPath) return
-      if ((!state.fileMissing && document.version === state.record.version) || document.version === state.notifiedVersion) return
-      state.notifiedVersion = document.version
+      if (state.record.path !== observedPath || state.watcher !== watcher) return
+      state.fileReadGeneration = (state.fileReadGeneration ?? 0) + 1
+      if ((!state.fileMissing && document.version === state.record.version) || (state.notifiedChange?.kind === 'changed' && document.version === state.notifiedChange.version)) return
       this.send({ type: 'document-changed', id, kind: 'changed', document })
+      state.notifiedChange = { kind: 'changed', version: document.version }
     } catch (error) {
-      if (state.record.path !== observedPath) return
+      if (state.record.path !== observedPath || state.watcher !== watcher) return
       if (error && typeof error === 'object' && 'code' in error && error.code === 'ENOENT') {
+        const fileReadGeneration = state.fileReadGeneration
         state.fileMissing = true
-        state.notifiedVersion = null
         await this.persistDraft(state)
+        if (state.record.path !== observedPath || state.watcher !== watcher || state.fileReadGeneration !== fileReadGeneration || state.notifiedChange?.kind === 'removed') return
         this.send({ type: 'document-changed', id, kind: 'removed', document: null })
+        state.notifiedChange = { kind: 'removed' }
       }
       else throw error
     }

@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { DocumentSession, type DocumentDialogs, validateSnapshot } from './documents'
 import { LocalStore, validatePreferences } from './preferences'
 import { canonicalPath, MAX_DOCUMENT_BYTES } from './files'
+import * as files from './files'
 import { DEFAULT_PREFERENCES, type DesktopEvent, type DocumentRecord } from '../shared/contracts'
 
 let directory: string
@@ -946,6 +947,194 @@ describe('Document sessions and independent drafts', () => {
 
 
 describe('Imported content and moved paths', () => {
+  it.each([false, true])('keeps a recreated file current while its old removal draft is pending, previously notified %s', async (previouslyNotified) => {
+    const filename = path.join(directory, 'recreated-during-draft.md')
+    await fs.writeFile(filename, 'original')
+    const events: DesktopEvent[] = []
+    const session = makeSession({}, events), record = await session.open(filename, true)
+    if (previouslyNotified) {
+      await fs.writeFile(filename, 'recreated')
+      await vi.waitFor(() => expect(events).toContainEqual(expect.objectContaining({ type: 'document-changed', kind: 'changed', document: expect.objectContaining({ content: 'recreated' }) })))
+      events.length = 0
+    }
+    let release!: () => void, entered!: () => void, finished!: () => void, reread!: () => void
+    const pending = new Promise<void>(resolve => { release = resolve })
+    const started = new Promise<void>(resolve => { entered = resolve })
+    const completed = new Promise<void>(resolve => { finished = resolve })
+    const readCompleted = new Promise<void>(resolve => { reread = resolve })
+    const atomicWrite = files.atomicWrite, readMarkdown = files.readMarkdown
+    const write = vi.spyOn(files, 'atomicWrite').mockImplementationOnce(async (...args) => {
+      entered()
+      await pending
+      try { return await atomicWrite(...args) } finally { finished() }
+    })
+    const read = vi.spyOn(files, 'readMarkdown').mockImplementation(async (...args) => {
+      const document = await readMarkdown(...args)
+      reread()
+      return document
+    })
+    try {
+      await fs.unlink(filename)
+      await started
+      await fs.writeFile(filename, 'recreated')
+      await readCompleted
+      release()
+      await completed
+      await new Promise<void>(resolve => setImmediate(resolve))
+      expect(events).not.toContainEqual(expect.objectContaining({ type: 'document-changed', kind: 'removed' }))
+      if (!previouslyNotified) expect(events).toEqual([expect.objectContaining({ type: 'document-changed', id: record.id, kind: 'changed', document: expect.objectContaining({ content: 'recreated' }) })])
+      expect(JSON.parse(await fs.readFile(path.join(directory, 'user', 'drafts', `${record.id}.json`), 'utf8'))).toMatchObject({ content: 'original', path: filename })
+      await fs.unlink(filename)
+      await vi.waitFor(() => expect(events.filter(event => event.type === 'document-changed' && event.kind === 'removed')).toHaveLength(1))
+    } finally { release(); await completed; write.mockRestore(); read.mockRestore() }
+  })
+
+  it.each(['read', 'draft'] as const)('reports a pending removal when a concurrent retry fails during %s', async (failure) => {
+    const filename = path.join(directory, 'concurrent-removal-retry.md')
+    await fs.writeFile(filename, 'only remaining copy')
+    const events: DesktopEvent[] = []
+    const session = makeSession({}, events), record = await session.open(filename, true)
+    let release!: () => void, entered!: () => void, finished!: () => void, retried!: () => void
+    const pending = new Promise<void>(resolve => { release = resolve })
+    const started = new Promise<void>(resolve => { entered = resolve })
+    const completed = new Promise<void>(resolve => { finished = resolve })
+    const retryStarted = new Promise<void>(resolve => { retried = resolve })
+    const atomicWrite = files.atomicWrite
+    const write = vi.spyOn(files, 'atomicWrite').mockImplementationOnce(async (...args) => {
+      entered()
+      await pending
+      try { return await atomicWrite(...args) } finally { finished() }
+    })
+    if (failure === 'draft') write.mockRejectedValueOnce(new Error('retry draft failed'))
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {})
+    const read = vi.spyOn(files, 'readMarkdown')
+    try {
+      await fs.unlink(filename)
+      await started
+      read.mockImplementationOnce(async () => {
+        retried()
+        throw Object.assign(new Error('retry read failed'), { code: failure === 'read' ? 'EACCES' : 'ENOENT' })
+      })
+      await fs.writeFile(filename, 'transient')
+      await fs.unlink(filename)
+      await retryStarted
+      release()
+      await completed
+      await vi.waitFor(() => expect(error).toHaveBeenCalledWith('[watch] Document change check failed'))
+      await vi.waitFor(() => expect(events).toEqual([{ type: 'document-changed', id: record.id, kind: 'removed', document: null }]))
+      expect(JSON.parse(await fs.readFile(path.join(directory, 'user', 'drafts', `${record.id}.json`), 'utf8'))).toMatchObject({ content: 'only remaining copy', path: filename })
+      await session.withPathLocks(filename, async () => undefined)
+      expect(events).toHaveLength(1)
+    } finally { release(); await completed; write.mockRestore(); read.mockRestore(); error.mockRestore() }
+  })
+
+  it('retries a failed missing-file draft write before reporting removal once', async () => {
+    const filename = path.join(directory, 'removed-retry.md')
+    await fs.writeFile(filename, 'only remaining copy')
+    const events: DesktopEvent[] = []
+    const session = makeSession({}, events), record = await session.open(filename, true)
+    const draftPath = path.join(directory, 'user', 'drafts', `${record.id}.json`)
+    const removals = () => events.filter(event => event.type === 'document-changed' && event.kind === 'removed')
+    const write = vi.spyOn(files, 'atomicWrite').mockRejectedValueOnce(new Error('draft write failed'))
+    try {
+      await session.withPathLocks(filename, () => fs.unlink(filename))
+      expect(removals()).toHaveLength(0)
+      await expect(fs.readFile(draftPath, 'utf8')).rejects.toMatchObject({ code: 'ENOENT' })
+      await session.withPathLocks(filename, async () => undefined)
+      expect(JSON.parse(await fs.readFile(draftPath, 'utf8'))).toMatchObject({ id: record.id, path: filename, content: 'only remaining copy' })
+      expect(removals()).toEqual([{ type: 'document-changed', id: record.id, kind: 'removed', document: null }])
+      await session.withPathLocks(filename, async () => undefined)
+      expect(removals()).toHaveLength(1)
+    } finally { write.mockRestore() }
+  })
+
+  it('retries a failed path-removal draft write without repeating the sent removal', async () => {
+    const filename = path.join(directory, 'removed-path-retry.md')
+    await fs.writeFile(filename, 'only remaining copy')
+    const events: DesktopEvent[] = []
+    const session = makeSession({}, events), record = await session.open(filename, true)
+    const draftPath = path.join(directory, 'user', 'drafts', `${record.id}.json`)
+    const removals = () => events.filter(event => event.type === 'document-changed' && event.kind === 'removed')
+    const write = vi.spyOn(files, 'atomicWrite').mockRejectedValueOnce(new Error('draft write failed'))
+    try {
+      await expect(session.withPathLocks(filename, async () => {
+        await fs.unlink(filename)
+        await session.updatePaths(filename, null)
+      })).rejects.toMatchObject({ code: 'IO_ERROR' })
+      expect(JSON.parse(await fs.readFile(draftPath, 'utf8'))).toMatchObject({ id: record.id, path: filename, content: 'only remaining copy' })
+      expect(removals()).toEqual([{ type: 'document-changed', id: record.id, kind: 'removed', document: null }])
+      await session.withPathLocks(filename, async () => undefined)
+      expect(removals()).toHaveLength(1)
+    } finally { write.mockRestore() }
+  })
+
+  it('keeps watching a removed path and reports its recreation and later removal once', async () => {
+    const filename = path.join(directory, 'removed.md')
+    await fs.writeFile(filename, 'disk')
+    const events: DesktopEvent[] = []
+    const session = makeSession({}, events), record = await session.open(filename, true)
+    await session.withPathLocks(filename, async () => {
+      await fs.unlink(filename)
+      await session.updatePaths(filename, null)
+    })
+    const removals = () => events.filter(event => event.type === 'document-changed' && event.kind === 'removed')
+    expect(removals()).toHaveLength(1)
+    await fs.writeFile(filename, 'disk')
+    await vi.waitFor(() => expect(events).toContainEqual(expect.objectContaining({ type: 'document-changed', id: record.id, kind: 'changed', document: expect.objectContaining({ content: 'disk' }) })))
+    await fs.unlink(filename)
+    await vi.waitFor(() => expect(removals()).toHaveLength(2))
+    expect(store.drafts.get(record.id)).toMatchObject({ path: filename, content: 'disk' })
+  })
+
+  it('ignores an old file check after the path operation starts', async () => {
+    const source = path.join(directory, 'original.md'), destination = path.join(directory, 'moved.md')
+    await fs.writeFile(source, 'disk')
+    const events: DesktopEvent[] = []
+    const session = makeSession({}, events), record = await session.open(source, true)
+    let release!: () => void, entered!: () => void, finished!: () => void
+    const pending = new Promise<void>(resolve => { release = resolve })
+    const started = new Promise<void>(resolve => { entered = resolve })
+    const completed = new Promise<void>(resolve => { finished = resolve })
+    const read = files.readMarkdown
+    const check = vi.spyOn(files, 'readMarkdown').mockImplementationOnce(async (...args) => {
+      entered()
+      await pending
+      try { return await read(...args) } finally { finished() }
+    })
+    try {
+      await fs.writeFile(source, 'external edit')
+      await started
+      await session.withPathLocks(source, async () => {
+        await fs.rename(source, destination)
+        release()
+        await completed
+        await new Promise<void>(resolve => setImmediate(resolve))
+        expect(events).not.toContainEqual(expect.objectContaining({ type: 'document-changed', kind: 'removed' }))
+        expect(session.get(record.id).fileMissing).toBe(false)
+        await session.updatePaths(source, destination)
+      })
+      await vi.waitFor(() => expect(events).toContainEqual(expect.objectContaining({ type: 'document-changed', id: record.id, kind: 'changed', document: expect.objectContaining({ path: destination, content: 'external edit' }) })))
+      expect(session.get(record.id)).toMatchObject({ record: { version: record.version }, currentContent: 'disk', fileMissing: false })
+    } finally { release(); check.mockRestore() }
+  })
+
+  it('reports external edits made while a failed path operation has paused its watches', async () => {
+    const source = path.join(directory, 'source'), filename = path.join(source, 'nested', 'note.md')
+    await fs.mkdir(path.dirname(filename), { recursive: true })
+    await fs.writeFile(filename, 'disk')
+    const events: DesktopEvent[] = []
+    const session = makeSession({}, events), record = await session.open(filename, true)
+    await session.sync({ id: record.id, content: 'unsaved draft', revision: 1 })
+    const failure = new Error('move failed')
+    await expect(session.withPathLocks(source, async () => {
+      await fs.writeFile(filename, 'external edit during move')
+      throw failure
+    })).rejects.toBe(failure)
+    await vi.waitFor(() => expect(events).toContainEqual(expect.objectContaining({ type: 'document-changed', id: record.id, kind: 'changed', document: expect.objectContaining({ path: filename, content: 'external edit during move' }) })))
+    expect(session.get(record.id)).toMatchObject({ record: { path: filename, version: record.version }, currentContent: 'unsaved draft', revision: 1, fileMissing: false })
+    expect(store.drafts.get(record.id)).toMatchObject({ path: filename, content: 'unsaved draft', revision: 1 })
+  })
+
   it('keeps imported content dirty and recoverable before the first save', async () => {
     const session = makeSession()
     const record = await session.createImported('# Imported\n')

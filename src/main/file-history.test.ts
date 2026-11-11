@@ -10,6 +10,7 @@ import { ResourceRegistry } from './resources'
 import { relocateWorkspaceState } from './workspace-relocation'
 import { withWorkspaceStructure } from './workspace-lock'
 import { randomUUID } from 'node:crypto'
+import type { DesktopEvent } from '../shared/contracts'
 
 let root: string
 beforeEach(async () => { root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'qtypora-moves-'))); await fs.mkdir(path.join(root, 'target')) })
@@ -112,12 +113,13 @@ describe('file move history', () => {
 
   it.skipIf(process.platform !== 'darwin' && process.platform !== 'win32')('updates every window and keeps undo available when a draft write fails after the move', async () => {
     const source = path.join(root, 'source'), destination = path.join(root, 'target', 'source')
-    await fs.mkdir(source)
-    const documentPath = path.join(source, 'note.md')
+    await fs.mkdir(path.join(source, 'nested'), { recursive: true })
+    const documentPath = path.join(source, 'nested', 'note.md'), movedDocument = path.join(destination, 'nested', 'note.md')
     await fs.writeFile(documentPath, 'disk')
     const store = new LocalStore(path.join(root, 'user'))
     await store.load()
-    const createSession = () => new DocumentSession(store, { chooseSave: async () => null, confirmClose: async () => 'cancel' }, () => undefined)
+    const events: DesktopEvent[] = []
+    const createSession = () => new DocumentSession(store, { chooseSave: async () => null, confirmClose: async () => 'cancel' }, event => events.push(event))
     const first = createSession(), second = createSession(), sessions = [first, second]
     try {
       const a = await first.open(documentPath, true), b = await second.open(documentPath, true)
@@ -132,16 +134,60 @@ describe('file move history', () => {
       })
       const write = vi.spyOn(store, 'writeDraft').mockRejectedValueOnce(new Error('disk full'))
       await expect(history.move(root, source, path.join(root, 'target'))).rejects.toMatchObject({ code: 'IO_ERROR', message: expect.stringContaining('文件位置已更新') })
-      expect(first.get(a.id)).toMatchObject({ record: { path: path.join(destination, 'note.md') }, currentContent: 'first draft' })
-      expect(second.get(b.id)).toMatchObject({ record: { path: path.join(destination, 'note.md') }, currentContent: 'second draft' })
-      expect(await fs.readFile(path.join(destination, 'note.md'), 'utf8')).toBe('disk')
+      expect(first.get(a.id)).toMatchObject({ record: { path: movedDocument, version: a.version }, currentContent: 'first draft', fileMissing: false })
+      expect(second.get(b.id)).toMatchObject({ record: { path: movedDocument, version: b.version }, currentContent: 'second draft', fileMissing: false })
+      expect(await fs.readFile(movedDocument, 'utf8')).toBe('disk')
       write.mockRestore()
+      await fs.writeFile(movedDocument, 'external edit after partial failure')
+      await vi.waitFor(() => {
+        for (const id of [a.id, b.id]) expect(events).toContainEqual(expect.objectContaining({ type: 'document-changed', id, kind: 'changed', document: expect.objectContaining({ path: movedDocument, content: 'external edit after partial failure' }) }))
+      })
       await history.undo(root)
       expect(first.get(a.id).record.path).toBe(documentPath)
       expect(second.get(b.id).record.path).toBe(documentPath)
-      expect(await fs.readFile(documentPath, 'utf8')).toBe('disk')
+      expect(await fs.readFile(documentPath, 'utf8')).toBe('external edit after partial failure')
+      expect(events).not.toContainEqual(expect.objectContaining({ type: 'document-changed', kind: 'removed' }))
     } finally { first.dispose(); second.dispose() }
   })
+
+  it.skipIf(process.platform !== 'darwin' && process.platform !== 'win32')('restores nested document watches after failed rename and undo, then allows retry', async () => {
+    const source = path.join(root, 'source'), destination = path.join(root, 'renamed')
+    const documentPath = path.join(source, 'nested', 'note.md'), movedDocument = path.join(destination, 'nested', 'note.md')
+    await fs.mkdir(path.dirname(documentPath), { recursive: true })
+    await fs.mkdir(destination)
+    await fs.writeFile(documentPath, 'disk')
+    const store = new LocalStore(path.join(root, 'user'))
+    await store.load()
+    const events: DesktopEvent[] = []
+    const session = new DocumentSession(store, { chooseSave: async () => null, confirmClose: async () => 'cancel' }, event => events.push(event))
+    const history = new FileMoveHistory({
+      withDocumentLocks: (locked, operation) => withWorkspaceStructure(() => session.withPathLocks(locked, operation)),
+      updatePaths: (from, to) => session.updatePaths(from, to),
+    })
+    try {
+      const document = await session.open(documentPath, true)
+      await session.sync({ id: document.id, revision: 1, content: 'unsaved draft' })
+      await expect(history.rename(root, source, 'renamed')).rejects.toMatchObject({ code: 'CONFLICT' })
+      expect(session.get(document.id)).toMatchObject({ record: { path: documentPath, version: document.version }, currentContent: 'unsaved draft', revision: 1, fileMissing: false })
+      expect(events).toEqual([])
+      await fs.writeFile(documentPath, 'external edit after failed rename')
+      await vi.waitFor(() => expect(events).toContainEqual(expect.objectContaining({ type: 'document-changed', id: document.id, kind: 'changed', document: expect.objectContaining({ path: documentPath, content: 'external edit after failed rename' }) })))
+      await fs.rmdir(destination)
+      await history.rename(root, source, 'renamed')
+      expect(store.drafts.get(document.id)).toMatchObject({ path: movedDocument, content: 'unsaved draft', revision: 1 })
+      await fs.mkdir(source)
+      await expect(history.undo(root)).rejects.toMatchObject({ code: 'CONFLICT' })
+      expect(session.get(document.id)).toMatchObject({ record: { path: movedDocument, version: document.version }, currentContent: 'unsaved draft', revision: 1, fileMissing: false })
+      await fs.writeFile(movedDocument, 'external edit after failed undo')
+      await vi.waitFor(() => expect(events).toContainEqual(expect.objectContaining({ type: 'document-changed', id: document.id, kind: 'changed', document: expect.objectContaining({ path: movedDocument, content: 'external edit after failed undo' }) })))
+      await fs.rmdir(source)
+      await history.undo(root)
+      expect(store.drafts.get(document.id)).toMatchObject({ path: documentPath, content: 'unsaved draft', revision: 1 })
+      await fs.writeFile(documentPath, 'external edit after successful undo')
+      await vi.waitFor(() => expect(events).toContainEqual(expect.objectContaining({ type: 'document-changed', id: document.id, kind: 'changed', document: expect.objectContaining({ path: documentPath, content: 'external edit after successful undo' }) })))
+      expect(events).not.toContainEqual(expect.objectContaining({ type: 'document-changed', kind: 'removed' }))
+    } finally { session.dispose() }
+  }, 15000)
 
   it('only undoes a newly created directory while it is empty and has the same identity', async () => {
     const { history } = createHistory()
@@ -195,13 +241,15 @@ describe('file move history', () => {
   it('keeps an open dirty buffer and a recovery draft when undo removes its newly created disk file', async () => {
     const store = new LocalStore(path.join(root, 'user'))
     await store.load()
-    const session = new DocumentSession(store, { chooseSave: async () => null, confirmClose: async () => 'cancel' }, () => undefined)
+    const events: DesktopEvent[] = []
+    const session = new DocumentSession(store, { chooseSave: async () => null, confirmClose: async () => 'cancel' }, event => events.push(event))
     const history = new FileMoveHistory({ withDocumentLocks: (source, operation) => session.withPathLocks(source, operation), updatePaths: (source, destination) => session.updatePaths(source, destination) })
     try {
       const created = await history.create(root, root, 'draft.md')
       const document = await session.open(created.path, true)
       await session.sync({ id: document.id, revision: 1, content: 'unsaved changes survive' })
       await history.undo(root)
+      expect(events.filter(event => event.type === 'document-changed')).toEqual([{ type: 'document-changed', id: document.id, kind: 'removed', document: null }])
       expect(session.records().find(item => item.id === document.id)?.content).toBe('unsaved changes survive')
       expect(store.drafts.get(document.id)?.content).toBe('unsaved changes survive')
       await expect(fs.stat(created.path)).rejects.toMatchObject({ code: 'ENOENT' })

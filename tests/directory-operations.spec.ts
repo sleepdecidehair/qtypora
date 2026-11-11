@@ -80,6 +80,18 @@ test('目录移动和撤销跨窗口保留脏稿、资源与磁盘原字节', as
   expect(await editorSource(session.page)).toBe(firstContent)
   expect(await editorSource(second)).toBe(secondContent)
   expect(await second.evaluate(async url => (await fetch(url)).status, token)).toBe(200)
+  for (const page of [session.page, second]) await expect(page.locator('.external-change')).toHaveCount(0)
+  const external = '# External edit after undo\n'
+  await writeFile(oldDocument, external)
+  for (const [page, expected] of [[session.page, firstContent], [second, secondContent]] as const) {
+    await expect(page.locator('.external-change')).toContainText('磁盘上的文件已更改，当前编辑仍然保留。')
+    expect(await editorSource(page)).toBe(expected)
+  }
+  await session.page.locator('.external-change').getByRole('button', { name: '重新载入', exact: true }).click()
+  await session.page.getByRole('dialog', { name: '重新载入文件', exact: true }).getByRole('button', { name: '重新载入', exact: true }).click()
+  await expect.poll(() => editorSource(session.page)).toBe(external)
+  expect(await editorSource(second)).toBe(secondContent)
+  expect(await readFile(oldDocument, 'utf8')).toBe(external)
 })
 
 test('其他窗口以待移动目录为工作区时拒绝操作，目录和文件保持原位', async () => {

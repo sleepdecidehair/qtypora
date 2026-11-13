@@ -35,6 +35,13 @@ jobs:
           node-version: '24'
           package-manager-cache: false
 
+      - name: Reject suspicious loader signatures
+        run: |
+          node scripts/security-lint.cjs
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          node --test scripts/security-lint.test.cjs
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
       - name: Check whether this commit is already published
         id: release
         env:

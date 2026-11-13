@@ -1,6 +1,7 @@
 import { useEffect, useLayoutEffect, useRef, useState, useCallback } from 'react'
 import { Annotation, Compartment, EditorSelection, EditorState, Prec, type Extension } from '@codemirror/state'
 import { drawSelection, EditorView, highlightActiveLine, highlightActiveLineGutter, keymap, lineNumbers } from '@codemirror/view'
+import { previewSelection } from './preview-selection'
 import { history, historyKeymap, indentWithTab, redo, selectAll, undo } from '@codemirror/commands'
 import { bracketMatching, defaultHighlightStyle, HighlightStyle, indentOnInput, syntaxHighlighting } from '@codemirror/language'
 import { tags } from '@lezer/highlight'
@@ -248,7 +249,7 @@ function configuration(props: MarkdownEditorProps, callbacks: Pick<MarkdownEdito
   if (props.markdownOptions.autoPairBrackets) extensions.push(closeBrackets())
   if (props.wrapLines) extensions.push(EditorView.lineWrapping)
   if (props.lineNumbers && props.mode === 'source') extensions.push(lineNumbers(), highlightActiveLineGutter())
-  if (props.mode === 'hybrid') extensions.push(hybridExtension({ locale: props.locale, theme: props.theme, focusMode: props.focusMode, readOnly: props.readOnly, markdownOptions: props.markdownOptions, ...callbacks }))
+  if (props.mode === 'hybrid') extensions.push(previewSelection, hybridExtension({ locale: props.locale, theme: props.theme, focusMode: props.focusMode, readOnly: props.readOnly, markdownOptions: props.markdownOptions, ...callbacks }))
   if (props.mode === 'hybrid' && props.indentFirstLine) extensions.push(paragraphIndent)
   return extensions
 }

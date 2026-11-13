@@ -24,6 +24,11 @@ function fixture(provider?: NativeVersionProvider) {
 }
 
 describe('read-only system version history', () => {
+  it.each(['relative.md', '', 'bad\0path'])('rejects an invalid provider path %j', async invalidPath => {
+    const provider = { list: async () => [{ identifier: 'version-1', modifiedAt: '2026-01-01T00:00:00.000Z', path: invalidPath }] }
+    await expect(fixture(provider).service.list('doc')).rejects.toMatchObject({ code: 'IO_ERROR' })
+  })
+
   it('returns opaque document-scoped tokens and preserves historical bytes', async () => {
     const { service } = fixture()
     const versions = await service.list('doc')

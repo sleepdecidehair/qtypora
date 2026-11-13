@@ -1,0 +1,2 @@
+# The audited vendor fingerprint is calculated over LF bytes on every platform.
+src/renderer/editor/vendor/sequence/sequence-diagram.js text eol=lf

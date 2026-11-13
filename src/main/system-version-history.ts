@@ -19,7 +19,7 @@ function validateEntries(entries: NativeVersionEntry[]): void {
   if (!Array.isArray(entries) || entries.length > 500) throw new DesktopError('IO_ERROR', '系统版本信息无效。')
   const identifiers = new Set<string>()
   for (const entry of entries) {
-    if (!entry || typeof entry.identifier !== 'string' || !entry.identifier || entry.identifier.length > 4096 || identifiers.has(entry.identifier) || typeof entry.path !== 'string' || !entry.path.startsWith('/') || entry.path.includes('\0') || typeof entry.modifiedAt !== 'string' || !Number.isFinite(Date.parse(entry.modifiedAt))) throw new DesktopError('IO_ERROR', '系统版本信息无效。')
+    if (!entry || typeof entry.identifier !== 'string' || !entry.identifier || entry.identifier.length > 4096 || identifiers.has(entry.identifier) || typeof entry.path !== 'string' || !path.isAbsolute(entry.path) || entry.path.includes('\0') || typeof entry.modifiedAt !== 'string' || !Number.isFinite(Date.parse(entry.modifiedAt))) throw new DesktopError('IO_ERROR', '系统版本信息无效。')
     identifiers.add(entry.identifier)
   }
 }

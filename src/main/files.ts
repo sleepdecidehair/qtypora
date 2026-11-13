@@ -9,7 +9,7 @@ import { compareWorkspaceEntries, excludesSearchDirectory, matchesFileFilter, no
 import { createTextSearch } from '../shared/search'
 import { readFileSnapshot, type FileIdentity } from './file-snapshot'
 
-import { MAX_DOCUMENT_BYTES } from '../shared/document-size'
+import { encodedDocumentByteLength, MAX_DOCUMENT_BYTES } from '../shared/document-size'
 export { MAX_DOCUMENT_BYTES } from '../shared/document-size'
 export { MARKDOWN_EXTENSIONS } from '../shared/markdown-files'
 export const IMAGE_MIME: Record<string, string> = {
@@ -171,6 +171,7 @@ export async function saveMarkdown(record: DocumentRecord, destination: string, 
       return { ...record, path: destination, name: path.basename(destination), readOnly: false }
     }
     const lineEnding = convertLineEnding ?? record.lineEnding
+    if (encodedDocumentByteLength(content, record.encoding, lineEnding) > MAX_DOCUMENT_BYTES) throw new DesktopError('UNSUPPORTED', '保存后的文件超过 16 MB，未执行保存。')
     const bytes = encodedDocument(content, record.encoding, lineEnding)
     if (bytes.length > MAX_DOCUMENT_BYTES) throw new DesktopError('UNSUPPORTED', '保存后的文件超过 16 MB，未执行保存。')
     await atomicWrite(destination, bytes, checkVersion ? async () => {

@@ -106,6 +106,9 @@
 .markdown-editor .cm-line.cm-live-code-body::after, .markdown-editor .cm-line.cm-live-edit-line::after, .markdown-editor .cm-line.cm-live-edit-block::after { content: ''; position: absolute; inset: 0; z-index: -3; background: var(--color-code); pointer-events: none; }
 .markdown-editor .cm-line.cm-live-code-first::after { border-radius: var(--editor-radius) var(--editor-radius) 0 0; }
 .markdown-editor .cm-selectionLayer { z-index: -1 !important; pointer-events: none; }
+.markdown-editor-hybrid .cm-selectionLayer { visibility: hidden; }
+.markdown-editor .cm-preview-selectionLayer { z-index: -1 !important; pointer-events: none; }
+.markdown-editor .cm-preview-selectionLayer .cm-selectionBackground { background-color: var(--color-editor-selection); }
 .markdown-editor .cm-line.cm-live-code-body { font-family: Consolas, "Cascadia Code", monospace; padding: 0 var(--editor-space-md); }
 .markdown-editor .cm-line.cm-live-code-first { padding-top: var(--editor-space-md); border-radius: var(--editor-radius) var(--editor-radius) 0 0; }
 .cm-live-code-footer { display: flex; justify-content: flex-end; padding: var(--editor-space-xs) var(--editor-space-sm) var(--editor-space-sm); background: var(--color-code); border-radius: 0 0 var(--editor-radius) var(--editor-radius); user-select: none; }

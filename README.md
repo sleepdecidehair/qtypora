@@ -49,6 +49,8 @@ QTypora 是面向 Windows 与 macOS 的本地 Markdown 桌面编辑器，参考 
 
 按 `Ctrl+/` 切换实时预览与源码。实时预览中，双击支持局部编辑的格式化内容可展开对应源码；不局限于标题。`Ctrl+E` 选择当前样式内容或表格单元格，`Ctrl+Click` 打开链接。引用按钮再次点击可取消引用。
 
+实时预览中跨标题和普通段落选择文字时，选区按文本行显示，不会填满段落间的空白。跨块级组件选择时沿用组件的选区显示方式。
+
 实时预览中，在单独一行输入三个英文反引号并按 Enter 可插入代码块；反引号后的语言名称用于语法高亮，也可通过代码块的语言选择器修改。源码模式下 Enter 按普通文本换行处理。例如：
 
 ````markdown
@@ -110,6 +112,8 @@ node node_modules/electron/install.js
 
 | 命令 | 用途 |
 | --- | --- |
+| `npm run lint` | 检查已知恶意加载器特征，命中时返回失败 |
+| `npm run test:security` | 验证安全检查规则 |
 | `npm run typecheck` | TypeScript 类型检查 |
 | `npm test` | Vitest 单元测试 |
 | `npm run test:release` | 自动发布脚本的成功、失败与重试测试 |
@@ -117,6 +121,8 @@ node node_modules/electron/install.js
 | `npm run build` | 编译主进程、预加载和界面到 `out/`，不生成安装包 |
 | `npm run test:desktop` | Playwright 真实 Electron 联调测试 |
 | `npm run test:packaged` | 对指定打包程序执行桌面测试 |
+
+安全检查覆盖已知混淆加载器标记，以及明文区块链查询与动态执行的组合；它不扫描依赖、构建产物和 Git 历史，也不能保证识别所有变种。构建、开发启动、相关测试、打包及 Windows 发布工作流会在执行项目脚本前运行此检查。对于不可信的仓库或提交，应先在隔离环境中审查，不能仅凭此检查认定安全。
 
 完整开发检查可执行：
 

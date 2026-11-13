@@ -29,6 +29,8 @@ npm run dev
 
 | 命令 | 使用时机 |
 | --- | --- |
+| `npm run lint` | 检查已知恶意加载器特征；命中时禁止构建和发布 |
+| `npm run test:security` | 验证安全检查规则 |
 | `npm run typecheck` | TypeScript 代码或类型变化 |
 | `npm test` | 单元测试；可追加 `-- src/main/documents.test.ts` 指定范围 |
 | `npm run test:release` | 发布脚本的输入、失败、幂等和摘要校验测试 |
@@ -39,7 +41,7 @@ npm run dev
 | `npm run package:mac:internal` | 在 Apple Silicon Mac 生成并验证 arm64、x64 两个内测 DMG |
 | `npm run test:packaged` | 已设置 `QTYPORA_PACKAGED_EXE` 时验证对应打包程序 |
 
-仅在首次准备或依赖变化后执行 `npm ci`。禁用 npm 生命周期脚本的环境应显式生成图标；Electron 运行时缺失时按 README 处理。当前没有 `lint` 或格式化脚本，不编造命令或擅自引入工具链。
+仅在首次准备或依赖变化后执行 `npm ci`。禁用 npm 生命周期脚本的环境应显式生成图标；Electron 运行时缺失时按 README 处理。`lint` 仅检查指定的安全特征，不能替代完整安全审计；当前没有格式化脚本。
 
 ## 修改与验证约定
 

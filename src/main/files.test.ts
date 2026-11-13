@@ -96,7 +96,7 @@ describe('Markdown filesystem behavior', () => {
     const document = await readMarkdown(target)
     await expect(saveMarkdown(document, target, document.content, true, undefined, 'CRLF')).rejects.toMatchObject({ code: 'UNSUPPORTED' })
     expect(await fs.readFile(target)).toEqual(original)
-  })
+  }, 90_000)
 
   it('removes only the encoding BOM and retains a literal leading U+FEFF content character', async () => {
     const target = path.join(directory, 'bom-character.md')

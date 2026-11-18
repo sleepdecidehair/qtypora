@@ -44,7 +44,11 @@ test('the lint command fails before a suspicious file can be used', () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'qtypora-security-gate-'))
   try {
     fs.mkdirSync(path.join(root, 'scripts'))
-    fs.copyFileSync(path.join(__dirname, 'security-lint.cjs'), path.join(root, 'scripts', 'security-lint.cjs'))
+    for (const name of ['security-lint.cjs', 'scan-code.py', 'chaindrop-versions.tsv']) {
+      fs.copyFileSync(path.join(__dirname, name), path.join(root, 'scripts', name))
+    }
+    const initialized = spawnSync('git', ['init', '-q', root], { encoding: 'utf8' })
+    assert.equal(initialized.status, 0, initialized.stderr)
     const filename = path.join(root, 'candidate.cjs')
     fs.writeFileSync(filename, ['596dcc9fda875309', 'ff85eba09cf5a97d'].join(''))
     const run = () => spawnSync(process.execPath, [path.join(root, 'scripts', 'security-lint.cjs')], { encoding: 'utf8' })
@@ -52,6 +56,12 @@ test('the lint command fails before a suspicious file can be used', () => {
     assert.equal(rejected.status, 1)
     assert.match(rejected.stderr, /candidate\.cjs/)
     fs.unlinkSync(filename)
+    const lockfile = path.join(root, 'package-lock.json')
+    fs.writeFileSync(lockfile, JSON.stringify({ packages: { 'node_modules/keyv': { version: '6.0.0' } } }))
+    const rejectedDependency = run()
+    assert.equal(rejectedDependency.status, 1)
+    assert.match(rejectedDependency.stderr, /ChainDrop compromised dependency/)
+    fs.unlinkSync(lockfile)
     assert.equal(run().status, 0)
   } finally {
     fs.rmSync(root, { recursive: true, force: true })

@@ -1,3 +1,4 @@
+const { spawnSync } = require('node:child_process')
 const fs = require('node:fs')
 const path = require('node:path')
 
@@ -60,11 +61,20 @@ function scanDirectory(root) {
 
 if (require.main === module) {
   try {
-    const findings = scanDirectory(path.resolve(__dirname, '..'))
+    const root = path.resolve(__dirname, '..')
+    const findings = scanDirectory(root)
     if (findings.length) {
       fs.writeSync(2, 'Security lint failed:\n' + findings.map(finding => `  ${finding}`).join('\n') + '\n')
       process.exit(1)
-    } else console.log('Security lint passed.')
+    }
+    const python = process.platform === 'win32' ? 'python' : 'python3'
+    const scan = spawnSync(python, ['-I', path.join(__dirname, 'scan-code.py')], {
+      cwd: root,
+      stdio: 'inherit',
+    })
+    if (scan.error) throw scan.error
+    if (scan.status !== 0) process.exit(scan.status || 1)
+    console.log('Security lint passed.')
   } catch (error) {
     fs.writeSync(2, `Security lint could not complete: ${error.message}\n`)
     process.exit(1)

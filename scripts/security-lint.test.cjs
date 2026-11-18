@@ -11,6 +11,11 @@ test('detects the observed loader even when it is hidden after whitespace', () =
   assert.match(inspectText(suspicious).join(' '), /obfuscated loader/)
 })
 
+test('detects known loader markers and their global assignment', () => {
+  assert.match(inspectText(['5', '2076', 'du'].join('-')).join(' '), /loader marker/)
+  assert.match(inspectText(["global . o = '", '8-123456-du', "'"].join('')).join(' '), /loader marker/)
+})
+
 test('detects blockchain lookup combined with dynamic execution', () => {
   const parts = [['eth_', 'getBlockByNumber'].join(''), ['eth_', 'blockNumber'].join(''), ['bsc-', 'dataseed'].join('')]
   assert.match(inspectText(parts.join(' ') + ' eval(code)').join(' '), /Blockchain lookup/)

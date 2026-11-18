@@ -12,6 +12,8 @@ const signatures = {
   bscFallback: ['bsc-', 'rpc'].join(''),
   signal: ['596dcc9fda875309', 'ff85eba09cf5a97d'].join(''),
 }
+const runMarker = /\b5-(?:790|2063|2076)-du\b/
+const globalMarker = /\bglobal\s*\.\s*o\s*=\s*['"][0-9]{1,8}-[0-9]{1,10}-du['"]/
 const excludedDirectories = new Set(['.git', 'node_modules', 'out', 'dist', 'release', 'test-results', 'playwright-report', '.debug', '.temp', 'coverage'])
 const executableExtensions = new Set(['.js', '.cjs', '.mjs', '.jsx', '.ts', '.tsx', '.json', '.jsonc', '.html', '.yml', '.yaml', '.ps1', '.sh'])
 const maxFileBytes = 32 * 1024 * 1024
@@ -20,6 +22,7 @@ function inspectText(text) {
   const findings = []
   const has = value => text.includes(value)
   const execute = /\beval\s*\(|\bnew\s+Function\s*\(|\bFunction\s*\(/.test(text)
+  if (runMarker.test(text) || globalMarker.test(text)) findings.push('Known loader marker')
   if (has(signatures.signal)) findings.push('Known blockchain loader signal identifier')
   if (has(signatures.loop) && has(signatures.pow) && has(signatures.iter) && execute) findings.push('Known obfuscated loader signature')
   if (has(signatures.block) && has(signatures.height) && (has(signatures.bsc) || has(signatures.bscFallback)) && execute) findings.push('Blockchain lookup combined with dynamic code execution')
@@ -59,12 +62,12 @@ if (require.main === module) {
   try {
     const findings = scanDirectory(path.resolve(__dirname, '..'))
     if (findings.length) {
-      console.error('Security lint failed:\n' + findings.map(finding => `  ${finding}`).join('\n'))
-      process.exitCode = 1
+      fs.writeSync(2, 'Security lint failed:\n' + findings.map(finding => `  ${finding}`).join('\n') + '\n')
+      process.exit(1)
     } else console.log('Security lint passed.')
   } catch (error) {
-    console.error(`Security lint could not complete: ${error.message}`)
-    process.exitCode = 1
+    fs.writeSync(2, `Security lint could not complete: ${error.message}\n`)
+    process.exit(1)
   }
 }
 

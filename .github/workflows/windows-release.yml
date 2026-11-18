@@ -29,6 +29,11 @@ jobs:
         with:
           persist-credentials: false
 
+      - name: Scan the committed tree for injected loaders
+        run: |
+          python -I scripts/scan-code.py --tree HEAD
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
       - name: Set up Node.js
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:

@@ -201,7 +201,7 @@ node node_modules/electron/install.js
 | `npm run test:desktop` | Playwright 真实 Electron 联调测试 |
 | `npm run test:packaged` | 对指定打包程序执行桌面测试 |
 
-安全检查覆盖已知混淆加载器标记，以及明文区块链查询与动态执行的组合；它不扫描依赖、构建产物和 Git 历史，也不能保证识别所有变种。构建、开发启动、相关测试、打包及 Windows 发布工作流会在执行项目脚本前运行此检查。对于不可信的仓库或提交，应先在隔离环境中审查，不能仅凭此检查认定安全。
+安全检查识别已知恶意加载器标记、混淆特征，以及区块链查询与动态执行的组合。开发、构建、相关测试和打包继续通过 `npm run lint` 检查本地源码。Windows 发布工作流先用 Python 扫描该次提交的全部跟踪文件，扫描失败会阻止执行项目的 Node.js 脚本、安装依赖和发布。可用受信任副本中的 `python3 scripts/scan-code.py --tree HEAD` 静态检查提交树。对于不可信的仓库或提交，应先在隔离环境中审查。
 
 完整开发检查可执行：
 

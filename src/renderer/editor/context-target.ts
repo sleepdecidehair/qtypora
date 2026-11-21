@@ -5,6 +5,7 @@ import type { ContextMenuKind } from '../../shared/contracts'
 import { getMarkdownParser } from './markdown'
 import { markdownOptionsFacet } from './markdown-config'
 import { parseTableSource } from './table-model'
+import { inlineHtmlAnchorAt } from './inline-html-anchor'
 
 export interface ContextTarget {
   kind: Extract<ContextMenuKind, 'editor' | 'table' | 'code' | 'math' | 'diagram' | 'image' | 'link'>
@@ -65,6 +66,11 @@ export function sourceContextTarget(state: EditorState, position: number, tree?:
   if (!completeTree) {
     const line = state.doc.lineAt(pos)
     return { kind: 'editor', from: line.from, to: line.to, source: line.text }
+  }
+  const anchor = inlineHtmlAnchorAt(state.doc, completeTree, pos)
+  if (anchor?.href) {
+    return { kind: 'link', from: anchor.from, to: anchor.to, source: state.doc.sliceString(anchor.from, anchor.to),
+      address: { from: anchor.from, to: anchor.labelFrom, value: anchor.href } }
   }
   let node = completeTree.resolveInner(pos, 1)
   while (node.parent) {

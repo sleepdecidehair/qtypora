@@ -13,7 +13,7 @@ import { syntaxTree } from '@codemirror/language'
 import { LiveMediaWidget } from './live-media'
 import { resourceFitExtension } from './resource-fit'
 import { liveCodeBlocks, liveCodeExtension } from './live-code'
-import { focusedHeadingEditRange, headingInputPreview, liveSourceEditExtension } from './live-source-edit'
+import { focusedHeadingEditRange, headingInputPreview, liveSourceEditExtension, previewPointer, previewPointerSelection } from './live-source-edit'
 import { editorText } from './editor-i18n'
 import type { AppLocale } from '../../shared/i18n'
 import { isTaskMarker } from './task-marker'
@@ -127,10 +127,10 @@ function decorations(state: EditorState, options: HybridOptions): DecorationSet 
 export function hybridExtension(options: HybridOptions): Extension {
   const previews = StateField.define<DecorationSet>({
     create: (state) => decorations(state, options),
-    update: (value, transaction) => transaction.docChanged || transaction.reconfigured || transaction.selection || syntaxTree(transaction.startState) !== syntaxTree(transaction.state) || transaction.effects.some((effect) => effect.is(editLiveBlock)) ? decorations(transaction.state, options) : value,
+    update: (value, transaction) => transaction.docChanged || transaction.reconfigured || transaction.selection || syntaxTree(transaction.startState) !== syntaxTree(transaction.state) || transaction.effects.some((effect) => effect.is(editLiveBlock) || effect.is(previewPointer)) ? decorations(transaction.state, options) : value,
     provide: (field) => EditorView.decorations.from(field),
   })
-  return [liveEditingBlock, headingInputPreview, Prec.highest(keymap.of([{ key: 'Escape', run: view => {
+  return [liveEditingBlock, headingInputPreview, previewPointerSelection, Prec.highest(keymap.of([{ key: 'Escape', run: view => {
     if (!view.state.field(liveEditingBlock, false)) return false
     closeCompletion(view)
     view.dispatch({ effects: editLiveBlock.of(null) })
@@ -138,7 +138,7 @@ export function hybridExtension(options: HybridOptions): Extension {
   } }])), liveCodeExtension(options.focusMode), previews, resourceFitExtension, liveSourceEditExtension, footnoteHoverExtension(options.onLinkOpen), EditorView.domEventHandlers({
     mousedown: (event) => {
       const link = event.target instanceof Element ? event.target.closest<HTMLElement>('.cm-live-link[data-href]') : null
-      if (!link || !(link.classList.contains('cm-live-footnote') || event.ctrlKey || event.metaKey)) return false
+      if (event.button !== 0 || !link || !(link.classList.contains('cm-live-footnote') || event.ctrlKey || event.metaKey)) return false
       event.preventDefault(); options.onLinkOpen(link.dataset.href!); return true
     },
   })]

@@ -18,6 +18,16 @@ const doc = prefix + suffix
 const from = doc.indexOf('value')
 const create = (reverse = false) => EditorState.create({ doc, selection: EditorSelection.range(reverse ? doc.length : from, reverse ? from : doc.length), extensions: [markdown({ base: markdownLanguage })] })
 
+it.each([
+  ['[Link label](#section "Title")', '[ink labe](#section "Title")'],
+  ['<a title="href=fake" href="#section">Link label</a>', '<a title="href=fake" href="#section">ink labe</a>'],
+])('preserves the destination when copying part of %s', (source, expected) => {
+  const state = EditorState.create({ doc: source, extensions: [markdown({ base: markdownLanguage })] })
+  const start = source.indexOf('ink labe')
+  expect(richSelectionMarkdown(state, start, start + 'ink labe'.length)).toBe(expected)
+  expect(state.doc.toString()).toBe(source)
+})
+
 describe('rich copy with incremental parsing', () => {
   it('keeps following paragraphs outside a partially selected late code fence', () => {
     for (const reverse of [false, true]) {

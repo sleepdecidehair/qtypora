@@ -4,6 +4,8 @@ import type { FootnoteEnvironment } from './markdown-references'
 import { getMarkdownParser } from './markdown-parser'
 import { ensureSyntaxTree, syntaxTree } from '@codemirror/language'
 import { underlineRanges } from './underline'
+import { inlineHtmlAnchor } from './inline-html-anchor'
+import { previewCursor } from './live-source-edit'
 
 export interface InlinePreviewSpan { from: number; to: number; className?: string; hidden?: boolean; line?: boolean; href?: string; replacement?: string }
 const INLINE_CLASSES: Record<string, string> = { StrongEmphasis: 'cm-live-strong', Emphasis: 'cm-live-emphasis', Strikethrough: 'cm-live-strike', InlineCode: 'cm-live-code', Link: 'cm-live-link' }
@@ -11,25 +13,39 @@ const INLINE_MARKS = new Set(['EmphasisMark', 'CodeMark', 'LinkMark', 'Strikethr
 
 export function inlinePreviewSpans(state: EditorState, excluded: readonly { from: number; to: number }[] = []): InlinePreviewSpan[] {
   const spans: InlinePreviewSpan[] = []
-  const selection = state.selection.main
+  const caret = previewCursor(state)
+  const active = (from: number, to: number): boolean => caret !== null && caret > from && caret < to
   const settings = state.facet(markdownOptionsFacet)
   const model = markdownDocumentModel(state)
   const tree = syntaxTree(state)
   tree.iterate({ enter: (node) => {
     if (excluded.some((range) => node.from >= range.from && node.to <= range.to)) return false
     if (settings.strictMode && node.name === 'Strikethrough') return false
-    if (node.name === 'Escape' && state.doc.sliceString(node.from, node.from + 1) === '\\' && !(selection.empty && selection.head > node.from && selection.head < node.to)) {
+    if (node.name === 'Escape' && state.doc.sliceString(node.from, node.from + 1) === '\\' && !active(node.from, node.to)) {
       spans.push({ from: node.from, to: node.from + 1, hidden: true })
+    }
+    if (node.name === 'HTMLTag') {
+      const anchor = inlineHtmlAnchor(state.doc, node.node)
+      if (anchor && !excluded.some(range => anchor.from < range.to && anchor.to > range.from)) {
+        if (anchor.href && anchor.labelFrom < anchor.labelTo) spans.push({ from: anchor.labelFrom, to: anchor.labelTo, className: 'cm-live-link', href: anchor.href })
+        if (!active(anchor.from, anchor.to)) spans.push({ from: anchor.from, to: anchor.labelFrom, hidden: true }, { from: anchor.labelTo, to: anchor.to, hidden: true })
+      }
+    }
+    if (node.name === 'Link') {
+      const [opening, closing] = node.node.getChildren('LinkMark')
+      const href = model.parser.parseInline(state.doc.sliceString(node.from, node.to), { references: model.environment.references })[0]?.children?.[0]?.attrGet('href')
+      if (href && opening && closing) {
+        spans.push({ from: opening.to, to: closing.from, className: 'cm-live-link', href })
+        if (!active(node.from, node.to)) spans.push({ from: node.from, to: opening.to, hidden: true }, { from: closing.from, to: node.to, hidden: true })
+      }
+      return
     }
     const className = INLINE_CLASSES[node.name]
     if (className) {
-      const active = selection.empty && selection.head > node.from && selection.head < node.to
-      const url = node.name === 'Link' ? node.node.getChild('URL') : null
-      const referenceHref = node.name === 'Link' && !url ? model.parser.parseInline(state.doc.sliceString(node.from, node.to), { references: model.environment.references })[0]?.children?.find(token => token.type === 'link_open')?.attrGet('href') : null
-      spans.push({ from: node.from, to: node.to, className, ...(url ? { href: state.doc.sliceString(url.from, url.to).replace(/^<|>$/g, '') } : referenceHref ? { href: referenceHref } : {}) })
-      if (!active) {
+      spans.push({ from: node.from, to: node.to, className })
+      if (!active(node.from, node.to)) {
         for (let child = node.node.firstChild; child; child = child.nextSibling) {
-          if (INLINE_MARKS.has(child.name) || (node.name === 'Link' && (child.name === 'URL' || child.name === 'LinkTitle' || child.name === 'LinkLabel'))) spans.push({ from: child.from, to: child.to, hidden: true })
+          if (INLINE_MARKS.has(child.name)) spans.push({ from: child.from, to: child.to, hidden: true })
         }
       }
     }
@@ -67,7 +83,6 @@ export function inlinePreviewSpans(state: EditorState, excluded: readonly { from
     }
     return false
   }
-  const active = (from: number, to: number): boolean => selection.empty && selection.head > from && selection.head < to
   const patterns: { enabled: boolean; expression: RegExp; marker: number; className: string }[] = [
     { enabled: settings.highlight, expression: /==(?=\S)((?:\\[^\n]|[^=\n\\])+?)==/g, marker: 2, className: 'cm-live-highlight' },
     { enabled: settings.subscript, expression: /(?<!~)~((?:\\[^\n]|[^~\s\\])+)~(?!~)/g, marker: 1, className: 'cm-live-subscript' },

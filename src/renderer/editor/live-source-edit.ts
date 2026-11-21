@@ -21,6 +21,27 @@ export const headingInputPreview = StateField.define<number | null>({
   },
 })
 
+// Keep the rendered coordinates stable from mouse-down through mouse-up.
+export const previewPointer = StateEffect.define<boolean>()
+export const previewPointerSelection = StateField.define<{ position: number | null; headingPreview: number | null } | null>({
+  create: () => null,
+  update: (value, transaction) => {
+    for (const effect of transaction.effects) {
+      if (!effect.is(previewPointer)) continue
+      if (!effect.value) return null
+      const start = transaction.startState
+      return { position: previewCursor(start), headingPreview: start.field(headingInputPreview, false) ?? null }
+    }
+    return transaction.docChanged ? null : value
+  },
+})
+
+export function previewCursor(state: EditorState): number | null {
+  const pointer = state.field(previewPointerSelection, false)
+  if (pointer) return pointer.position
+  return state.selection.main.empty ? state.selection.main.head : null
+}
+
 export function sourceEditRange(state: EditorState, position: number): { from: number; to: number } {
   const bounded = Math.max(0, Math.min(state.doc.length, position))
   const line = state.doc.lineAt(bounded)
@@ -33,9 +54,11 @@ export function sourceEditRange(state: EditorState, position: number): { from: n
 }
 
 export function focusedHeadingEditRange(state: EditorState): { from: number; to: number } | null {
-  if (!state.selection.main.empty) return null
-  const position = state.selection.main.head
-  if (state.field(headingInputPreview, false) === state.doc.lineAt(position).from) return null
+  const position = previewCursor(state)
+  if (position === null) return null
+  const pointer = state.field(previewPointerSelection, false)
+  const headingPreview = pointer ? pointer.headingPreview : state.field(headingInputPreview, false)
+  if (headingPreview === state.doc.lineAt(position).from) return null
   for (const side of [1, -1] as const) {
     let node = syntaxTree(state).resolveInner(position, side)
     for (;;) {
@@ -49,6 +72,16 @@ export function focusedHeadingEditRange(state: EditorState): { from: number; to:
 
 // Capture also reaches widgets that intentionally ignore CodeMirror's text events.
 export const liveSourceEditExtension = ViewPlugin.fromClass(class {
+  private readonly listeners = new AbortController()
+  private startPointer = (event: MouseEvent): void => {
+    const target = event.target instanceof Element ? event.target : null
+    if (event.button !== 0 || event.metaKey || event.ctrlKey || this.view.state.readOnly || this.view.composing ||
+        !target?.closest('.cm-line') || target.closest('button,input,select,textarea,.cm-live-footnote')) return
+    this.view.dispatch({ effects: previewPointer.of(true) })
+  }
+  private finishPointer = (): void => {
+    if (this.view.state.field(previewPointerSelection, false)) this.view.dispatch({ effects: previewPointer.of(false) })
+  }
   private doubleClick = (event: MouseEvent): void => {
     const view = this.view
     const target = event.target instanceof Element ? event.target : null
@@ -75,6 +108,14 @@ export const liveSourceEditExtension = ViewPlugin.fromClass(class {
     view.dispatch({ effects: editLiveBlock.of({ from: range.from, to: range.to }), selection: { anchor: Math.max(range.from, Math.min(range.to, anchor)) }, scrollIntoView: true })
     view.focus()
   }
-  constructor(readonly view: EditorView) { view.contentDOM.addEventListener('dblclick', this.doubleClick, true) }
-  destroy(): void { this.view.contentDOM.removeEventListener('dblclick', this.doubleClick, true) }
+  constructor(readonly view: EditorView) {
+    const signal = this.listeners.signal
+    view.contentDOM.addEventListener('mousedown', this.startPointer, { capture: true, signal })
+    view.contentDOM.addEventListener('dblclick', this.doubleClick, { capture: true, signal })
+    const window = view.contentDOM.ownerDocument.defaultView
+    window?.addEventListener('mouseup', this.finishPointer, { signal })
+    window?.addEventListener('blur', this.finishPointer, { signal })
+    window?.addEventListener('dragend', this.finishPointer, { signal })
+  }
+  destroy(): void { this.listeners.abort() }
 })

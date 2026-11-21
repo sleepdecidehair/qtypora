@@ -5,6 +5,7 @@ import { queueClipboardWrite } from './clipboard-write'
 import { ensureSyntaxTree } from '@codemirror/language'
 import { isolateHistory } from '@codemirror/commands'
 import type { EditorState } from '@codemirror/state'
+import { inlineHtmlAnchorAt } from './inline-html-anchor'
 
 // Keep parsing and RTF generation bounded even for the 16 MB source-only mode.
 export const MAX_RICH_COPY_CHARACTERS = 200000
@@ -101,12 +102,27 @@ export function richFragmentToRtf(root: Node, fontSize = 24, theme?: RtfTheme, p
   return { rtf: output.join(''), plain: preserveCodeEnd ? plain.join('') : plain.join('').replace(/\n+$/, '') }
 }
 
-// A partial fence is not a standalone Markdown fragment. Complete the selected
-// code body using its original delimiters before rendering the clipboard content.
+function clipboardLinkAt(doc: EditorState['doc'], tree: NonNullable<ReturnType<typeof ensureSyntaxTree>>, position: number) {
+  const html = inlineHtmlAnchorAt(doc, tree, position)
+  if (html?.href) return html
+  for (let node = tree.resolveInner(position); node.parent; node = node.parent) {
+    if (node.name !== 'Link' || !node.getChild('URL')) continue
+    const [opening, closing] = node.getChildren('LinkMark')
+    if (opening && closing) return { from: node.from, to: node.to, labelFrom: opening.to, labelTo: closing.from }
+  }
+  return null
+}
+
+// Complete selected link labels and partial fences before rendering the clipboard fragment.
 export function richSelectionMarkdown(state: EditorState, from: number, to: number): string {
   const tree = ensureSyntaxTree(state, state.doc.length, 50)
   if (!tree) throw new Error('文档解析尚未完成，无法安全复制格式内容，请稍后重试或复制为 Markdown。')
   const fragments: string[] = []
+  const startLink = clipboardLinkAt(state.doc, tree, from)
+  const endLink = clipboardLinkAt(state.doc, tree, to)
+  if (startLink && from >= startLink.labelFrom && from < startLink.labelTo) {
+    fragments.push(state.doc.sliceString(startLink.from, startLink.labelFrom))
+  }
   let cursor = from
   tree.iterate({ from, to, enter(node) {
     if (node.name !== 'FencedCode') return
@@ -137,6 +153,9 @@ export function richSelectionMarkdown(state: EditorState, from: number, to: numb
     return false
   } })
   fragments.push(state.doc.sliceString(cursor, to))
+  if (endLink && to > endLink.labelFrom && to <= endLink.labelTo) {
+    fragments.push(state.doc.sliceString(endLink.labelTo, endLink.to))
+  }
   return fragments.join('')
 }
 

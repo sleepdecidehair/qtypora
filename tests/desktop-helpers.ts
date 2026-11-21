@@ -26,7 +26,7 @@ export async function readCreatedText(filePath: string): Promise<string> {
   return (await readCreatedBytes(filePath)).toString('utf8')
 }
 
-export async function launchDesktop(existingRoot?: string): Promise<DesktopSession> {
+export async function launchDesktop(existingRoot?: string, options: { keepInitialMode?: boolean } = {}): Promise<DesktopSession> {
   const root = existingRoot ?? await mkdtemp(path.join(tmpdir(), 'qtypora-desktop-test-'))
   const userData = path.join(root, 'user-data')
   await mkdir(userData, { recursive: true })
@@ -73,8 +73,10 @@ export async function launchDesktop(existingRoot?: string): Promise<DesktopSessi
     await expect(page.locator('.cm-content')).toBeVisible()
     session.initialMode = await page.locator('.cm-content').getAttribute('data-mode')
     // File-service fixtures edit exact source; dedicated interaction tests switch back to live preview.
-    if (session.initialMode !== 'source') await page.keyboard.press('ControlOrMeta+/')
-    await expect(page.locator('.cm-content')).toHaveAttribute('data-mode', 'source')
+    if (!options.keepInitialMode) {
+      if (session.initialMode !== 'source') await page.keyboard.press('ControlOrMeta+/')
+      await expect(page.locator('.cm-content')).toHaveAttribute('data-mode', 'source')
+    }
     return session
   } catch (error) {
     await stopDesktop(session, !existingRoot)

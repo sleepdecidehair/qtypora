@@ -2,6 +2,34 @@ import { readFile } from 'node:fs/promises'
 import { expect, test } from '@playwright/test'
 import { launchDesktop, openFixture, setContextMenuChoice, stopDesktop } from './desktop-helpers'
 
+test('启动和打开已有文档时首个标题保持预览，单击后可编辑源码', async () => {
+  const session = await launchDesktop(undefined, { keepInitialMode: true })
+  try {
+    const editor = session.page.locator('.cm-content')
+    await expect(editor).toHaveAttribute('data-mode', 'hybrid')
+    const firstLine = editor.locator('.cm-line[data-source-line="1"]')
+    await expect(firstLine).toHaveClass(/cm-live-heading-1/)
+    await expect(firstLine).not.toHaveText(/^# /)
+
+    const source = '# Opening title\n\nFirst paragraph.\n'
+    const destination = await openFixture(session, 'opening-title.md', source)
+    await expect(firstLine).toHaveClass(/cm-live-heading-1/)
+    await expect(firstLine).toHaveText('Opening title')
+    await firstLine.click({ position: { x: 24, y: 20 } })
+    await expect(firstLine).toHaveClass(/cm-live-edit-line/)
+    await expect(firstLine).toHaveText('# Opening title')
+    await expect(editor).toHaveAttribute('data-mode', 'hybrid')
+
+    await editor.locator('.cm-line[data-source-line="3"]').click()
+    await expect(firstLine).toHaveText('Opening title')
+    await session.page.keyboard.press('ControlOrMeta+s')
+    expect(await readFile(destination, 'utf8')).toBe(source)
+    expect(session.errors).toEqual([])
+  } finally {
+    await stopDesktop(session)
+  }
+})
+
 test('预览模式跨标题和正文拖选不填充段落间空白，编辑和撤销保留原文', async () => {
   const session = await launchDesktop()
   try {

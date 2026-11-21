@@ -4,10 +4,10 @@ import { EditorView, ViewPlugin } from '@codemirror/view'
 import { editLiveBlock, liveBlocks } from './live-blocks'
 import { sourceContextTarget } from './context-target'
 
-// Newly typed headings render immediately; explicitly entering an existing heading reveals its source.
+// The default caret at document start and newly typed headings keep the preview.
 export const preserveHeadingPreview = StateEffect.define<number>({ map: (value, changes) => changes.mapPos(value, -1) })
 export const headingInputPreview = StateField.define<number | null>({
-  create: () => null,
+  create: state => state.selection.main.empty && state.selection.main.head === 0 ? 0 : null,
   update: (value, transaction) => {
     for (const effect of transaction.effects) if (effect.is(preserveHeadingPreview)) return transaction.state.doc.lineAt(effect.value).from
     if (!transaction.docChanged) return transaction.selection ? null : value

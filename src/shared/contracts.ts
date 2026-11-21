@@ -218,6 +218,7 @@ export interface DesktopApi {
   reopenClosedFile(): Promise<Result<DocumentRecord | null>>
   openLinkedFile(request: { id: string; target: string }): Promise<Result<{ document: DocumentRecord | null; fragment: string | null } | null>>
   openFile(path?: string): Promise<Result<DocumentRecord | null>>
+  openDroppedFile(file: File): Promise<Result<DocumentRecord | null>>
   openFolder(path?: string): Promise<Result<Workspace | null>>
   removeRecentFolder(path: string): Promise<Result<RecentItems>>
   clearRecentItems(request: { includePinned: boolean }): Promise<Result<RecentItems | null>>

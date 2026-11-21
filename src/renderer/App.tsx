@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from 'react'
 import { AlertCircle, Check, X, FileText, FolderOpen } from 'lucide-react'
 import type { AppCommand, BootstrapData, DesktopApi, DraftRecord, Result, Workspace } from '../shared/contracts'
+import { isMarkdownFileName } from '../shared/markdown-files'
 import { MarkdownEditor } from './editor/MarkdownEditor'
 import type { FolderSearchQuery } from './editor/folder-search-highlight'
 import { renderExportDocument } from './editor/markdown'
@@ -537,7 +538,23 @@ function DesktopApp({ api }: { api: DesktopApi }) {
   const appStyle = { '--writing-line-height': preferences.lineHeight, ...(preferences.fontFamily ? { '--font-editor': preferences.fontFamily } : {}), ...(preferences.showStatusBar ? {} : { '--statusbar-height': '0px' }), '--content-width': preferences.contentWidthMode === 'auto' ? '100%' : `${preferences.contentWidth}px` } as CSSProperties
   if (isLoading) return <div className="startup-state"><FileText size={32} /><p>{t('正在打开写作空间…')}</p></div>
 
-  return <LocaleProvider locale={preferences.locale}><div className={`desktop-app ${preferences.sourceMode ? 'source-mode' : 'hybrid-mode'}`} style={appStyle} data-testid="desktop-app" data-theme={theme} data-palette={theme === 'dark' ? preferences.darkTheme : preferences.lightTheme}>
+  return <LocaleProvider locale={preferences.locale}><div className={`desktop-app ${preferences.sourceMode ? 'source-mode' : 'hybrid-mode'}`} style={appStyle} data-testid="desktop-app" data-theme={theme} data-palette={theme === 'dark' ? preferences.darkTheme : preferences.lightTheme}
+    onDragOverCapture={event => {
+      if (!event.dataTransfer.types.includes('Files')) return
+      event.preventDefault()
+      event.dataTransfer.dropEffect = 'copy'
+    }}
+    onDropCapture={event => {
+      if (!event.dataTransfer.types.includes('Files')) return
+      const files = Array.from(event.dataTransfer.files).filter(file => isMarkdownFileName(file.name))
+      if (!files.length) return
+      event.preventDefault()
+      event.stopPropagation()
+      run(documents.openDroppedFiles(files))
+    }}
+    onDrop={event => {
+      if (event.dataTransfer.types.includes('Files')) event.preventDefault()
+    }}>
     {userTheme?.id === preferences.typoraThemeId && userTheme.editor ? <style>{userTheme.editor}</style> : null}
     {customStyle ? <style>{customStyle}</style> : null}
     {platform === 'darwin' && !nativeTabsEnabled ? <div className="mac-titlebar" data-testid="mac-titlebar"><span>{current?.name ?? 'QTypora'}</span></div> : null}

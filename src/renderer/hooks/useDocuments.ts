@@ -133,6 +133,19 @@ export function useDocuments(api: DesktopApi, reportError: (message: string) => 
     return isCurrent ? record ?? null : null
   }, [api, acceptResult, activate, addDocument])
 
+  const openDroppedFiles = useCallback(async (files: readonly File[]) => {
+    const generation = ++navigationGeneration.current
+    let opened: DocumentRecord | undefined
+    for (const file of files) {
+      const record = acceptResult(await api.openDroppedFile(file))
+      if (record) {
+        addDocument(record, false)
+        opened = record
+      }
+    }
+    if (opened && generation === navigationGeneration.current) activate(opened.id)
+  }, [api, acceptResult, activate, addDocument])
+
   const reopenClosed = useCallback(async () => {
     const generation = ++navigationGeneration.current
     const record = acceptResult(await api.reopenClosedFile())
@@ -397,11 +410,11 @@ export function useDocuments(api: DesktopApi, reportError: (message: string) => 
     }
     return {
       create: wrap(create, undefined), importFile: wrap(importFile, undefined),
-      open: wrap(open, null), reopenClosed: wrap(reopenClosed, undefined),
+      open: wrap(open, null), openDroppedFiles: wrap(openDroppedFiles, undefined), reopenClosed: wrap(reopenClosed, undefined),
       openLinked: wrap(openLinked, null), save: wrap(save, false), reload: wrap(reload, undefined),
       recover: wrap(recover, false),
     }
-  }, [coordinator, create, importFile, open, reopenClosed, openLinked, save, reload, recover, reportError, localeRef])
+  }, [coordinator, create, importFile, open, openDroppedFiles, reopenClosed, openLinked, save, reload, recover, reportError, localeRef])
 
   const guardedActivate = useCallback((id: string) => {
     if (coordinator.locked) { reportError(translate(localeRef.current, '正在关闭，请稍后重试。')); return }

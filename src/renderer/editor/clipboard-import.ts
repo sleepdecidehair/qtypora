@@ -422,11 +422,5 @@ export function clipboardImportExtension(getContext: () => ClipboardImportContex
       if (position !== null) insertFiles(view, files, position)
       return true
     },
-    dragover(event) {
-      if (!Array.from(event.dataTransfer?.types || []).includes('Files')) return false
-      event.preventDefault()
-      if (event.dataTransfer) event.dataTransfer.dropEffect = getContext().readOnly ? 'none' : 'copy'
-      return true
-    },
   })]
 }

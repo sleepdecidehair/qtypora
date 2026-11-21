@@ -465,6 +465,12 @@ function registerIpc(): void {
     version: app.getVersion(), platform: process.platform, nativeTabsEnabled: context.nativeTabsEnabled,
     workspace: context.documents.workspace ? { path: context.documents.workspace, name: path.basename(context.documents.workspace), entries: await listDirectory(context.documents.workspace, store.preferences.workspace) } : null }))
   handle('createDocument', (context) => context.documents.create())
+  const openMarkdown = async (context: WindowContext, filePath: string, chosenByUser: boolean) => {
+    const record = await context.documents.open(filePath, chosenByUser)
+    if (record.path) rememberSystemDocument(app, process.platform, app.isPackaged, record.path)
+    createMenus()
+    return record
+  }
   handle('openFile', (context, input) => withActiveFileOperation(async () => {
     let filePath: string
     const chosenByUser = input === undefined
@@ -473,10 +479,12 @@ function registerIpc(): void {
       if (response.canceled || !response.filePaths[0]) return null
       filePath = response.filePaths[0]
     } else filePath = string(input, '文件路径')
-    const record = await context.documents.open(filePath, chosenByUser)
-    if (record.path) rememberSystemDocument(app, process.platform, app.isPackaged, record.path)
-    createMenus()
-    return record
+    return openMarkdown(context, filePath, chosenByUser)
+  }))
+  handle('openDroppedFile', (context, input) => withActiveFileOperation(async () => {
+    const filePath = string(input, '文件路径')
+    if (!path.isAbsolute(filePath) || !isMarkdownExtension(path.extname(filePath))) invalid('仅支持打开 Markdown 或 UTF-8 文本文件。')
+    return openMarkdown(context, filePath, true)
   }))
   handle('openLinkedFile', (context, input) => withActiveFileOperation(async () => {
     const result = await openLinkedFile(input, context.documents, {

@@ -1,6 +1,7 @@
-import { contextBridge, ipcRenderer, webFrame } from 'electron'
+import { contextBridge, ipcRenderer, webFrame, webUtils } from 'electron'
 import { SessionSpelling } from '../shared/spelling'
-import type { CloseResult, DesktopApi, DesktopEvent, RestoredCloseResult, Result, SaveResult } from '../shared/contracts'
+import { isMarkdownFileName } from '../shared/markdown-files'
+import type { CloseResult, DesktopApi, DesktopEvent, DocumentRecord, RestoredCloseResult, Result, SaveResult } from '../shared/contracts'
 
 const invoke = <T>(method: string, ...args: unknown[]): Promise<Result<T>> => ipcRenderer.invoke(`qtypora:${method}`, ...args) as Promise<Result<T>>
 const spelling = new SessionSpelling()
@@ -14,6 +15,11 @@ const desktop: DesktopApi = {
   createDocument: () => invoke('createDocument'),
   openLinkedFile: (request) => invoke('openLinkedFile', request),
   openFile: (path) => invoke('openFile', path),
+  openDroppedFile: async (file) => {
+    if (!(file instanceof File) || !isMarkdownFileName(file.name)) return { ok: true, data: null }
+    const path = webUtils.getPathForFile(file)
+    return path ? invoke<DocumentRecord>('openDroppedFile', path) : { ok: true, data: null }
+  },
   openFolder: (path) => invoke('openFolder', path),
   removeRecentFolder: (path) => invoke('removeRecentFolder', path),
   clearRecentItems: (request) => invoke('clearRecentItems', request),
